@@ -101,7 +101,7 @@ static void display_title(void)
  */
 static void display_gplnotice(void)
 {
-	ShowInfo("Hercules, Copyright (C) 2012-2018, Hercules Dev Team and others.\n");
+	ShowInfo("Hercules, Copyright (C) 2012-2021, Hercules Dev Team and others.\n");
 	ShowInfo("Licensed under the GNU General Public License, version 3 or later.\n");
 }
 

@@ -27,6 +27,20 @@
  * Basic Threading abstraction (for pthread / win32 based systems).
  */
 
+/**
+ * Number of worker threads in the pool per processor
+ *
+ * IOCP note:
+ *  Note that the concurrency value of our I/O completion port is set to the
+ *  number of processors, but the number of workers is double this value. This
+ *  is because when a function causes a thread not to be runnable (e.g sleep)
+ *  the I/O Completion port detects it and activates another thread. When the first
+ *  thread unblocks it will be activated and the concurrency value will be greater
+ *  than the limit for a brief period of time.
+ *  See Jeffery Richter's Windows via C/C++ for more information
+ **/
+#define WORKERS_PER_PROCESSOR 2
+
 /* Opaque Types */
 struct thread_handle;                ///< Thread handle.
 typedef void *(*threadFunc)(void *); ///< Thread entry point function.
@@ -47,6 +61,15 @@ struct thread_interface {
 
 	/// Interface finalization.
 	void (*final) (void);
+
+	/**
+	 * Returns expected worker count in the thread pool of the server plus the
+	 * console thread
+	 * @see WORKERS_PER_PROCESSOR
+	 *
+	 * @return Number of workers plus console thread
+	 **/
+	int (*worker_count) (void);
 
 	/**
 	 * Creates a new Thread.

@@ -169,6 +169,12 @@ static void *thread_main_redirector(void *p)
 
 // API Level
 
+/// @copydoc thread_interface::thread_worker_count()
+int thread_worker_count(void) {
+	// Workers + console thread
+	return sysinfo->cpucores()*WORKERS_PER_PROCESSOR+1;
+}
+
 /// @copydoc thread_interface::create()
 static struct thread_handle *thread_create(threadFunc entry_point, void *param)
 {
@@ -339,4 +345,5 @@ void thread_defaults(void)
 	thread->prio_set = thread_prio_set;
 	thread->prio_get = thread_prio_get;
 	thread->yield = thread_yield;
+	thread->worker_count = thread_worker_count;
 }
