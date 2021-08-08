@@ -27,6 +27,9 @@
 #include "common/showmsg.h"
 #include "common/sysinfo.h"
 
+#include "common/thread.h"
+#include "common/mutex.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -279,9 +282,6 @@ struct unit_head {
 	long           checksum;
 };
 
-static struct block *hash_unfill[BLOCK_DATA_COUNT1 + BLOCK_DATA_COUNT2 + 1];
-static struct block *block_first, *block_last, block_head;
-
 /* Data for areas that do not use the memory be turned */
 struct unit_head_large {
 	size_t                  size;
@@ -290,13 +290,63 @@ struct unit_head_large {
 	struct unit_head        unit_head;
 };
 
-static struct unit_head_large *unit_head_large_first = NULL;
+/**
+ * Memory identification for memory_information_init
+ *
+ * @see s_memory_information::tid
+ **/
+enum e_memory_identification {
+	EMI_NOT_SET = -2, //< Memory not set
+	EMI_SHARED  = -1, //< Shared memory
+	EMI_VALID   = 1,  //< Assigned to a thread (any positive id and zero)
+};
 
-static struct block *block_malloc(unsigned short hash);
-static void          block_free(struct block *p);
-static size_t        memmgr_usage_bytes;
-static size_t        memmgr_usage_bytes_t;
+/**
+ * Memory pool information
+ *
+ * @see memory_information_init
+ **/
+struct s_memory_information {
+	/**
+	 * Thread id
+	 *
+	 * @see e_memory_identification
+	 * @see thread->get_tid
+	 **/
+	int tid;
+	struct block *hash_unfill[BLOCK_DATA_COUNT1 + BLOCK_DATA_COUNT2 + 1];
+	struct block *block_first, *block_last, block_head;
 
+	/**
+	 * "Data for areas that do not use the memory be turned"
+	 * Initialized to NULL
+	 **/
+	struct unit_head_large *unit_head_large_first;
+
+	size_t usage_bytes;
+	size_t usage_bytes_t;
+};
+
+/**
+ * Private thread memory (non shared heap memory)
+ *
+ * When local_memory_count is 0 local_memory equals to shared_memory
+ **/
+static struct s_memory_information *local_memory = NULL;
+int local_memory_count = 0;
+
+/**
+ * Shared memory
+ *
+ * All functions that handle shared memory use the shared_memory_mutex (created
+ * via mutex->create_no_management), this guarantees that the linked list doesn't
+ * have any races
+ **/
+static struct s_memory_information shared_memory;
+static struct mutex_data *shared_memory_mutex = NULL;
+
+static struct block *block_malloc(struct s_memory_information *mem, unsigned short hash);
+static void          block_free(struct s_memory_information *mem, struct block *p);
 
 #define block2unit(p, n) ((struct unit_head*)(&(p)->data[ p->unit_size * (n) ]))
 #define memmgr_assert(v) do { if(!(v)) { ShowError("Memory manager: assertion '" #v "' failed!\n"); } } while(0)
@@ -322,8 +372,12 @@ static size_t hash2size(unsigned short hash)
 	}
 }
 
-static void *mmalloc_(size_t size, const char *file, int line, const char *func)
+static void *mmalloc_(struct s_memory_information *mem, size_t size, const char *file, int line, const char *func)
 {
+	struct block **hash_unfill = mem->hash_unfill;
+	struct unit_head_large *unit_head_large_first = mem->unit_head_large_first;
+	struct block *block_head = &mem->block_head;
+
 	struct block *block;
 	short size_hash = size2hash( size );
 	struct unit_head *head;
@@ -336,41 +390,40 @@ static void *mmalloc_(size_t size, const char *file, int line, const char *func)
 	if(size == 0) {
 		return NULL;
 	}
-	memmgr_usage_bytes += size;
+	mem->usage_bytes += size;
 
 	/* To ensure the area that exceeds the length of the block, using malloc () to */
 	/* At that time, the distinction by assigning NULL to unit_head.block */
 	if(hash2size(size_hash) > BLOCK_DATA_SIZE - sizeof(struct unit_head)) {
 		struct unit_head_large* p = (struct unit_head_large*)MALLOC(sizeof(struct unit_head_large)+size,file,line,func);
-		memmgr_usage_bytes_t += size+sizeof(struct unit_head_large);
-		if(p != NULL) {
-			p->size            = size;
-			p->unit_head.block = NULL;
-			p->unit_head.size  = 0;
-			p->unit_head.file  = file;
-			p->unit_head.line  = (unsigned short)line;
-			p->prev = NULL;
-			if (unit_head_large_first == NULL)
-				p->next = NULL;
-			else {
-				unit_head_large_first->prev = p;
-				p->next = unit_head_large_first;
-			}
-			unit_head_large_first = p;
-			*(long*)((char*)p + sizeof(struct unit_head_large) - sizeof(long) + size) = 0xdeadbeaf;
-			return (char *)p + sizeof(struct unit_head_large) - sizeof(long);
-		} else {
+		mem->usage_bytes_t += size+sizeof(struct unit_head_large);
+		if(p == NULL) {
 			ShowFatalError("Memory manager::memmgr_alloc failed (allocating %"PRIuS"+%"PRIuS" bytes at %s:%d).\n",
 			               sizeof(struct unit_head_large), size, file, line);
 			exit(EXIT_FAILURE);
 		}
+		p->size            = size;
+		p->unit_head.block = NULL;
+		p->unit_head.size  = 0;
+		p->unit_head.file  = file;
+		p->unit_head.line  = (unsigned short)line;
+		p->prev = NULL;
+		if (unit_head_large_first == NULL)
+			p->next = NULL;
+		else {
+			unit_head_large_first->prev = p;
+			p->next = unit_head_large_first;
+		}
+		unit_head_large_first = p;
+		*(long*)((char*)p + sizeof(struct unit_head_large) - sizeof(long) + size) = 0xdeadbeaf;
+		return (char *)p + sizeof(struct unit_head_large) - sizeof(long);
 	}
 
 	/* When a block of the same size is not ensured, to ensure a new */
 	if(hash_unfill[size_hash]) {
 		block = hash_unfill[size_hash];
 	} else {
-		block = block_malloc(size_hash);
+		block = block_malloc(mem, size_hash);
 	}
 
 	if( block->unit_unfill == 0xFFFF ) {
@@ -388,7 +441,7 @@ static void *mmalloc_(size_t size, const char *file, int line, const char *func)
 
 	if( block->unit_unfill == 0xFFFF && block->unit_maxused >= block->unit_count) {
 		// Since I ran out of the unit, removed from the list unfill
-		if( block->unfill_prev == &block_head) {
+		if( block->unfill_prev == block_head) {
 			hash_unfill[ size_hash ] = block->unfill_next;
 		} else {
 			block->unfill_prev->unfill_next = block->unfill_next;
@@ -429,19 +482,19 @@ static void *mmalloc_(size_t size, const char *file, int line, const char *func)
 	return (char *)head + sizeof(struct unit_head) - sizeof(long);
 }
 
-static void *mcalloc_(size_t num, size_t size, const char *file, int line, const char *func)
+static void *mcalloc_(struct s_memory_information *mem, size_t num, size_t size, const char *file, int line, const char *func)
 {
-	void *p = iMalloc->malloc(num * size,file,line,func);
+	void *p = iMalloc->malloc_mem(mem, num * size,file,line,func);
 	if (p)
 		memset(p, 0, num * size);
 	return p;
 }
 
-static void *mrealloc_(void *memblock, size_t size, const char *file, int line, const char *func)
+static void *mrealloc_(struct s_memory_information *mem, void *memblock, size_t size, const char *file, int line, const char *func)
 {
 	size_t old_size;
 	if(memblock == NULL) {
-		return iMalloc->malloc(size,file,line,func);
+		return iMalloc->malloc_mem(mem, size,file,line,func);
 	}
 
 	old_size = ((struct unit_head *)((char *)memblock - sizeof(struct unit_head) + sizeof(long)))->size;
@@ -453,23 +506,23 @@ static void *mrealloc_(void *memblock, size_t size, const char *file, int line, 
 		return memblock;
 	}  else {
 		// Size Large
-		void *p = iMalloc->malloc(size,file,line,func);
+		void *p = iMalloc->malloc_mem(mem, size,file,line,func);
 		if(p != NULL) {
 			memcpy(p,memblock,old_size);
 		}
-		iMalloc->free(memblock,file,line,func);
+		iMalloc->free_mem(mem, memblock,file,line,func);
 		return p;
 	}
 }
 
 /* a mrealloc_ clone with the difference it 'z'eroes the newly created memory */
-static void *mreallocz_(void *memblock, size_t size, const char *file, int line, const char *func)
+static void *mreallocz_(struct s_memory_information *mem, void *memblock, size_t size, const char *file, int line, const char *func)
 {
 	size_t old_size;
 	void *p = NULL;
 
 	if(memblock == NULL) {
-		p = iMalloc->malloc(size,file,line,func);
+		p = iMalloc->malloc_mem(mem, size,file,line,func);
 		memset(p,0,size);
 		return p;
 	}
@@ -483,24 +536,24 @@ static void *mreallocz_(void *memblock, size_t size, const char *file, int line,
 		return memblock;
 	}  else {
 		// Size Large
-		p = iMalloc->malloc(size,file,line,func);
+		p = iMalloc->malloc_mem(mem, size,file,line,func);
 		if(p != NULL) {
 			memcpy(p,memblock,old_size);
 			memset((char*)p+old_size,0,size-old_size);
 		}
-		iMalloc->free(memblock,file,line,func);
+		iMalloc->free_mem(mem, memblock,file,line,func);
 		return p;
 	}
 }
 
 
-static char *mstrdup_(const char *p, const char *file, int line, const char *func)
+static char *mstrdup_(struct s_memory_information *mem, const char *p, const char *file, int line, const char *func)
 {
 	if(p == NULL) {
 		return NULL;
 	} else {
 		size_t len = strlen(p);
-		char *string  = (char *)iMalloc->malloc(len + 1,file,line,func);
+		char *string  = iMalloc->malloc_mem(mem, len + 1,file,line,func);
 		memcpy(string,p,len+1);
 		return string;
 	}
@@ -523,13 +576,13 @@ static char *mstrdup_(const char *p, const char *file, int line, const char *fun
  * @return the copied string.
  * @retval NULL if the source string is NULL or in case of error.
  */
-static char *mstrndup_(const char *p, size_t size, const char *file, int line, const char *func)
+static char *mstrndup_(struct s_memory_information *mem, const char *p, size_t size, const char *file, int line, const char *func)
 {
 	if (p == NULL) {
 		return NULL;
 	} else {
 		size_t len = strnlen(p, size);
-		char *string = iMalloc->malloc(len + 1, file, line, func);
+		char *string = iMalloc->malloc_mem(mem, len + 1, file, line, func);
 		memcpy(string, p, len);
 		string[len] = '\0';
 		return string;
@@ -537,9 +590,13 @@ static char *mstrndup_(const char *p, size_t size, const char *file, int line, c
 }
 
 
-static void mfree_(void *ptr, const char *file, int line, const char *func)
+static void mfree_(struct s_memory_information *mem, void *ptr, const char *file, int line, const char *func)
 {
+	struct unit_head_large *unit_head_large_first = mem->unit_head_large_first;
 	struct unit_head *head;
+
+	struct block **hash_unfill = mem->hash_unfill;
+	struct block *block_head = &mem->block_head;
 
 	if (ptr == NULL)
 		return;
@@ -563,8 +620,8 @@ static void mfree_(void *ptr, const char *file, int line, const char *func)
 			if(head_large->next) {
 				head_large->next->prev = head_large->prev;
 			}
-			memmgr_usage_bytes -= head_large->size;
-			memmgr_usage_bytes_t -= head_large->size + sizeof(struct unit_head_large);
+			mem->usage_bytes -= head_large->size;
+			mem->usage_bytes_t -= head_large->size + sizeof(struct unit_head_large);
 #ifdef DEBUG_MEMMGR
 			// set freed memory to 0xfd
 			memset(ptr, 0xfd, head_large->size);
@@ -581,7 +638,7 @@ static void mfree_(void *ptr, const char *file, int line, const char *func)
 		} else if(*(long*)((char*)head + sizeof(struct unit_head) - sizeof(long) + head->size) != 0xdeadbeaf) {
 			ShowError("Memory manager: args of aFree 0x%p is overflowed pointer %s line %d\n", ptr, file, line);
 		} else {
-			memmgr_usage_bytes -= head->size;
+			mem->usage_bytes -= head->size;
 			head->block         = NULL;
 #ifdef DEBUG_MEMMGR
 			memset(ptr, 0xfd, block->unit_size - sizeof(struct unit_head) + sizeof(long) );
@@ -591,14 +648,14 @@ static void mfree_(void *ptr, const char *file, int line, const char *func)
 			memmgr_assert( block->unit_used > 0 );
 			if(--block->unit_used == 0) {
 				/* Release of the block */
-				block_free(block);
+				block_free(mem, block);
 			} else {
 				if( block->unfill_prev == NULL) {
 					// add to unfill list
 					if( hash_unfill[ block->unit_hash ] ) {
 						hash_unfill[ block->unit_hash ]->unfill_prev = block;
 					}
-					block->unfill_prev = &block_head;
+					block->unfill_prev = block_head;
 					block->unfill_next = hash_unfill[ block->unit_hash ];
 					hash_unfill[ block->unit_hash ] = block;
 				}
@@ -609,10 +666,206 @@ static void mfree_(void *ptr, const char *file, int line, const char *func)
 	}
 }
 
-/* Allocating blocks */
-static struct block *block_malloc(unsigned short hash)
+void memory_information_init(struct s_memory_information *mem);
+
+/**
+ * Finds thread memory position for current thread
+ *
+ * If the thread is not found in local_memory searches for an empty position
+ * @return Thread index in local_memory
+ **/
+static int mmalloc_thread_get_pos(void)
+{
+	int tid = thread->get_tid();
+	int pos = -1;
+	if(local_memory_count == 0) // Using only shared memory
+		return 0;
+	for(int i = 0; i < local_memory_count; i++) {
+		if(local_memory[i].tid == tid)
+			pos = i;
+	}
+	if(pos != -1)
+		return pos;
+
+	for(int i = 0; i < local_memory_count; i++) {
+		if(local_memory[i].tid == EMI_NOT_SET) {
+			local_memory[i].tid = tid;
+			pos = i;
+		}
+	}
+	if(pos == -1) {
+		// This will only happen if there are more threads than expected
+		// Try to fail graciously
+		ShowError("mmalloc_thread_get_pos: Couldn't find valid position in local_memory for TID %d\n",
+			tid);
+		ShowDebug("mmalloc_thread_get_pos: There are more threads than expected (expected %zd)!\n",
+			local_memory_count);
+		struct s_memory_information *new_thread;
+		local_memory_count++;
+		new_thread = realloc(local_memory, sizeof(*new_thread)*local_memory_count);
+		if(!new_thread) {
+			ShowFatalError("mmalloc_thread_get_pos: Failed to allocate memory for local_memory!\n");
+			exit(EXIT_FAILURE);
+		}
+		local_memory = new_thread;
+		pos = local_memory_count-1;
+		memory_information_init(&local_memory[pos]);
+		local_memory[pos].tid = tid;
+	}
+	return pos;
+}
+
+void *mmalloc_thread_(size_t size, const char *file, int line, const char *func)
+{
+	return iMalloc->malloc_mem(&local_memory[mmalloc_thread_get_pos()],
+		size, file, line, func);
+}
+
+void *mcalloc_thread_(size_t num, size_t size, const char *file, int line, const char *func)
+{
+	return iMalloc->calloc_mem(&local_memory[mmalloc_thread_get_pos()],
+		num, size, file, line, func);
+}
+
+void *mrealloc_thread_(void *p, size_t size, const char *file, int line, const char *func)
+{
+	return iMalloc->realloc_mem(&local_memory[mmalloc_thread_get_pos()],
+		p, size, file, line, func);
+}
+
+void *mreallocz_thread_(void *p, size_t size, const char *file, int line, const char *func)
+{
+	return iMalloc->reallocz_mem(&local_memory[mmalloc_thread_get_pos()],
+		p, size, file, line, func);
+}
+
+char *mastrndup_thread_(const char *p, size_t size, const char *file, int line, const char *func)
+{
+	return iMalloc->astrndup_mem(&local_memory[mmalloc_thread_get_pos()],
+		p, size, file, line, func);
+}
+
+char *mastrdup_thread_(const char *p, const char *file, int line, const char *func)
+{
+	return iMalloc->astrdup_mem(&local_memory[mmalloc_thread_get_pos()],
+		p, file, line, func);
+}
+
+void mfree_thread_(void *p, const char *file, int line, const char *func)
+{
+	iMalloc->free_mem(&local_memory[mmalloc_thread_get_pos()],
+		p, file, line, func);
+}
+
+/**
+ * Returns pointer to shared_memory_mutex
+ **/
+struct mutex_data *mm_shared_mutex_(void) {
+	return shared_memory_mutex;
+}
+
+static void *mmalloc_shared_no_mutex_(size_t size, const char *file, int line, const char *func)
+{
+	return iMalloc->malloc_mem(&shared_memory, size, file, line, func);
+}
+static void *mcalloc_shared_no_mutex_(size_t num, size_t size, const char *file, int line, const char *func)
+{
+	return iMalloc->calloc_mem(&shared_memory, num, size, file, line, func);
+}
+static void *mrealloc_shared_no_mutex_(void *p, size_t size, const char *file, int line, const char *func)
+{
+	return iMalloc->realloc_mem(&shared_memory, p, size, file, line, func);
+}
+static void *mreallocz_shared_no_mutex_(void *p, size_t size, const char *file, int line, const char *func)
+{
+	return iMalloc->reallocz_mem(&shared_memory, p, size, file, line, func);
+}
+static char *mastrdup_shared_no_mutex_(const char *p, const char *file, int line, const char *func)
+{
+	return iMalloc->astrdup_mem(&shared_memory, p, file, line, func);
+}
+static char *mastrndup_shared_no_mutex_(const char *p, size_t size, const char *file, int line, const char *func)
+{
+	return iMalloc->astrndup_mem(&shared_memory, p, size, file, line, func);
+}
+static void mfree_shared_no_mutex_(void *p, const char *file, int line, const char *func)
+{
+	iMalloc->free_mem(&shared_memory, p, file, line, func);
+}
+
+void *mmalloc_shared_(size_t size, const char *file, int line, const char *func)
+{
+	void *ptr = NULL;
+	mutex->lock(shared_memory_mutex);
+	ptr = iMalloc->malloc_mem(&shared_memory, size, file, line, func);
+	mutex->unlock(shared_memory_mutex);
+	return ptr;
+}
+
+void *mcalloc_shared_(size_t num, size_t size, const char *file, int line, const char *func)
+{
+	void *ptr = NULL;
+	mutex->lock(shared_memory_mutex);
+	ptr = iMalloc->calloc_mem(&shared_memory, num, size, file, line, func);
+	mutex->unlock(shared_memory_mutex);
+	return ptr;
+}
+
+void *mrealloc_shared_(void *p, size_t size, const char *file, int line, const char *func)
+{
+	void *ptr = NULL;
+	mutex->lock(shared_memory_mutex);
+	ptr = iMalloc->realloc_mem(&shared_memory, p, size, file, line, func);
+	mutex->unlock(shared_memory_mutex);
+	return ptr;
+}
+
+void *mreallocz_shared_(void *p, size_t size, const char *file, int line, const char *func)
+{
+	void *ptr = NULL;
+	mutex->lock(shared_memory_mutex);
+	ptr = iMalloc->reallocz_mem(&shared_memory, p, size, file, line, func);
+	mutex->unlock(shared_memory_mutex);
+	return ptr;
+}
+
+char *mastrdup_shared_(const char *p, const char *file, int line, const char *func)
+{
+	char *str = NULL;
+	mutex->lock(shared_memory_mutex);
+	str = iMalloc->astrdup_mem(&shared_memory, p, file, line, func);
+	mutex->unlock(shared_memory_mutex);
+	return str;
+}
+
+char *mastrndup_shared_(const char *p, size_t size, const char *file, int line, const char *func)
+{
+	char *str = NULL;
+	mutex->lock(shared_memory_mutex);
+	str = iMalloc->astrndup_mem(&shared_memory, p, size, file, line, func);
+	mutex->unlock(shared_memory_mutex);
+	return str;
+}
+
+void mfree_shared_(void *p, const char *file, int line, const char *func)
+{
+	mutex->lock(shared_memory_mutex);
+	iMalloc->free_mem(&shared_memory, p, file, line, func);
+	mutex->unlock(shared_memory_mutex);
+}
+
+/**
+ * Allocates a new block
+ **/
+static struct block *block_malloc(struct s_memory_information *mem, unsigned short hash)
 {
 	struct block *p;
+	struct block **hash_unfill = mem->hash_unfill;
+
+	struct block *block_first = mem->block_first;
+	struct block *block_last = mem->block_last;
+	struct block *block_head = &mem->block_head;
+
 	if(hash_unfill[0] != NULL) {
 		/* Space for the block has already been secured */
 		p = hash_unfill[0];
@@ -621,7 +874,7 @@ static struct block *block_malloc(unsigned short hash)
 		int i;
 		/* Newly allocated space for the block */
 		p = (struct block*)MALLOC(sizeof(struct block) * (BLOCK_ALLOC), __FILE__, __LINE__, __func__ );
-		memmgr_usage_bytes_t += sizeof(struct block) * (BLOCK_ALLOC);
+		mem->usage_bytes_t += sizeof(struct block) * (BLOCK_ALLOC);
 		if(p == NULL) {
 			ShowFatalError("Memory manager::block_alloc failed.\n");
 			exit(EXIT_FAILURE);
@@ -653,7 +906,7 @@ static struct block *block_malloc(unsigned short hash)
 	// Add to unfill
 	memmgr_assert(hash_unfill[ hash ] == NULL);
 	hash_unfill[ hash ] = p;
-	p->unfill_prev  = &block_head;
+	p->unfill_prev  = block_head;
 	p->unfill_next  = NULL;
 	p->unit_size    = (unsigned short)(hash2size( hash ) + sizeof(struct unit_head));
 	p->unit_hash    = hash;
@@ -667,10 +920,14 @@ static struct block *block_malloc(unsigned short hash)
 	return p;
 }
 
-static void block_free(struct block *p)
+/**
+ * Frees a block
+ **/
+static void block_free(struct s_memory_information *mem, struct block *p)
 {
+	struct block **hash_unfill = mem->hash_unfill;
 	if( p->unfill_prev ) {
-		if( p->unfill_prev == &block_head) {
+		if( p->unfill_prev == &mem->block_head) {
 			hash_unfill[ p->unit_hash ] = p->unfill_next;
 		} else {
 			p->unfill_prev->unfill_next = p->unfill_next;
@@ -685,15 +942,21 @@ static void block_free(struct block *p)
 	hash_unfill[0] = p;
 }
 
-static size_t memmgr_usage(void)
+static size_t memmgr_usage(struct s_memory_information *mem)
 {
-	return memmgr_usage_bytes / 1024;
+	return mem->usage_bytes / 1024;
 }
 
 #ifdef LOG_MEMMGR
-static char memmer_logfile[128];
-static FILE *log_fp;
+static char memmer_logfile[128]; // File name
+static FILE *log_fp = NULL; // Log file pointer (set at memmgr_log)
 
+/**
+ * Logs message to log file
+ *
+ * @param buf Message to be logged
+ * @param vcsinfo Version control information
+ **/
 static void memmgr_log(char *buf, char *vcsinfo)
 {
 	if( !log_fp ) {
@@ -711,17 +974,31 @@ static void memmgr_log(char *buf, char *vcsinfo)
 	fprintf(log_fp, "%s", buf);
 	return;
 }
+
+/**
+ * Returns descriptive memory type according to mem->tid
+ **/
+static const char *memmgr_memory_type_str(struct s_memory_information *mem) {
+	switch(mem->tid) {
+		case EMI_NOT_SET: return "invalid";
+		case EMI_SHARED:  return "shared";
+		default:          return "thread";
+	}
+}
 #endif /* LOG_MEMMGR */
 
-/// Returns true if the memory location is active.
-/// Active means it is allocated and points to a usable part.
-///
-/// @param ptr Pointer to the memory
-/// @return true if the memory is active
-static bool memmgr_verify(void *ptr)
+/**
+ * Returns true if the memory location is active.
+ * Active means it is allocated and points to an usable part.
+ *
+ * @param mem Memory information
+ * @param ptr Pointer to the memory
+ * @return true if the memory is active
+ **/
+static bool memmgr_verify(struct s_memory_information *mem, void *ptr)
 {
-	struct block* block = block_first;
-	struct unit_head_large* large = unit_head_large_first;
+	struct block* block = mem->block_first;
+	struct unit_head_large* large = mem->unit_head_large_first;
 
 	if( ptr == NULL )
 		return false;// never valid
@@ -759,16 +1036,21 @@ static bool memmgr_verify(void *ptr)
 	return false;
 }
 
-static void memmgr_final(void)
+
+/**
+ * Finalizes provided memory information
+ *
+ * Frees all allocated blocks and logs if LOG_MEMMGR is defined
+ * @param mem Memory information
+ * @param vcsinfo Version control information
+ **/
+static void memmgr_final_sub(struct s_memory_information *mem, char *vcsinfo)
 {
-	struct block *block = block_first;
-	struct unit_head_large *large = unit_head_large_first;
-	char vcsinfo[256];
+	struct block *block = mem->block_first;
+	struct unit_head_large *large = mem->unit_head_large_first;
 #ifdef LOG_MEMMGR
 	int count = 0;
 #endif /* LOG_MEMMGR */
-	snprintf(vcsinfo, sizeof(vcsinfo), "%s rev '%s'", sysinfo->vcstype(), sysinfo->vcsrevision_src()); // Cache VCS info before we free() it
-	sysinfo->final();
 
 	while (block) {
 		if (block->unit_used) {
@@ -780,12 +1062,13 @@ static void memmgr_final(void)
 #ifdef LOG_MEMMGR
 					char buf[1024];
 					sprintf (buf,
-						"%04d : %s line %d size %lu address 0x%p\n", ++count,
-						head->file, head->line, (unsigned long)head->size, ptr);
+						"%04d : %s line %d size %lu address 0x%p (type: %s, id %d)\n",
+						++count, head->file, head->line, (unsigned long)head->size, ptr,
+						memmgr_memory_type_str(mem), mem->tid);
 					memmgr_log(buf, vcsinfo);
 #endif /* LOG_MEMMGR */
 					// get block pointer and free it [celest]
-					iMalloc->free(ptr, ALC_MARK);
+					iMalloc->free_mem(mem, ptr, ALC_MARK);
 				}
 			}
 		}
@@ -797,8 +1080,9 @@ static void memmgr_final(void)
 #ifdef LOG_MEMMGR
 		char buf[1024];
 		sprintf (buf,
-			"%04d : %s line %d size %lu address 0x%p\n", ++count,
-			large->unit_head.file, large->unit_head.line, (unsigned long)large->size, &large->unit_head.checksum);
+			"%04d : %s line %d size %lu address 0x%p (type: %s, id %d)\n", ++count,
+			large->unit_head.file, large->unit_head.line, (unsigned long)large->size,
+			&large->unit_head.checksum, memmgr_memory_type_str(mem), mem->tid);
 		memmgr_log(buf, vcsinfo);
 #endif /* LOG_MEMMGR */
 		large2 = large->next;
@@ -814,11 +1098,36 @@ static void memmgr_final(void)
 	}
 #endif /* LOG_MEMMGR */
 }
-/* [Ind/Hercules] */
-void memmgr_report(int extra)
+
+static void memmgr_final(void)
 {
-	struct block *block = block_first;
-	struct unit_head_large *large = unit_head_large_first;
+	char vcsinfo[256];
+	snprintf(vcsinfo, sizeof(vcsinfo), "%s rev '%s'", sysinfo->vcstype(),
+	sysinfo->vcsrevision_src()); // Cache VCS info before we free() it
+	sysinfo->final();
+	memmgr_final_sub(&shared_memory, vcsinfo);
+	if(local_memory) {
+		for(int i = 0; i < local_memory_count; i++)
+			memmgr_final_sub(&local_memory[i], vcsinfo);
+
+		free(local_memory);
+		local_memory_count = 0;
+		local_memory = NULL;
+	}
+	mutex->destroy_no_management(shared_memory_mutex);
+	shared_memory_mutex = NULL;
+}
+
+/**
+ * Reports memory usage of given memory information
+ *
+ * @param extra Block size
+ * @author Ind / Hercules
+ **/
+static void memmgr_report_sub(struct s_memory_information *mem, int extra)
+{
+	struct block *block = mem->block_first;
+	struct unit_head_large *large = mem->unit_head_large_first;
 	unsigned int count = 0, size = 0;
 	int j;
 	unsigned short msize = 1024;
@@ -886,7 +1195,8 @@ void memmgr_report(int extra)
 		}
 	}
 	ShowMessage("[malloc] : reporting %u instances | %.2f MB\n",count,(double)((size)/1024)/1024);
-	ShowMessage("[malloc] : internal usage %.2f MB | %.2f MB\n",(double)((memmgr_usage_bytes_t-memmgr_usage_bytes)/1024)/1024,(double)((memmgr_usage_bytes_t)/1024)/1024);
+	ShowMessage("[malloc] : internal usage %.2f MB | %.2f MB\n",
+		(double)((mem->usage_bytes_t-mem->usage_bytes)/1024)/1024,(double)((mem->usage_bytes_t)/1024)/1024);
 
 	if (extra) {
 		ShowMessage("[malloc] : unit_head_large: %"PRIuS" bytes\n", sizeof(struct unit_head_large));
@@ -896,13 +1206,73 @@ void memmgr_report(int extra)
 
 }
 
+/// @copydoc memmgr_report_sub
+void memmgr_report(int extra)
+{
+	ShowInfo("Shared memory:\n");
+	memmgr_report_sub(&shared_memory, extra);
+	if(!local_memory_count)
+		return;
+
+	ShowInfo("Thread memory:\n");
+	for(int i = 0 ; i < local_memory_count; i++) {
+		ShowInfo("Thread(%d/%d):\n", i, local_memory_count);
+		memmgr_report_sub(&local_memory[i], extra);
+	}
+}
+
+/**
+ * Initializes log data
+ **/
+#ifdef LOG_MEMMGR
+static void memmgr_log_init(void)
+{
+	memset(shared_memory.hash_unfill, 0, sizeof(shared_memory.hash_unfill));
+	for(int i = 0; i < local_memory_count; i++)
+		memset(local_memory[i].hash_unfill, 0, sizeof(local_memory[i].hash_unfill));
+}
+#endif /* LOG_MEMMGR */
+
+/**
+ * Default initialization data for s_memory_information
+ **/
+static void memory_information_init(struct s_memory_information *mem)
+{
+	mem->tid = EMI_NOT_SET;
+	mem->unit_head_large_first = NULL;
+
+	mem->usage_bytes = 0;
+	mem->usage_bytes_t = 0;
+}
+
 /**
  * Initializes the Memory Manager.
  */
 static void memmgr_init(void)
 {
+	memmgr_assert(!local_memory);
+	local_memory_count = thread->worker_count();
+	local_memory = malloc(sizeof(*local_memory)*local_memory_count);
+	if(!local_memory) {
+		ShowFatalError("memmgr_init: Failed to allocate memory for private thread memory\n");
+		exit(EXIT_FAILURE);
+	}
+	for(int i = 0; i < local_memory_count; i++)
+		memory_information_init(&local_memory[i]);
+
+	memory_information_init(&shared_memory);
+	shared_memory.tid = EMI_SHARED;
+	shared_memory_mutex = mutex->create_no_management();
+	if(!shared_memory_mutex) {
+		ShowError("memmgr_init: Failed to allocate memory for new mutex\n");
+		ShowInfo("memmgr_init: Switching to shared memory only\n");
+		free(local_memory);
+		local_memory = &shared_memory;
+		local_memory_count = 0;
+	}
+
 #ifdef LOG_MEMMGR
-	memset(hash_unfill, 0, sizeof(hash_unfill));
+	memmgr_log_init();
 #endif /* LOG_MEMMGR */
 }
 
@@ -934,20 +1304,43 @@ static void malloc_memory_check(void)
 
 /// Returns true if a pointer is valid.
 /// The check is best-effort, false positives are possible.
-static bool malloc_verify_ptr(void *ptr)
+static bool malloc_verify_ptr(struct s_memory_information *mem, void *ptr)
 {
 #ifdef USE_MEMMGR
-	return memmgr_verify(ptr) && MEMORY_VERIFY(ptr);
+	return memmgr_verify(mem, ptr) && MEMORY_VERIFY(ptr);
 #else
 	return MEMORY_VERIFY(ptr);
 #endif
 }
 
+static bool malloc_verify_ptr_shared(void *ptr)
+{
+#ifdef USE_MEMMGR
+	return memmgr_verify(&shared_memory, ptr) && MEMORY_VERIFY(ptr);
+#else
+	return MEMORY_VERIFY(ptr);
+#endif
+}
 
+static bool malloc_verify_ptr_thread(void *ptr)
+{
+#ifdef USE_MEMMGR
+	return memmgr_verify(&local_memory[mmalloc_thread_get_pos()], ptr) && MEMORY_VERIFY(ptr);
+#else
+	return MEMORY_VERIFY(ptr);
+#endif
+}
+
+/**
+ * Returns total heap allocated memory
+ **/
 static size_t malloc_usage(void)
 {
 #ifdef USE_MEMMGR
-	return memmgr_usage ();
+	size_t memory_usage = memmgr_usage(&shared_memory);
+	for(int i = 0; i < local_memory_count; i++)
+		memory_usage += memmgr_usage(&local_memory[i]);
+	return memory_usage;
 #else
 	return MEMORY_USAGE();
 #endif
@@ -980,8 +1373,7 @@ static void malloc_init_messages(void)
 static void malloc_init(void)
 {
 #ifdef USE_MEMMGR
-	memmgr_usage_bytes_t = 0;
-	memmgr_usage_bytes = 0;
+	memmgr_init();
 #endif
 #if defined(DMALLOC) && defined(CYGWIN)
 	// http://dmalloc.com/docs/latest/online/dmalloc_19.html
@@ -992,9 +1384,6 @@ static void malloc_init(void)
 	GC_find_leak = 1;
 	GC_INIT();
 #endif
-#ifdef USE_MEMMGR
-	memmgr_init();
-#endif
 }
 
 void malloc_defaults(void)
@@ -1004,17 +1393,66 @@ void malloc_defaults(void)
 	iMalloc->final = malloc_final;
 	iMalloc->memory_check = malloc_memory_check;
 	iMalloc->usage = malloc_usage;
-	iMalloc->verify_ptr = malloc_verify_ptr;
+	iMalloc->verify_ptr = malloc_verify_ptr_shared;
+	iMalloc->verify_ptr_shared = malloc_verify_ptr_shared;
+	iMalloc->verify_ptr_thread = malloc_verify_ptr_thread;
 
 // Athena's built-in Memory Manager
 #ifdef USE_MEMMGR
-	iMalloc->malloc   = mmalloc_;
-	iMalloc->calloc   = mcalloc_;
-	iMalloc->realloc  = mrealloc_;
-	iMalloc->reallocz = mreallocz_;
-	iMalloc->astrdup  = mstrdup_;
-	iMalloc->astrndup = mstrndup_;
-	iMalloc->free     = mfree_;
+	// Internally used allocation calls
+	iMalloc->malloc_mem   = mmalloc_;
+	iMalloc->calloc_mem   = mcalloc_;
+	iMalloc->realloc_mem  = mrealloc_;
+	iMalloc->reallocz_mem = mreallocz_;
+	iMalloc->astrdup_mem  = mstrdup_;
+	iMalloc->astrndup_mem = mstrndup_;
+	iMalloc->free_mem     = mfree_;
+
+	// Thread specific memory
+	iMalloc->malloc_thread   = mmalloc_thread_;
+	iMalloc->calloc_thread   = mcalloc_thread_;
+	iMalloc->realloc_thread  = mrealloc_thread_;
+	iMalloc->reallocz_thread = mreallocz_thread_;
+	iMalloc->astrdup_thread  = mastrdup_thread_;
+	iMalloc->astrndup_thread = mastrndup_thread_;
+	iMalloc->free_thread     = mfree_thread_;
+
+	// Shared memory
+	iMalloc->shared_mutex    = mm_shared_mutex_;
+	iMalloc->malloc_shared   = mmalloc_shared_;
+	iMalloc->calloc_shared   = mcalloc_shared_;
+	iMalloc->realloc_shared  = mrealloc_shared_;
+	iMalloc->reallocz_shared = mreallocz_shared_;
+	iMalloc->astrdup_shared  = mastrdup_shared_;
+	iMalloc->astrndup_shared = mastrndup_shared_;
+	iMalloc->free_shared     = mfree_shared_;
+
+	iMalloc->shared_mutex             = mm_shared_mutex_;
+	iMalloc->malloc_shared_no_mutex   = mmalloc_shared_no_mutex_;
+	iMalloc->calloc_shared_no_mutex   = mcalloc_shared_no_mutex_;
+	iMalloc->realloc_shared_no_mutex  = mrealloc_shared_no_mutex_;
+	iMalloc->reallocz_shared_no_mutex = mreallocz_shared_no_mutex_;
+	iMalloc->astrdup_shared_no_mutex  = mastrdup_shared_no_mutex_;
+	iMalloc->astrndup_shared_no_mutex = mastrndup_shared_no_mutex_;
+	iMalloc->free_shared_no_mutex     = mfree_shared_no_mutex_;
+
+	// Default allocation calls to shared memory
+	iMalloc->malloc   = mmalloc_shared_;
+	iMalloc->calloc   = mcalloc_shared_;
+	iMalloc->realloc  = mrealloc_shared_;
+	iMalloc->reallocz = mreallocz_shared_;
+	iMalloc->astrdup  = mastrdup_shared_;
+	iMalloc->astrndup = mastrndup_shared_;
+	iMalloc->free     = mfree_shared_;
+
+	/**
+	 * Allocation outside memory management
+	 *
+	 * They are intended for uses that preaded the initialization of the
+	 * memory manager, otherwise they shouldn't be used.
+	 **/
+	iMalloc->rmalloc = malloc;
+	iMalloc->rfree   = free;
 #else
 	iMalloc->malloc   = aMalloc_;
 	iMalloc->calloc   = aCalloc_;

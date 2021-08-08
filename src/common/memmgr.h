@@ -72,9 +72,47 @@
 
 ////////////////////////////////////////////////
 
+struct s_memory_information;
+
 struct malloc_interface {
 	void (*init) (void);
 	void (*final) (void);
+	/* Thread */
+	void* (*malloc_thread)(size_t size, const char *file, int line, const char *func);
+	void* (*calloc_thread)(size_t num, size_t size, const char *file, int line, const char *func);
+	void* (*realloc_thread)(void *p, size_t size, const char *file, int line, const char *func);
+	void* (*reallocz_thread)(void *p, size_t size, const char *file, int line, const char *func);
+	char* (*astrdup_thread)(const char *p, const char *file, int line, const char *func);
+	char *(*astrndup_thread)(const char *p, size_t size, const char *file, int line, const char *func);
+	void  (*free_thread)(void *p, const char *file, int line, const char *func);
+	/* Shared */
+	struct mutex_data *(*shared_mutex)(void);
+	void* (*malloc_shared)(size_t size, const char *file, int line, const char *func);
+	void* (*calloc_shared)(size_t num, size_t size, const char *file, int line, const char *func);
+	void* (*realloc_shared)(void *p, size_t size, const char *file, int line, const char *func);
+	void* (*reallocz_shared)(void *p, size_t size, const char *file, int line, const char *func);
+	char* (*astrdup_shared)(const char *p, const char *file, int line, const char *func);
+	char *(*astrndup_shared)(const char *p, size_t size, const char *file, int line, const char *func);
+	void  (*free_shared)(void *p, const char *file, int line, const char *func);
+
+	void* (*malloc_shared_no_mutex)(size_t size, const char *file, int line, const char *func);
+	void* (*calloc_shared_no_mutex)(size_t num, size_t size, const char *file, int line, const char *func);
+	void* (*realloc_shared_no_mutex)(void *p, size_t size, const char *file, int line, const char *func);
+	void* (*reallocz_shared_no_mutex)(void *p, size_t size, const char *file, int line, const char *func);
+	char* (*astrdup_shared_no_mutex)(const char *p, const char *file, int line, const char *func);
+	char *(*astrndup_shared_no_mutex)(const char *p, size_t size, const char *file, int line, const char *func);
+	void  (*free_shared_no_mutex)(void *p, const char *file, int line, const char *func);
+	/* Memory (internal calls) */
+	void* (*malloc_mem)(struct s_memory_information *mem, size_t size, const char *file, int line, const char *func);
+	void  (*free_mem)(struct s_memory_information *mem, void *p, const char *file, int line, const char *func);
+	void* (*calloc_mem)(struct s_memory_information *mem, size_t num, size_t size, const char *file, int line, const char *func);
+	void* (*realloc_mem)(struct s_memory_information *mem, void *p, size_t size, const char *file, int line, const char *func);
+	void* (*reallocz_mem)(struct s_memory_information *mem, void *p, size_t size, const char *file, int line, const char *func);
+	char* (*astrdup_mem)(struct s_memory_information *mem, const char *p, const char *file, int line, const char *func);
+	char *(*astrndup_mem)(struct s_memory_information *mem, const char *p, size_t size, const char *file, int line, const char *func);
+	/* Allocation outside memory management */
+	void* (*rmalloc)(size_t size);
+	void  (*rfree)(void *p);
 	/* */
 	void* (*malloc)(size_t size, const char *file, int line, const char *func);
 	void* (*calloc)(size_t num, size_t size, const char *file, int line, const char *func);
@@ -85,6 +123,9 @@ struct malloc_interface {
 	void  (*free)(void *p, const char *file, int line, const char *func);
 	/* */
 	void (*memory_check)(void);
+	bool (*verify_ptr_mem)(struct s_memory_information *mem, void* ptr);
+	bool (*verify_ptr_thread)(void* ptr);
+	bool (*verify_ptr_shared)(void* ptr);
 	bool (*verify_ptr)(void* ptr);
 	size_t (*usage) (void);
 	/* */
