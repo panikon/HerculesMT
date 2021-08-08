@@ -30,9 +30,13 @@
 
 #ifdef WIN32
 #include "common/winapi.h"
+#ifdef MUTEX_DEBUG
+#include "common/thread.h"
+#endif
 #else
 #include <pthread.h>
 #include <sys/time.h>
+#include <string.h> // strerror
 #endif
 
 /** @file
@@ -45,6 +49,10 @@ struct mutex_interface *mutex;
 struct mutex_data {
 #ifdef WIN32
 	CRITICAL_SECTION hMutex;
+#ifdef MUTEX_DEBUG
+	CRITICAL_SECTION hMutex_debug;
+	int owner_tid; // Current owner (if -1, not owned)
+#endif
 #else
 	pthread_mutex_t hMutex;
 #endif
@@ -64,45 +72,160 @@ struct cond_data {
 
 /* Mutex */
 
-/// @copydoc mutex_interface::create()
-static struct mutex_data *mutex_create(void)
+static struct mutex_data *mutex_create_sub(struct mutex_data *m)
 {
-	struct mutex_data *m = aMalloc(sizeof(struct mutex_data));
 	if (m == NULL) {
-		ShowFatalError("ramutex_create: OOM while allocating %"PRIuS" bytes.\n", sizeof(struct mutex_data));
+		ShowFatalError("mutex_create_sub: OOM while allocating %"PRIuS" bytes.\n", sizeof(struct mutex_data));
 		return NULL;
 	}
 
 #ifdef WIN32
 	InitializeCriticalSection(&m->hMutex);
+#ifdef MUTEX_DEBUG
+	InitializeCriticalSection(&m->hMutex_debug);
+	m->owner_tid = -1;
+#endif
+
 #else
-	pthread_mutex_init(&m->hMutex, NULL);
+	int retval;
+#ifdef MUTEX_DEBUG
+	pthread_mutexattr_t attr;
+	if(pthread_mutexattr_init(&attr) == -1) {
+		ShowFatalError("mutex_create_sub: Failed to initialize mutex attribute\n");
+		return NULL;
+	}
+	pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK); // Enable error checking
+	retval = pthread_mutex_init(&m->hMutex, &attr);
+#else
+	retval = pthread_mutex_init(&m->hMutex, NULL);
+#endif
+	if(retval) {
+		ShowFatalError("mutex_create_sub: Failed to create mutex (%d:%s)\n",
+			retval, strerror(retval));
+		return NULL;
+	}
 #endif
 
 	return m;
 }
 
+/**
+ * Creates a new mutex without using memory manager
+ *
+ * This function is used in order to initialize the shared memory mutex used in
+ * the memory manager
+ * @see memmgr_init
+ *
+ * @warning This function should not be used after memory management was started
+ **/
+static struct mutex_data *mutex_create_no_management(void) {
+	return mutex_create_sub(iMalloc->rmalloc(sizeof(struct mutex_data)));
+}
+
+/// @copydoc mutex_interface::create()
+static struct mutex_data *mutex_create(void)
+{
+	return mutex_create_sub(aMalloc(sizeof(struct mutex_data)));
+}
+
+/**
+ * Tries to destroy a mutex
+ * @return bool success
+ **/
+static bool mutex_destroy_sub(struct mutex_data *m)
+{
+	nullpo_retr(false, m);
+#ifdef WIN32
+#ifdef MUTEX_DEBUG
+	bool failed = false;
+	EnterCriticalSection(&m->hMutex_debug);
+	if(m->owner_tid != -1) {
+		// Only an unowned CRITICAL_SECTION can be deleted
+		ShowDebug("mutex_destroy_sub: Trying to delete a owned critical section (TID %d, owner %d)\n",
+			thread->get_tid(), m->owner_tid);
+		ShowInfo("mutex_destroy_sub: Ignored previous operation\n");
+		failed = true;
+	}
+	LeaveCriticalSection(&m->hMutex_debug);
+	if(failed)
+		return false;
+	DeleteCriticalSection(&m->hMutex_debug);
+#endif
+	DeleteCriticalSection(&m->hMutex);
+#else
+	int retval = pthread_mutex_destroy(&m->hMutex);
+	if(retval) {
+		ShowError("mutex_destroy_sub: Failed to destroy mutex, (%d: %s)\n",
+			ret, strerror(ret));
+		ShowInfo("mutex_destroy_sub: Ignored previous operation\n");
+		return false;
+	}
+#endif
+	return true;
+}
+
+/**
+ * Frees mutex created using mutex_create_no_management
+ **/
+static void mutex_destroy_no_management(struct mutex_data *m)
+{
+	if(mutex_destroy_sub(m))
+		iMalloc->rfree(m);
+}
+
 /// @copydoc mutex_interface::destroy()
 static void mutex_destroy(struct mutex_data *m)
 {
-	nullpo_retv(m);
-#ifdef WIN32
-	DeleteCriticalSection(&m->hMutex);
-#else
-	pthread_mutex_destroy(&m->hMutex);
-#endif
-
-	aFree(m);
+	if(mutex_destroy_sub(m))
+		aFree(m);
 }
+
+#if defined(WIN32) && defined(MUTEX_DEBUG)
+/**
+ * Can this thread try to acquire the provided mutex?
+ *
+ * This function is only implemented in WIN32 because pthread checks
+ * internally when PTHREAD_MUTEX_ERRORCHECK is set
+ * @retval true The current thread doesn't own the mutex
+ * @retval false The current thread owns the mutex
+ **/
+bool mutex_can_lock(struct mutex_data *m) {
+	bool retval = true;
+	EnterCriticalSection(&m->hMutex_debug);
+	if(m->owner_tid == thread->get_tid()) {
+		ShowDebug("mutex_lock: Trying to re-enter a mutex (TID %d)\n",
+			thread->get_tid());
+		ShowInfo("mutex_lock: Ignored previous operation\n");
+		retval = false;
+	}
+	LeaveCriticalSection(&m->hMutex_debug);
+	return retval;
+}
+#endif
 
 /// @copydoc mutex_interface::lock()
 static void mutex_lock(struct mutex_data *m)
 {
 	nullpo_retv(m);
 #ifdef WIN32
+#ifdef MUTEX_DEBUG
+	if(!mutex_can_lock(m))
+		return;
+#endif
 	EnterCriticalSection(&m->hMutex);
+#ifdef MUTEX_DEBUG
+	EnterCriticalSection(&m->hMutex_debug);
+	m->owner_tid = thread->get_tid();
+	LeaveCriticalSection(&m->hMutex_debug);
+#endif
 #else
-	pthread_mutex_lock(&m->hMutex);
+	int retval = pthread_mutex_lock(&m->hMutex);
+	if(retval) {
+		ShowError("mutex_lock: Failed to enter mutex, (%d: %s)\n",
+			ret, strerror(ret));
+		ShowInfo("mutex_lock: Ignored previous operation\n");
+		return;
+	}
 #endif
 }
 
@@ -111,7 +234,11 @@ static bool mutex_trylock(struct mutex_data *m)
 {
 	nullpo_retr(false, m);
 #ifdef WIN32
-	if (TryEnterCriticalSection(&m->hMutex) != FALSE)
+#ifdef MUTEX_DEBUG
+	if(!mutex_can_lock(m))
+		return true; // Already locked
+#endif
+	if(TryEnterCriticalSection(&m->hMutex) != FALSE)
 		return true;
 #else
 	if (pthread_mutex_trylock(&m->hMutex) == 0)
@@ -125,6 +252,11 @@ static void mutex_unlock(struct mutex_data *m)
 {
 	nullpo_retv(m);
 #ifdef WIN32
+#ifdef MUTEX_DEBUG
+	EnterCriticalSection(&m->hMutex_debug);
+	m->owner_tid = -1;
+	LeaveCriticalSection(&m->hMutex_debug);
+#endif
 	LeaveCriticalSection(&m->hMutex);
 #else
 	pthread_mutex_unlock(&m->hMutex);
@@ -273,6 +405,8 @@ void mutex_defaults(void)
 	mutex = &mutex_s;
 	mutex->create = mutex_create;
 	mutex->destroy = mutex_destroy;
+	mutex->create_no_management = mutex_create_no_management;
+	mutex->destroy_no_management = mutex_destroy_no_management;
 	mutex->lock = mutex_lock;
 	mutex->trylock = mutex_trylock;
 	mutex->unlock = mutex_unlock;

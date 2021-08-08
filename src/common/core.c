@@ -490,6 +490,7 @@ int main(int argc, char **argv)
 	iMalloc->init();// needed for Show* in display_title() [FlavioJS]
 	showmsg->init();
 	nullpo->init();
+	thread->init(); // Needed for mutex debugging @see mutex_lock
 
 	cmdline->init();
 
@@ -508,7 +509,6 @@ int main(int argc, char **argv)
 	set_server_type();
 
 	Sql_Init();
-	thread->init();
 	DB->init();
 	signals_init();
 

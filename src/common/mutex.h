@@ -27,6 +27,11 @@
  * Mutex and conditional variables implementation for Hercules.
  */
 
+/**
+ * Enable debug functionality in order to identify common deadlocks
+ **/
+#define MUTEX_DEBUG
+
 /* Opaque types */
 
 struct mutex_data; ///< Mutex
@@ -42,6 +47,7 @@ struct mutex_interface {
 	 * @return The created mutex.
 	 */
 	struct mutex_data *(*create) (void);
+	struct mutex_data *(*create_no_management) (void);
 
 	/**
 	 * Destroys a mutex.
@@ -49,6 +55,7 @@ struct mutex_interface {
 	 * @param m the mutex to destroy.
 	 */
 	void (*destroy) (struct mutex_data *m);
+	void (*destroy_no_management) (struct mutex_data *m);
 
 	/**
 	 * Gets a lock.
