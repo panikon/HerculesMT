@@ -1422,6 +1422,46 @@ HPShared struct db_interface *DB;
 	} while(false)
 
 /**
+ * Ensures that there is enough capacity and then appends a value at
+ * the end of the vector using VECTOR_PUSHCOPY.
+ *
+ * @param _vec Vector.
+ * @param _val Value.
+ * @param _step Increase factor.
+ */
+#define VECTOR_PUSHCOPY_ENSURE(_vec, _val, _step) \
+	do { \
+		VECTOR_ENSURE(_vec, 1, _step); \
+		VECTOR_PUSHCOPY(_vec, _val); \
+	} while(false)
+
+/**
+ * Ensures that there is enough capacity and then appends a value at
+ * the end of the vector using VECTOR_PUSH.
+ *
+ * @param _vec Vector.
+ * @param _val Value.
+ * @param _step Increase factor.
+ */
+#define VECTOR_PUSH_ENSURE(_vec, _val, _step) \
+	do { \
+		VECTOR_ENSURE(_vec, 1, _step); \
+		VECTOR_PUSH(_vec, _val); \
+	} while(false)
+
+/**
+ * Initializes a vector with provided capacity
+ *
+ * @param _vec Vector.
+ * @param _n Initial capacity.
+ **/
+#define VECTOR_INIT_CAPACITY(_vec, _n) \
+	do { \
+		VECTOR_INIT(_vec); \
+		VECTOR_RESIZE(_vec, _n); \
+	} while(false)
+
+/**
  * Binary heap library based on defines.
  *
  * Uses the VECTOR defines above.

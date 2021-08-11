@@ -205,7 +205,8 @@ static struct thread_handle *thread_create_opt(threadFunc entry_point, void *par
 	}
 
 	if (handle == NULL) {
-		ShowError("thread_create_opt: cannot create new thread (entry_point: %p) - no free thread slot found!", entry_point);
+		ShowError("thread_create_opt: cannot create new thread (entry_point: %p)"
+			"- no free thread slot found!\n", entry_point);
 		return NULL;
 	}
 
@@ -297,6 +298,7 @@ static bool thread_wait(struct thread_handle *handle, void **out_exit_code)
 	// no thread data cleanup routine call here!
 	// its managed by the callProxy itself..
 #ifdef WIN32
+	// FIXME: out_exit_code is not being set in WIN32 [Panikon]
 	WaitForSingleObject(handle->hThread, INFINITE);
 	return true;
 #else

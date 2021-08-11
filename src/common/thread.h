@@ -79,7 +79,7 @@ struct thread_interface {
 	 *                   parameter to the thread's entry point.
 	 *
 	 * @return The created thread object.
-	 * @retval NULL in vase of failure.
+	 * @retval NULL in case of failure.
 	 */
 	struct thread_handle *(*create) (threadFunc entry_point, void *param);
 

@@ -298,7 +298,7 @@ struct unit_head_large {
 enum e_memory_identification {
 	EMI_NOT_SET = -2, //< Memory not set
 	EMI_SHARED  = -1, //< Shared memory
-	EMI_VALID   = 1,  //< Assigned to a thread (any positive id and zero)
+	EMI_THREAD  = 1,  //< Assigned to a thread (any positive id and zero)
 };
 
 /**
