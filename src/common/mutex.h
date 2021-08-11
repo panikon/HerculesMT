@@ -93,6 +93,7 @@ struct mutex_interface {
 	 * @retval NULL failed to create conditional variable.
 	 */
 	struct cond_data *(*cond_create) (void);
+	struct cond_data *(*cond_create_no_management) (void);
 
 	/**
 	 * Destroys a conditional variable.
@@ -100,6 +101,7 @@ struct mutex_interface {
 	 * @param c the conditional variable to destroy.
 	 */
 	void (*cond_destroy) (struct cond_data *c);
+	void (*cond_destroy_no_management) (struct cond_data *c);
 
 	/**
 	 * Waits Until state is signaled.

@@ -57,8 +57,8 @@ struct mutex_interface *mutex;
  * starting in Windows 8, changing its performance
  * @link stackoverflow.com/q/52170665
  **/
-#define MUTEX_USE_SRWLOCK
-//#define MUTEX_USE_CRITICAL_SECTION
+//#define MUTEX_USE_SRWLOCK
+#define MUTEX_USE_CRITICAL_SECTION
 #endif
 
 struct mutex_data {
@@ -309,10 +309,8 @@ static void mutex_unlock(struct mutex_data *m)
 /* Conditional variable */
 
 /// @copydoc mutex_interface::cond_create()
-static struct cond_data *cond_create(void)
+static struct cond_data *cond_create_sub(struct cond_data *c)
 {
-	struct cond_data *c = aMalloc(sizeof(struct cond_data)); // Never fails
-
 #ifdef WIN32
 	InitializeConditionVariable(&c->hCond);
 #else
@@ -325,8 +323,25 @@ static struct cond_data *cond_create(void)
 	return c;
 }
 
+/// @copydoc mutex_interface::cond_create()
+static struct cond_data *cond_create_no_management(void)
+{
+	struct cond_data *c = iMalloc->rmalloc(sizeof(struct cond_data));
+	assert(c);
+	cond_create_sub(c);
+	return c;
+}
+
+/// @copydoc mutex_interface::cond_create()
+static struct cond_data *cond_create(void)
+{
+	struct cond_data *c = aMalloc(sizeof(struct cond_data)); // Never fails
+	cond_create_sub(c);
+	return c;
+}
+
 /// @copydoc mutex_interface::cond_destroy()
-static void cond_destroy(struct cond_data *c)
+static void cond_destroy_sub(struct cond_data *c)
 {
 	nullpo_retv(c);
 #ifdef WIN32
@@ -335,7 +350,19 @@ static void cond_destroy(struct cond_data *c)
 #else
 	pthread_cond_destroy(&c->hCond);
 #endif
+}
 
+/// @copydoc mutex_interface::cond_destroy()
+static void cond_destroy_no_management(struct cond_data *c)
+{
+	cond_destroy_sub(c);
+	iMalloc->rfree(c);
+}
+
+/// @copydoc mutex_interface::cond_destroy()
+static void cond_destroy(struct cond_data *c)
+{
+	cond_destroy_sub(c);
 	aFree(c);
 }
 
@@ -414,7 +441,9 @@ void mutex_defaults(void)
 	mutex->unlock = mutex_unlock;
 
 	mutex->cond_create = cond_create;
+	mutex->cond_create_no_management = cond_create_no_management;
 	mutex->cond_destroy = cond_destroy;
+	mutex->cond_destroy_no_management = cond_destroy_no_management;
 	mutex->cond_wait = cond_wait;
 	mutex->cond_signal = cond_signal;
 	mutex->cond_broadcast = cond_broadcast;

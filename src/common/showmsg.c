@@ -725,11 +725,11 @@ static void showmsg_thread_cleanup(void)
 {
 	VECTOR_CLEAR(showmsg_queue);
 	if(showmsg_mutex) {
-		mutex->destroy(showmsg_mutex);
+		mutex->destroy_no_management(showmsg_mutex);
 		showmsg_mutex = NULL;
 	}
 	if(showmsg_wake) {
-		mutex->cond_destroy(showmsg_wake);
+		mutex->cond_destroy_no_management(showmsg_wake);
 		showmsg_wake = NULL;
 	}
 	if(showmsg_thread) {
@@ -763,14 +763,15 @@ static void showmsg_thread_final(void)
 static bool showmsg_thread_init(void)
 {
 	VECTOR_INIT_CAPACITY(showmsg_queue, SHOWMSG_QUEUE_INITIAL_CAPACITY);
-	showmsg_mutex = mutex->create();
+	// Messages can be shown even after memmgr_final
+	showmsg_mutex = mutex->create_no_management();
 	if(!showmsg_mutex) {
 		ShowError("showmsg_thread_init: Failed to create mutex\n");
 		showmsg_thread_cleanup();
 		return false;
 	}
 
-	showmsg_wake = mutex->cond_create();
+	showmsg_wake = mutex->cond_create_no_management();
 	if(!showmsg_wake) {
 		ShowError("showmsg_thread_init: Failed to set up wake condition\n");
 		showmsg_thread_cleanup();
