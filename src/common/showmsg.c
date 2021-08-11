@@ -28,6 +28,12 @@
 #include "common/strlib.h" // StringBuf
 #include "common/memmgr.h"
 
+#ifdef SHOWMSG_USE_THREAD
+#include "common/thread.h"
+#include "common/mutex.h"
+#include "common/db.h" // VECTOR_
+#endif
+
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h> // atexit
@@ -633,6 +639,157 @@ char *vshowmsg_(const char *format, va_list ap, int *out_len)
 }
 
 /**
+ * Multi-thread message display
+ **/
+#ifdef SHOWMSG_USE_THREAD
+static struct thread_handle *showmsg_thread = NULL;
+/**
+ * Message thread state
+ *
+ * All variables are accessed using showmsg_mutex
+ **/
+static struct mutex_data *showmsg_mutex = NULL;
+static struct cond_data *showmsg_wake = NULL;
+static bool showmsg_runflag = false;
+struct showmsg_queue_data {
+	int len;             //< Length of str
+	char *str;           //< Formatted output (without flag or colors)
+	enum msg_type flag;  //< Message type
+};
+VECTOR_STRUCT_DECL(s_message_queue, struct showmsg_queue_data) showmsg_queue;
+
+/**
+ * Pushes a new message to showmsg_queue
+ *
+ * @retval Number of characters in formatted string
+ * @retval Negative on failure (same as snprintf)
+ **/
+static int vShowMessage_thread_(enum msg_type flag, const char *string, va_list ap) {
+	struct showmsg_queue_data message;
+	va_list apcopy;
+
+	message.flag = flag;
+	va_copy(apcopy, ap);
+	message.str = vshowmsg_(string, apcopy, &message.len);
+	va_end(apcopy);
+	if(message.len <= 0)
+		return message.len;
+
+	mutex->lock(showmsg_mutex);
+	VECTOR_PUSHCOPY_ENSURE(showmsg_queue, message, SHOWMSG_QUEUE_GROWTH_FACTOR);
+	mutex->cond_signal(showmsg_wake); // Wake worker
+	mutex->unlock(showmsg_mutex);
+	return 0;
+}
+
+static int showmsg_print(enum msg_type flag, const char *string, int str_len);
+
+/**
+ * Message worker thread
+ *
+ * Pops showmsg_queue and displays its message (LIFO)
+ **/
+static void *showmsg_worker(void *param)
+{
+	mutex->lock(showmsg_mutex);
+	while(showmsg_runflag) {
+		mutex->cond_wait(showmsg_wake, showmsg_mutex, -1);
+		while(VECTOR_LENGTH(showmsg_queue)) {
+			struct showmsg_queue_data *message;
+			message = &VECTOR_POP(showmsg_queue);
+			showmsg_print(message->flag, message->str, message->len);
+			if(message->str)
+				iMalloc->rfree(message->str);
+		}
+	}
+	mutex->unlock(showmsg_mutex);
+
+	return NULL;
+}
+
+/**
+ * Sets message thread runflag and wakes message thread
+ **/
+static void showmsg_runflag_set(bool runflag)
+{
+	mutex->lock(showmsg_mutex);
+	showmsg_runflag = runflag;
+	mutex->cond_signal(showmsg_wake);
+	mutex->unlock(showmsg_mutex);
+}
+
+/**
+ * Frees and destroys message data
+ **/
+static void showmsg_thread_cleanup(void)
+{
+	VECTOR_CLEAR(showmsg_queue);
+	if(showmsg_mutex) {
+		mutex->destroy(showmsg_mutex);
+		showmsg_mutex = NULL;
+	}
+	if(showmsg_wake) {
+		mutex->cond_destroy(showmsg_wake);
+		showmsg_wake = NULL;
+	}
+	if(showmsg_thread) {
+		thread->destroy(showmsg_thread);
+		showmsg_thread = NULL;
+	}
+	showmsg_runflag = false;
+}
+
+/**
+ * Finalizes message thread
+ *
+ * Called from showmsg_final if showmsg->thread is set
+ **/
+static void showmsg_thread_final(void)
+{
+	if(!showmsg_runflag)
+		return;
+
+	showmsg_runflag_set(false);
+	thread->wait(showmsg_thread, NULL);
+	showmsg_thread_cleanup();
+}
+
+/**
+ * Initializes message thread and also global message state
+ *
+ * Should only be called after thread init
+ * @return Success state
+ **/
+static bool showmsg_thread_init(void)
+{
+	VECTOR_INIT_CAPACITY(showmsg_queue, SHOWMSG_QUEUE_INITIAL_CAPACITY);
+	showmsg_mutex = mutex->create();
+	if(!showmsg_mutex) {
+		ShowError("showmsg_thread_init: Failed to create mutex\n");
+		showmsg_thread_cleanup();
+		return false;
+	}
+
+	showmsg_wake = mutex->cond_create();
+	if(!showmsg_wake) {
+		ShowError("showmsg_thread_init: Failed to set up wake condition\n");
+		showmsg_thread_cleanup();
+		return false;
+	}
+
+	showmsg_runflag = true;
+	showmsg_thread = thread->create(showmsg_worker, NULL);
+	if(!showmsg_thread) {
+		ShowError("showmsg_thread_init: Failed to create worker thread\n");
+		showmsg_thread_cleanup();
+		showmsg_runflag = false;
+		return false;
+	}
+	return true;
+}
+#endif // SHOWMSG_USE_THREAD
+
+/**
  * Appends colored prefix string to 'prefix'
  *
  * @param prefix String target
@@ -797,6 +954,17 @@ static int vShowMessage_(enum msg_type flag, const char *string, va_list ap)
 {
 	int ret;
 	va_list apcopy;
+
+#ifdef SHOWMSG_USE_THREAD
+	if(showmsg_thread) {
+		va_copy(apcopy, ap);
+		ret = vShowMessage_thread_(flag, string, ap);
+		va_end(apcopy);
+		return ret;
+	}
+	// Fall-through
+	// System wasn't initialized yet
+#endif
 	int len = 0;
 	va_copy(apcopy, ap);
 	char *buffer = vshowmsg_(string, apcopy, &len);
@@ -917,10 +1085,18 @@ static void showmsg_showFatalError(const char *string, ...)
 
 static void showmsg_init(void)
 {
+#ifdef SHOWMSG_USE_THREAD
+	if(!showmsg_thread_init())
+		ShowError("showmsg_init: Failed to initialize message thread\n");
+#endif
 }
 
 static void showmsg_final(void)
 {
+#ifdef SHOWMSG_USE_THREAD
+	if(showmsg_thread)
+		showmsg_thread_final();
+#endif
 }
 
 void showmsg_defaults(void)

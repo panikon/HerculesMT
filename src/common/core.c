@@ -35,6 +35,7 @@
 #include "common/memmgr.h"
 #include "common/mmo.h"
 #include "common/mutex.h"
+#include "common/rwlock.h"
 #include "common/nullpo.h"
 #include "common/packets.h"
 #include "common/random.h"
@@ -257,6 +258,7 @@ static void core_defaults(void)
 	des_defaults();
 	grfio_defaults(); // Note: grfio is lazily loaded. grfio->init() and grfio->final() are not automatically called.
 	mutex_defaults();
+	rwlock_defaults();
 	libconfig_defaults();
 	sql_defaults();
 	timer_defaults();
@@ -487,10 +489,10 @@ int main(int argc, char **argv)
 	}
 	core_defaults();
 
-	iMalloc->init();// needed for Show* in display_title() [FlavioJS]
+	iMalloc->init();// needed for Show* in display_title() (strlib) [FlavioJS]
+	thread->init(); // Needed for multi threaded showmsg [Panikon]
 	showmsg->init();
 	nullpo->init();
-	thread->init(); // Needed for mutex debugging @see mutex_lock
 
 	cmdline->init();
 

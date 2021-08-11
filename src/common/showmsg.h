@@ -26,6 +26,25 @@
 #include <stdarg.h>
 
 /**
+ * Multi-threaded message queue
+ *
+ * A message thread with a mutex lock is required to display messages because
+ * currently no standard guarantees that file operations are atomic.
+ * This way we can use only one mutex (showmsg_mutex) instead of a different one for
+ * each of the handles.
+ * @see showmsg_thread_init
+ * @see showmsg_worker
+ **/
+#define SHOWMSG_USE_THREAD
+
+#ifdef SHOWMSG_USE_THREAD
+// Growth factor of message queue (multi-threaded)
+#define SHOWMSG_QUEUE_GROWTH_FACTOR 2
+// Initial capacity of message queue (multi-threaded)
+#define SHOWMSG_QUEUE_INITIAL_CAPACITY 5
+#endif
+
+/**
  * Log file names
  *
  * @see showmsg_log_filename
