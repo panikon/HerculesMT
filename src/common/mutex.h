@@ -30,7 +30,7 @@
 /**
  * Enable debug functionality in order to identify common deadlocks
  **/
-#define MUTEX_DEBUG
+//#define MUTEX_DEBUG
 
 /* Opaque types */
 
@@ -53,6 +53,7 @@ struct mutex_interface {
 	 * Destroys a mutex.
 	 *
 	 * @param m the mutex to destroy.
+	 * @see mutex_destroy_sub
 	 */
 	void (*destroy) (struct mutex_data *m);
 	void (*destroy_no_management) (struct mutex_data *m);
@@ -89,6 +90,7 @@ struct mutex_interface {
 	 * Creates a conditional variable.
 	 *
 	 * @return the created conditional variable.
+	 * @retval NULL failed to create conditional variable.
 	 */
 	struct cond_data *(*cond_create) (void);
 
@@ -103,10 +105,11 @@ struct mutex_interface {
 	 * Waits Until state is signaled.
 	 *
 	 * @param c             The condition var to wait for signaled state.
-	 * @param m             The mutex used for synchronization.
+	 * @param m             The mutex used for synchronization (must have been acquired).
 	 * @param timeout_ticks Timeout in ticks (-1 = INFINITE)
+	 * @return Was wait successful? When timeout is infinite always returns true
 	 */
-	void (*cond_wait) (struct cond_data *c, struct mutex_data *m, sysint timeout_ticks);
+	bool (*cond_wait) (struct cond_data *c, struct mutex_data *m, sysint timeout_ticks);
 
 	/**
 	 * Sets the given condition var to signaled state.
@@ -119,7 +122,7 @@ struct mutex_interface {
 	void (*cond_signal) (struct cond_data *c);
 
 	/**
-	 * Sets notifies all waiting threads thats signaled.
+	 * Sets the given condition var to signaled state.
 	 *
 	 * @remark
 	 *   All Waiters getting notified.

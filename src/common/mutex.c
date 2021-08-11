@@ -46,9 +46,28 @@
 static struct mutex_interface mutex_s;
 struct mutex_interface *mutex;
 
+#ifdef WIN32
+/**
+ * Define the internal type that Hercules' mutex uses
+ *
+ * SRWLocks are generally faster than CRITICAL_SECTIONs because
+ * they don't use any standard kernel objects internally when waiting,
+ * and mostly execute in user-space
+ * There were also changes to the inner workings of CRITICAL_SECTIONs
+ * starting in Windows 8, changing its performance
+ * @link stackoverflow.com/q/52170665
+ **/
+#define MUTEX_USE_SRWLOCK
+//#define MUTEX_USE_CRITICAL_SECTION
+#endif
+
 struct mutex_data {
 #ifdef WIN32
+#ifdef MUTEX_USE_CRITICAL_SECTION
 	CRITICAL_SECTION hMutex;
+#elif defined(MUTEX_USE_SRWLOCK)
+	SRWLOCK hMutex;
+#endif
 #ifdef MUTEX_DEBUG
 	CRITICAL_SECTION hMutex_debug;
 	int owner_tid; // Current owner (if -1, not owned)
@@ -60,11 +79,7 @@ struct mutex_data {
 
 struct cond_data {
 #ifdef WIN32
-	HANDLE events[2];
-	ra_align(8) volatile LONG nWaiters;
-	CRITICAL_SECTION waiters_lock;
-#define EVENT_COND_SIGNAL 0
-#define EVENT_COND_BROADCAST 1
+	CONDITION_VARIABLE hCond;
 #else
 	pthread_cond_t hCond;
 #endif
@@ -80,7 +95,11 @@ static struct mutex_data *mutex_create_sub(struct mutex_data *m)
 	}
 
 #ifdef WIN32
+#ifdef MUTEX_USE_CRITICAL_SECTION
 	InitializeCriticalSection(&m->hMutex);
+#elif defined(MUTEX_USE_SRWLOCK)
+	InitializeSRWLock(&m->hMutex);
+#endif
 #ifdef MUTEX_DEBUG
 	InitializeCriticalSection(&m->hMutex_debug);
 	m->owner_tid = -1;
@@ -129,8 +148,14 @@ static struct mutex_data *mutex_create(void)
 }
 
 /**
- * Tries to destroy a mutex
- * @return bool success
+ * Destroys a mutex lock
+ *
+ * Only unlocked mutexes should be destroyed.
+ * This function can only fail in debug mode, otherwise illegal
+ * operations are undefined behavior and change depending on the
+ * operating system
+ *
+ * @return Success of the operation
  **/
 static bool mutex_destroy_sub(struct mutex_data *m)
 {
@@ -141,7 +166,7 @@ static bool mutex_destroy_sub(struct mutex_data *m)
 	EnterCriticalSection(&m->hMutex_debug);
 	if(m->owner_tid != -1) {
 		// Only an unowned CRITICAL_SECTION can be deleted
-		ShowDebug("mutex_destroy_sub: Trying to delete a owned critical section (TID %d, owner %d)\n",
+		ShowDebug("mutex_destroy_sub: Trying to delete an owned critical section (TID %d, owner %d)\n",
 			thread->get_tid(), m->owner_tid);
 		ShowInfo("mutex_destroy_sub: Ignored previous operation\n");
 		failed = true;
@@ -151,7 +176,12 @@ static bool mutex_destroy_sub(struct mutex_data *m)
 		return false;
 	DeleteCriticalSection(&m->hMutex_debug);
 #endif
+#ifdef MUTEX_USE_CRITICAL_SECTION
 	DeleteCriticalSection(&m->hMutex);
+#elif defined(MUTEX_USE_SRWLOCK)
+	// A SRWLock is a pointer to a kernel keyed event, nothing is
+	// allocated upon creation, so there's no need to release/delete it
+#endif
 #else
 	int retval = pthread_mutex_destroy(&m->hMutex);
 	if(retval) {
@@ -212,7 +242,11 @@ static void mutex_lock(struct mutex_data *m)
 	if(!mutex_can_lock(m))
 		return;
 #endif
+#ifdef MUTEX_USE_CRITICAL_SECTION
 	EnterCriticalSection(&m->hMutex);
+#elif defined(MUTEX_USE_SRWLOCK)
+	AcquireSRWLockExclusive(&m->hMutex);
+#endif
 #ifdef MUTEX_DEBUG
 	EnterCriticalSection(&m->hMutex_debug);
 	m->owner_tid = thread->get_tid();
@@ -238,8 +272,13 @@ static bool mutex_trylock(struct mutex_data *m)
 	if(!mutex_can_lock(m))
 		return true; // Already locked
 #endif
+#ifdef MUTEX_USE_CRITICAL_SECTION
 	if(TryEnterCriticalSection(&m->hMutex) != FALSE)
 		return true;
+#elif defined(MUTEX_USE_SRWLOCK)
+	if(TryAcquireSRWLockExclusive(&m->hMutex) != FALSE)
+		return true;
+#endif
 #else
 	if (pthread_mutex_trylock(&m->hMutex) == 0)
 		return true;
@@ -257,7 +296,11 @@ static void mutex_unlock(struct mutex_data *m)
 	m->owner_tid = -1;
 	LeaveCriticalSection(&m->hMutex_debug);
 #endif
+#ifdef MUTEX_USE_CRITICAL_SECTION
 	LeaveCriticalSection(&m->hMutex);
+#elif defined(MUTEX_USE_SRWLOCK)
+	ReleaseSRWLockExclusive(&m->hMutex);
+#endif
 #else
 	pthread_mutex_unlock(&m->hMutex);
 #endif
@@ -268,19 +311,15 @@ static void mutex_unlock(struct mutex_data *m)
 /// @copydoc mutex_interface::cond_create()
 static struct cond_data *cond_create(void)
 {
-	struct cond_data *c = aMalloc(sizeof(struct cond_data));
-	if (c == NULL) {
-		ShowFatalError("racond_create: OOM while allocating %"PRIuS" bytes\n", sizeof(struct cond_data));
-		return NULL;
-	}
+	struct cond_data *c = aMalloc(sizeof(struct cond_data)); // Never fails
 
 #ifdef WIN32
-	c->nWaiters = 0;
-	c->events[EVENT_COND_SIGNAL]    = CreateEvent(NULL, FALSE, FALSE, NULL);
-	c->events[EVENT_COND_BROADCAST] = CreateEvent(NULL, TRUE,  FALSE, NULL);
-	InitializeCriticalSection( &c->waiters_lock );
+	InitializeConditionVariable(&c->hCond);
 #else
-	pthread_cond_init(&c->hCond, NULL);
+	int retval = pthread_cond_init(&c->hCond, NULL);
+	if(retval)
+		ShowError("cond_create: Failed to create condition (%d:%s)\n",
+			retval, strerror(retval));
 #endif
 
 	return c;
@@ -291,9 +330,8 @@ static void cond_destroy(struct cond_data *c)
 {
 	nullpo_retv(c);
 #ifdef WIN32
-	CloseHandle(c->events[EVENT_COND_SIGNAL]);
-	CloseHandle(c->events[EVENT_COND_BROADCAST]);
-	DeleteCriticalSection(&c->waiters_lock);
+	// A CONDITION_VARIABLE is a pointer to a kernel keyed event, nothing is
+	// allocated upon creation, so there's no need to release/delete it
 #else
 	pthread_cond_destroy(&c->hCond);
 #endif
@@ -302,45 +340,26 @@ static void cond_destroy(struct cond_data *c)
 }
 
 /// @copydoc mutex_interface::cond_wait()
-static void cond_wait(struct cond_data *c, struct mutex_data *m, sysint timeout_ticks)
+static bool cond_wait(struct cond_data *c, struct mutex_data *m, sysint timeout_ticks)
 {
+	nullpo_retr(false, c);
+	nullpo_retr(false, m);
+	bool retval = true;
+
 #ifdef WIN32
-	register DWORD ms;
-	int result;
-	bool is_last = false;
-
-	nullpo_retv(c);
-	EnterCriticalSection(&c->waiters_lock);
-	c->nWaiters++;
-	LeaveCriticalSection(&c->waiters_lock);
-
-	if (timeout_ticks < 0)
-		ms = INFINITE;
-	else
-		ms = (timeout_ticks > MAXDWORD) ? (MAXDWORD - 1) : (DWORD)timeout_ticks;
-
-	// we can release the mutex (m) here, cause win's
-	// manual reset events maintain state when used with
-	// SetEvent()
-	mutex->unlock(m);
-
-	result = WaitForMultipleObjects(2, c->events, FALSE, ms);
-
-	EnterCriticalSection(&c->waiters_lock);
-	c->nWaiters--;
-	if ((result == WAIT_OBJECT_0 + EVENT_COND_BROADCAST) && (c->nWaiters == 0))
-		is_last = true; // Broadcast called!
-	LeaveCriticalSection(&c->waiters_lock);
-
-	// we are the last waiter that has to be notified, or to stop waiting
-	// so we have to do a manual reset
-	if (is_last == true)
-		ResetEvent( c->events[EVENT_COND_BROADCAST] );
-
-	mutex->lock(m);
-
+#ifdef MUTEX_USE_CRITICAL_SECTION
+	retval = SleepConditionVariableCS(&c->hCond, &m->hMutex,
+		(timeout_ticks < 0)?INFINITE:timeout_ticks);
+#elif defined(MUTEX_USE_SRWLOCK)
+	retval = SleepConditionVariableSRW(&c->hCond, &m->hMutex,
+		(timeout_ticks < 0)?INFINITE:timeout_ticks, 0);
+#endif
+	if(!retval) {
+		DWORD dw = GetLastError();
+		if(dw != ERROR_TIMEOUT)
+			ShowError("cond_wait: Failed to wait (error %ld)\n", dw);
+	}
 #else
-	nullpo_retv(m);
 	if (timeout_ticks < 0) {
 		pthread_cond_wait(&c->hCond,  &m->hMutex);
 	} else {
@@ -350,28 +369,21 @@ static void cond_wait(struct cond_data *c, struct mutex_data *m, sysint timeout_
 		wtime.tv_sec = exact_timeout/1000;
 		wtime.tv_nsec = (exact_timeout%1000)*1000000;
 
-		pthread_cond_timedwait( &c->hCond,  &m->hMutex,  &wtime);
+		retval = (pthread_cond_timedwait(&c->hCond,  &m->hMutex,  &wtime) == 0);
+		if(!retval && errno != EAGAIN)
+			ShowError("cond_wait: Failed to wait (errno %d)\n", errno);
 	}
 #endif
+	return retval;
 }
 
 /// @copydoc mutex_interface::cond_signal()
 static void cond_signal(struct cond_data *c)
 {
+	nullpo_retv(c);
 #ifdef WIN32
-#	if 0
-	bool has_waiters = false;
-	nullpo_retv(c);
-	EnterCriticalSection(&c->waiters_lock);
-	if(c->nWaiters > 0)
-		has_waiters = true;
-	LeaveCriticalSection(&c->waiters_lock);
-
-	if(has_waiters == true)
-#	endif // 0
-		SetEvent(c->events[EVENT_COND_SIGNAL]);
+	WakeConditionVariable(&c->hCond);
 #else
-	nullpo_retv(c);
 	pthread_cond_signal(&c->hCond);
 #endif
 }
@@ -379,20 +391,10 @@ static void cond_signal(struct cond_data *c)
 /// @copydoc mutex_interface::cond_broadcast()
 static void cond_broadcast(struct cond_data *c)
 {
+	nullpo_retv(c);
 #ifdef WIN32
-#	if 0
-	bool has_waiters = false;
-	nullpo_retv(c);
-	EnterCriticalSection(&c->waiters_lock);
-	if(c->nWaiters > 0)
-		has_waiters = true;
-	LeaveCriticalSection(&c->waiters_lock);
-
-	if(has_waiters == true)
-#	endif // 0
-		SetEvent(c->events[EVENT_COND_BROADCAST]);
+	WakeAllConditionVariable(&c->hCond);
 #else
-	nullpo_retv(c);
 	pthread_cond_broadcast(&c->hCond);
 #endif
 }
