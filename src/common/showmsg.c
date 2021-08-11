@@ -26,6 +26,7 @@
 #include "common/conf.h"
 #include "common/core.h" //[Ind] - For SERVER_TYPE
 #include "common/strlib.h" // StringBuf
+#include "common/memmgr.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -36,14 +37,6 @@
 #else // not WIN32
 #	include <unistd.h>
 #endif // WIN32
-
-#if defined(DEBUGLOGMAP)
-#define DEBUGLOGPATH "log"PATHSEP_STR"map-server.log"
-#elif defined(DEBUGLOGCHAR)
-#define DEBUGLOGPATH "log"PATHSEP_STR"char-server.log"
-#elif defined(DEBUGLOGLOGIN)
-#define DEBUGLOGPATH "log"PATHSEP_STR"login-server.log"
-#endif
 
 static struct showmsg_interface showmsg_s;
 struct showmsg_interface *showmsg;
@@ -603,123 +596,215 @@ static int FPRINTF(FILE *file, const char *fmt, ...)
 
 #endif// not _WIN32
 
-static int vShowMessage_(enum msg_type flag, const char *string, va_list ap)
+/**
+ * Formats a string using provided va_list
+ * @param format Format
+ * @param ap variadic parameter
+ * @param out_len output length, when less than 0 output is NULL
+ *
+ * @return Formatted output (should be rfree by caller)
+ **/
+char *vshowmsg_(const char *format, va_list ap, int *out_len)
 {
 	va_list apcopy;
-	char prefix[100];
+	int len = 0;
+	char *buffer = NULL;
 
-	if (!string || *string == '\0') {
-		ShowError("Empty string passed to vShowMessage_().\n");
+	va_copy(apcopy, ap);
+	len = vsnprintf(NULL, 0, format, apcopy);
+	if(len > 0) {
+		len++;
+		// Memory management uses showmsg functions and showmsg is used
+		// before its startup, so we shouldn't be reliant on it. [Panikon]
+		buffer = iMalloc->rmalloc(len);
+		if(!buffer) {
+			FPRINTF(STDERR, "vshowmsg_: rmalloc out of memory!\n");
+			exit(EXIT_FAILURE);
+		}
+		len = vsnprintf(buffer, len, format, apcopy);
+		if(len < 0)
+			aFree(buffer);
+	}
+	va_end(apcopy);
+	*out_len = len;
+	if(len <= 0)
+		return NULL;
+	return buffer;
+}
+
+/**
+ * Appends colored prefix string to 'prefix'
+ *
+ * @param prefix String target
+ * @param prefix_len prefix capacity - 1
+ * @param flag Message flag
+ * @param color Color the prefix?
+ **/
+static void showmsg_prefix(char *prefix, size_t prefix_len, enum msg_type flag, bool color)
+{
+	switch (flag) {
+		case MSG_NONE: // direct printf replacement
+			break;
+		case MSG_STATUS: //Bright Green (To inform about good things)
+			strncat(prefix,
+				   (flag)?CL_GREEN"["MSG_STATUS_STR"]"CL_RESET":" : MSG_STATUS_STR, prefix_len);
+			break;
+		case MSG_SQL: //Bright Violet (For dumping out anything related with SQL) 
+			// Actually, this is mostly used for SQL errors with the database,
+			// as successes can as well just be anything else... [Skotlex]
+			strncat(prefix,
+				   (flag)?CL_MAGENTA"["MSG_SQL_STR"]"CL_RESET":" : MSG_SQL_STR, prefix_len);
+			break;
+		case MSG_INFORMATION: //Bright White (Variable information)
+			strncat(prefix,
+				   (flag)?CL_WHITE"["MSG_INFORMATION_STR"]"CL_RESET":" : MSG_INFORMATION_STR, prefix_len);
+			break;
+		case MSG_NOTICE: //Bright White (Less than a warning)
+			strncat(prefix,
+				   (flag)?CL_WHITE"["MSG_NOTICE_STR"]"CL_RESET":" : MSG_NOTICE_STR, prefix_len);
+			break;
+		case MSG_WARNING: //Bright Yellow
+			strncat(prefix,
+				   (flag)?CL_YELLOW"["MSG_WARNING_STR"]"CL_RESET":" : MSG_WARNING_STR, prefix_len);
+			break;
+		case MSG_DEBUG: //Bright Cyan, important stuff!
+			strncat(prefix,
+				   (flag)?CL_CYAN"["MSG_DEBUG_STR"]"CL_RESET":" : MSG_DEBUG_STR, prefix_len);
+			break;
+		case MSG_ERROR: //Bright Red  (Regular errors)
+			strncat(prefix,
+				   (flag)?CL_RED"["MSG_ERROR_STR"]"CL_RESET":" : MSG_ERROR_STR, prefix_len);
+			break;
+		case MSG_FATALERROR: //Bright Red (Fatal errors, abort(); if possible)
+			strncat(prefix,
+				   (flag)?CL_RED"["MSG_FATALERROR_STR"]"CL_RESET":" : MSG_FATALERROR_STR, prefix_len);
+			break;
+		default:
+			ShowError("showmsg_prefix_color: Unknown flag %d\n", flag);
+			strncat(prefix,
+				   (flag)?CL_WHITE"["MSG_UNKNOWN_STR"]"CL_RESET":" : MSG_UNKNOWN_STR, prefix_len);
+			break;
+	}
+}
+
+/**
+ * Should this message type be silenced when printing?
+ *
+ * @see showmsg->silent
+ * @see ShowMessageFormat
+ **/
+static bool showmsg_is_silent(enum msg_type flag)
+{
+	return ((flag == MSG_INFORMATION && showmsg->silent&1) ||
+	        (flag == MSG_STATUS      && showmsg->silent&2) ||
+	        (flag == MSG_NOTICE      && showmsg->silent&4) ||
+	        (flag == MSG_WARNING     && showmsg->silent&8) ||
+	        (flag == MSG_ERROR       && showmsg->silent&16) ||
+	        (flag == MSG_SQL         && showmsg->silent&16) ||
+	        (flag == MSG_DEBUG       && showmsg->silent&32));
+}
+
+/**
+ * Should this message flag be logged?
+ *
+ * @see showmsg->console_log
+ * @see showmsg_log
+ **/
+static bool showmsg_is_log(enum msg_type flag)
+{
+	return ( ( flag == MSG_WARNING && showmsg->console_log&1 ) ||
+	       ( ( flag == MSG_ERROR || flag == MSG_SQL ) && showmsg->console_log&2 ) ||
+	       ( flag == MSG_DEBUG && showmsg->console_log&4 ) ); //[Ind]
+}
+
+/**
+ * Server type to log file name
+ **/
+const char *showmsg_log_filename(void)
+{
+	switch(SERVER_TYPE) {
+		case SERVER_TYPE_LOGIN: return SHOWMSG_LOG_LOGIN;
+		case SERVER_TYPE_CHAR:  return SHOWMSG_LOG_CHAR;
+		case SERVER_TYPE_MAP:   return SHOWMSG_LOG_MAP;
+		default:                return SHOWMSG_LOG_UNKNOWN;
+	}
+}
+
+/**
+ * Logs formatted string
+ *
+ * @see showmsg_is_log
+ **/
+static void showmsg_log(enum msg_type flag, const char *string)
+{
+	FILE *log = NULL;
+	char timestring[255];
+	time_t curtime;
+
+	log = fopen(showmsg_log_filename(), "a+");
+	if(!log) {
+		ShowMessage("showmsg_log: Failed to log message\n!");
+		return;
+	}
+
+	time(&curtime);
+	strftime(timestring, 254, "%m/%d/%Y %H:%M:%S", localtime(&curtime));
+	char prefix[100];
+	showmsg_prefix(prefix, sizeof(prefix), flag, false);
+	fprintf(log,"(%s) [ %s ] : %s",
+		timestring, prefix, string);
+	fclose(log);
+}
+
+/**
+ * Prints pre formatted message
+ **/
+static int showmsg_print(enum msg_type flag, const char *string, int str_len)
+{
+	char prefix[100];
+	if(!string || *string == '\0' || !str_len) {
+		ShowError("showmsg_print: string was empty\n");
 		return 1;
 	}
-	if(
-		( flag == MSG_WARNING && showmsg->console_log&1 ) ||
-		( ( flag == MSG_ERROR || flag == MSG_SQL ) && showmsg->console_log&2 ) ||
-		( flag == MSG_DEBUG && showmsg->console_log&4 ) ) {//[Ind]
-		FILE *log = NULL;
-		if( (log = fopen(SERVER_TYPE == SERVER_TYPE_MAP ? "./log/map-msg_log.log" : "./log/unknown.log","a+")) ) {
-			char timestring[255];
-			time_t curtime;
-			time(&curtime);
-			strftime(timestring, 254, "%m/%d/%Y %H:%M:%S", localtime(&curtime));
-			fprintf(log,"(%s) [ %s ] : ",
-				timestring,
-				flag == MSG_WARNING ? "Warning" :
-				flag == MSG_ERROR ? "Error" :
-				flag == MSG_SQL ? "SQL Error" :
-				flag == MSG_DEBUG ? "Debug" :
-				"Unknown");
-			va_copy(apcopy, ap);
-			vfprintf(log,string,apcopy);
-			va_end(apcopy);
-			fclose(log);
-		}
-	}
-	if(
-	    (flag == MSG_INFORMATION && showmsg->silent&1) ||
-	    (flag == MSG_STATUS && showmsg->silent&2) ||
-	    (flag == MSG_NOTICE && showmsg->silent&4) ||
-	    (flag == MSG_WARNING && showmsg->silent&8) ||
-	    (flag == MSG_ERROR && showmsg->silent&16) ||
-	    (flag == MSG_SQL && showmsg->silent&16) ||
-	    (flag == MSG_DEBUG && showmsg->silent&32)
-	)
-		return 0; //Do not print it.
+	if(showmsg_is_log(flag))
+		showmsg_log(flag, string);
+	if(showmsg_is_silent(flag))
+		return 0; // Do not display this message
 
 	if (showmsg->timestamp_format[0] && flag != MSG_NONE) {
 		//Display time format. [Skotlex]
 		time_t t = time(NULL);
 		strftime(prefix, 80, showmsg->timestamp_format, localtime(&t));
 	} else prefix[0]='\0';
+	showmsg_prefix(prefix, sizeof(prefix), flag, true);
 
-	switch (flag) {
-		case MSG_NONE: // direct printf replacement
-			break;
-		case MSG_STATUS: //Bright Green (To inform about good things)
-			strcat(prefix,CL_GREEN"[Status]"CL_RESET":");
-			break;
-		case MSG_SQL: //Bright Violet (For dumping out anything related with SQL) <- Actually, this is mostly used for SQL errors with the database, as successes can as well just be anything else... [Skotlex]
-			strcat(prefix,CL_MAGENTA"[SQL]"CL_RESET":");
-			break;
-		case MSG_INFORMATION: //Bright White (Variable information)
-			strcat(prefix,CL_WHITE"[Info]"CL_RESET":");
-			break;
-		case MSG_NOTICE: //Bright White (Less than a warning)
-			strcat(prefix,CL_WHITE"[Notice]"CL_RESET":");
-			break;
-		case MSG_WARNING: //Bright Yellow
-			strcat(prefix,CL_YELLOW"[Warning]"CL_RESET":");
-			break;
-		case MSG_DEBUG: //Bright Cyan, important stuff!
-			strcat(prefix,CL_CYAN"[Debug]"CL_RESET":");
-			break;
-		case MSG_ERROR: //Bright Red  (Regular errors)
-			strcat(prefix,CL_RED"[Error]"CL_RESET":");
-			break;
-		case MSG_FATALERROR: //Bright Red (Fatal errors, abort(); if possible)
-			strcat(prefix,CL_RED"[Fatal Error]"CL_RESET":");
-			break;
-		default:
-			ShowError("In function vShowMessage_() -> Invalid flag passed.\n");
-			return 1;
-	}
-
-	if (flag == MSG_ERROR || flag == MSG_FATALERROR || flag == MSG_SQL) {
+	// Print message
+	if(flag == MSG_ERROR || flag == MSG_FATALERROR || flag == MSG_SQL) {
 		//Send Errors to StdErr [Skotlex]
-		FPRINTF(STDERR, "%s ", prefix);
-		va_copy(apcopy, ap);
-		VFPRINTF(STDERR, string, apcopy);
-		va_end(apcopy);
+		FPRINTF(STDERR, "%s %s", prefix, string);
 		FFLUSH(STDERR);
 	} else {
-		if (flag != MSG_NONE)
-			FPRINTF(STDOUT, "%s ", prefix);
-		va_copy(apcopy, ap);
-		VFPRINTF(STDOUT, string, apcopy);
-		va_end(apcopy);
+		if(flag != MSG_NONE)
+			FPRINTF(STDOUT, "%s %s", prefix, string);
+		else
+			FPRINTF(STDOUT, "%s", string);
 		FFLUSH(STDOUT);
 	}
-
-#if defined(DEBUGLOGMAP) || defined(DEBUGLOGCHAR) || defined(DEBUGLOGLOGIN)
-	if (strlen(DEBUGLOGPATH) > 0) {
-		FILE *fp = fopen(DEBUGLOGPATH,"a");
-		if (fp == NULL) {
-			FPRINTF(STDERR, CL_RED"[ERROR]"CL_RESET": Could not open '"CL_WHITE"%s"CL_RESET"', access denied.\n", DEBUGLOGPATH);
-			FFLUSH(STDERR);
-		} else {
-			fprintf(fp,"%s ", prefix);
-			va_copy(apcopy, ap);
-			vfprintf(fp,string,apcopy);
-			va_end(apcopy);
-			fclose(fp);
-		}
-	} else {
-		FPRINTF(STDERR, CL_RED"[ERROR]"CL_RESET": DEBUGLOGPATH not defined!\n");
-		FFLUSH(STDERR);
-	}
-#endif
-
 	return 0;
+}
+
+static int vShowMessage_(enum msg_type flag, const char *string, va_list ap)
+{
+	int ret;
+	va_list apcopy;
+	int len = 0;
+	va_copy(apcopy, ap);
+	char *buffer = vshowmsg_(string, apcopy, &len);
+	ret = showmsg_print(flag, buffer, len);
+	if(buffer)
+		iMalloc->rfree(buffer);
+	va_end(apcopy);
+	return ret;
 }
 
 static int showmsg_vShowMessage(const char *string, va_list ap)
@@ -738,19 +823,6 @@ static void showmsg_clearScreen(void)
 	ShowMessage(CL_CLS); // to prevent empty string passed messages
 #endif
 }
-
-#if 0 // Unused
-static int ShowMessage_(enum msg_type flag, const char *string, ...) __attribute__((format(printf, 2, 3)));
-static int ShowMessage_(enum msg_type flag, const char *string, ...)
-{
-	int ret;
-	va_list ap;
-	va_start(ap, string);
-	ret = vShowMessage_(flag, string, ap);
-	va_end(ap);
-	return ret;
-}
-#endif // Unused
 
 // direct printf replacement
 static void showmsg_showMessage(const char *string, ...) __attribute__((format(printf, 1, 2)));

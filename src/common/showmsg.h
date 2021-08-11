@@ -25,6 +25,17 @@
 
 #include <stdarg.h>
 
+/**
+ * Log file names
+ *
+ * @see showmsg_log_filename
+ * @see showmsg_log
+ **/
+#define SHOWMSG_LOG_LOGIN   "."PATHSEP_STR"log"PATHSEP_STR"login-msg_log.log"
+#define SHOWMSG_LOG_CHAR    "."PATHSEP_STR"log"PATHSEP_STR"char-msg_log.log"
+#define SHOWMSG_LOG_MAP     "."PATHSEP_STR"log"PATHSEP_STR"map-msg_log.log"
+#define SHOWMSG_LOG_UNKNOWN "."PATHSEP_STR"log"PATHSEP_STR"unknown-msg_log.log"
+
 /* Forward Declarations */
 struct config_setting_t;
 
@@ -97,6 +108,22 @@ enum msg_type {
 	MSG_ERROR,
 	MSG_FATALERROR
 };
+
+/**
+ * Equivalent prefix strings
+ *
+ * @see msg_type
+ * @see showmsg_prefix
+ **/
+#define MSG_STATUS_STR      "Status"
+#define MSG_SQL_STR         "SQL"
+#define MSG_INFORMATION_STR "Info"
+#define MSG_NOTICE_STR      "Notice"
+#define MSG_WARNING_STR     "Warning"
+#define MSG_DEBUG_STR       "Debug"
+#define MSG_ERROR_STR       "Error"
+#define MSG_FATALERROR_STR  "Fatal Error"
+#define MSG_UNKNOWN_STR     "Unknown"
 
 struct showmsg_interface {
 	bool stdout_with_ansisequence; //If the color ANSI sequences are to be used. [flaviojs]
