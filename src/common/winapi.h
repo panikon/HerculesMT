@@ -20,11 +20,27 @@
  */
 #pragma once
 
+/**
+ * In order to correctly support synchronization in windows
+ * we need at least 0x0600 (Vista / Server 2008). Otherwise several 'hacks' have
+ * to be implemented to emulate features like conditional variables.
+ *
+ * This version doesn't need to be the same as the supported platforms in the wiki,
+ * it's only changed when a non-supported function is used.
+ * E.g. As of the writing of this comment Windows Vista (0x600) is not supported,
+ * but because we are not using any of the newer functions of the SDK we can still
+ * try to build.
+ * In the end of this file there's also a verification in order to output a build
+ * error if this is changed to an unsupported version
+ *
+ * @see github.com/HerculesWS/Hercules/wiki/Supported-Platforms
+ * @see docs.microsoft.com/en-us/cpp/porting/modifying-winver-and-win32-winnt
+ **/
 
 #define STRICT
-#define NTDDI_VERSION NTDDI_WIN2K
-#define _WIN32_WINNT  0x0500
-#define WINVER        0x0500
+#define NTDDI_VERSION NTDDI_VISTA
+#define _WIN32_WINNT  0x0600
+#define WINVER        0x0600
 #define _WIN32_IE     0x0600
 #define WIN32_LEAN_AND_MEAN
 #define NOCOMM
@@ -53,3 +69,10 @@
 #include <ws2tcpip.h>
 #include <mswsock.h>
 #include <mmsystem.h>
+#include <synchapi.h>
+
+#if (_WIN32_WINNT < 0x0600)
+#pragma message("Current SDK version "_CRT_STRINGIZE(_WIN32_WINNT))
+#pragma message("Expected at least 0x0600, update your Windows SDK before building")
+#error Outdated Windows SDK
+#endif
