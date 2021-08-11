@@ -291,6 +291,23 @@ typedef uintptr_t uintptr;
 #define ra_align(n) __attribute__(( aligned(n) ))
 #endif
 
+// Thread Local Storage
+// Adapted from stackoverflow.com/a/18298965
+#ifndef thread_local
+#if __STDC_VERSION__ >= 201112 && !defined(__STDC_NO_THREADS__)
+#define thread_local _Thread_local
+#elif defined(__GNUC__) || \
+       defined(__SUNPRO_C) || \
+       defined(__xlC__)
+#define thread_local __thread
+#elif defined(WIN32)
+#define thread_local __declspec(thread) 
+#else
+#error Failed to define thread_local (TLS is not supported)
+#endif
+#endif // thread_local
+
+
 // Directives for the (clang) static analyzer
 #ifdef __clang__
 #define analyzer_noreturn __attribute__((analyzer_noreturn))

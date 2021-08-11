@@ -26,10 +26,12 @@
 #include "common/memmgr.h"
 #include "common/showmsg.h"
 #include "common/sysinfo.h" // sysinfo->getpagesize()
+#include "common/utils.h" // cap_value
+#include "common/nullpo.h"
+#include "common/atomic.h"
 
 #ifdef WIN32
 #	include "common/winapi.h"
-#	define __thread __declspec( thread )
 #else
 #	include <pthread.h>
 #	include <sched.h>
@@ -37,11 +39,7 @@
 #	include <stdlib.h>
 #	include <string.h>
 #	include <unistd.h>
-#endif
-
-// When Compiling using MSC (on win32..) we know we have support in any case!
-#ifdef _MSC_VER
-#define HAS_TLS
+#   include <errno.h>
 #endif
 
 /** @file
@@ -53,7 +51,9 @@ static struct thread_interface thread_s;
 struct thread_interface *thread;
 
 /// The maximum amount of threads.
-#define THREADS_MAX 64
+#define THREADS_MAX 130
+/// Default thread stack size upon creation
+#define THREAD_STACK_SIZE (1<<23) // 8MB
 
 struct thread_handle {
 	unsigned int myID;
@@ -69,13 +69,100 @@ struct thread_handle {
 	#endif
 };
 
-#ifdef HAS_TLS
-static __thread int g_rathread_ID = -1;
-#endif
-
 // Subystem Code
 
+/**
+ * Thread list
+ *
+ * Threads that were created by our subsystem
+ * l_threads[0] is the main thread
+ **/
 static struct thread_handle l_threads[THREADS_MAX];
+static int32_t l_threads_count = 0;
+
+/**
+ * Internal representation of thread id
+ *
+ * Represents the index of this thread in l_threads, is also
+ * the same value as l_threads[g_thread_id].myID
+ **/
+static thread_local int g_thread_id = -1;
+
+/**
+ * Thread dynamic priority
+ *
+ * Wrapper of different thread priorities used when
+ * converting thread_priority to the host system
+ * @see thread_prio_init
+ **/
+static int thread_dynamic_priority[THREADPRIO_LAST] = {0};
+
+/**
+ * Sets up thread priority wrapper
+ *
+ * All the changes in priority usually are relative to the
+ * current process priority, generally a THREADPRIO_HIGH thread on a normal
+ * process will still have a lower priority than a thread of equivalent
+ * value of a higher priority process
+ **/
+static void thread_prio_init(void)
+{
+#ifdef _WIN32
+	/**
+     * For more information on how each of the process _PRIORITY_CLASS
+	 * affects the thread_priority
+	 * @see docs.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-setthreadpriority
+	 **/
+	thread_dynamic_priority[THREADPRIO_IDLE]         = THREAD_PRIORITY_IDLE;
+	thread_dynamic_priority[THREADPRIO_LOWEST]       = THREAD_PRIORITY_LOWEST;
+	thread_dynamic_priority[THREADPRIO_LOW]          = THREAD_PRIORITY_BELOW_NORMAL;
+	thread_dynamic_priority[THREADPRIO_NORMAL]       = THREAD_PRIORITY_NORMAL;
+	thread_dynamic_priority[THREADPRIO_HIGH]         = THREAD_PRIORITY_ABOVE_NORMAL;
+	thread_dynamic_priority[THREADPRIO_HIGHEST]      = THREAD_PRIORITY_HIGHEST;
+	thread_dynamic_priority[THREADPRIO_TIMECRITICAL] = THREAD_PRIORITY_TIME_CRITICAL;
+#else
+	// TODO/FIXME this code is untested
+	/** Linux
+	 * Under normal scheduling policies (SCHED_OTHER, SCHED_IDLE, SCHED_BATCH)
+	 * a thread can only have a static priority of 0. The default scheduling for
+	 * a process is SCHED_OTHER. So instead of changing the actual priority we're
+	 * changing the nice value.
+	 * @see man7.org/linux/man-pages/man7/sched.7.html
+	 *
+	 * Under NPTL each thread has its own nice value (non conformant to POSIX.1),
+	 * so it's possible to use it as a thread priority.
+	 * @see man7.org/linux/man-pages/man7/pthreads.7.html
+	 *
+	 * Non-root users can not set nice < 0.
+	 * @see man7.org/linux/man-pages/man2/nice.2.html
+	 **/
+	struct rlimit nice_limit;
+	if(getrlimit(RLIMIT_NICE, &nice_limit)) {
+		ShowError("thread_prio_init: Failed to get nice limit (errno %d)\n", errno);
+		ShowWarning("thread_prio_init: defaulting all priorities to THREADPRIO_NORMAL\n");
+		for(int i = 0; i < THREADPRIO_LAST; i++)
+			thread_dynamic_priority[i] = 0;
+		return;
+	}
+	int priority_maximum = 20 - nice_limit.rlim_cur;
+	thread->dynamic_priority[THREADPRIO_NORMAL] = 0;
+	if(priority_maximum == 0) { // We can't exceed normal priority
+		thread_dynamic_priority[THREADPRIO_HIGH]         = 0;
+		thread_dynamic_priority[THREADPRIO_HIGHEST]      = 0;
+		thread_dynamic_priority[THREADPRIO_TIMECRITICAL] = 0;
+	} else {
+		int step = priority_maximum/3;
+		thread_dynamic_priority[THREADPRIO_HIGH]
+			= cap_value(priority_maximum+2*step, thread_dynamic_priority[THREADPRIO_HIGHEST], 0);
+		thread_dynamic_priority[THREADPRIO_HIGHEST]
+			= cap_value(priority_maximum+step, priority_maximum, 0);
+		thread_dynamic_priority[THREADPRIO_TIMECRITICAL] = priority_maximum;
+	}
+	thread_dynamic_priority[THREADPRIO_IDLE]   = 20;
+	thread_dynamic_priority[THREADPRIO_LOWEST] = 10;
+	thread_dynamic_priority[THREADPRIO_LOW]    = 5;
+#endif
+}
 
 /// @copydoc thread_interface::init()
 static void thread_init(void)
@@ -88,12 +175,12 @@ static void thread_init(void)
 	}
 
 	// now lets init thread id 0, which represents the main thread
-#ifdef HAS_TLS
-	g_rathread_ID = 0;
-#endif
+	g_thread_id = 0;
 	l_threads[0].prio = THREADPRIO_NORMAL;
 	l_threads[0].proc = (threadFunc)0xDEADCAFE;
+	l_threads_count = 1;
 
+	thread_prio_init();
 }
 
 /// @copydoc thread_interface::final()
@@ -114,6 +201,8 @@ static void thread_final(void)
 /**
  * Gets called whenever a thread terminated.
  *
+ * This can either be called from the main thread when one of the children
+ * is terminated or from one of the children.
  * @param handle The terminated thread's handle.
  */
 static void thread_terminated(struct thread_handle *handle)
@@ -122,6 +211,7 @@ static void thread_terminated(struct thread_handle *handle)
 	handle->param = NULL;
 	handle->proc = NULL;
 	handle->prio = THREADPRIO_NORMAL;
+	InterlockedDecrement(&l_threads_count);
 }
 
 #ifdef WIN32
@@ -136,9 +226,7 @@ static void *thread_main_redirector(void *p)
 	struct thread_handle *self = p;
 
 	// Update myID @ TLS to right id.
-#ifdef HAS_TLS
-	g_rathread_ID = self->myID;
-#endif
+	g_thread_id = self->myID;
 
 #ifndef WIN32
 	// When using posix threads
@@ -153,8 +241,9 @@ static void *thread_main_redirector(void *p)
 	pthread_sigmask(SIG_BLOCK, &set, NULL);
 #endif
 
+	iMalloc->local_storage_init();
 	ret = self->proc(self->param);
-
+	iMalloc->local_storage_final();
 #ifdef WIN32
 	CloseHandle(self->hThread);
 #endif
@@ -169,16 +258,15 @@ static void *thread_main_redirector(void *p)
 
 // API Level
 
-/// @copydoc thread_interface::thread_worker_count()
-int thread_worker_count(void) {
-	// Workers + console thread
-	return sysinfo->cpucores()*WORKERS_PER_PROCESSOR+1;
+/// @copydoc thread_interface::thread_count()
+int thread_count(void) {
+	return InterlockedExchangeAdd(&l_threads_count, 0);
 }
 
 /// @copydoc thread_interface::create()
 static struct thread_handle *thread_create(threadFunc entry_point, void *param)
 {
-	return thread->create_opt(entry_point, param,  (1<<23) /*8MB*/, THREADPRIO_NORMAL);
+	return thread->create_opt(entry_point, param, THREAD_STACK_SIZE, THREADPRIO_NORMAL);
 }
 
 /// @copydoc thread_interface::create_opt()
@@ -215,6 +303,13 @@ static struct thread_handle *thread_create_opt(threadFunc entry_point, void *par
 
 #ifdef WIN32
 	handle->hThread = CreateThread(NULL, stack_size, thread_main_redirector, handle, 0, NULL);
+	if(!handle->hThread) {
+		ShowError("thread_create_opt: failed to create new thread (entry_point: %p) "
+			"error: %ld\n", GetLastError());
+		handle->proc = NULL;
+		handle->param = NULL;
+		return NULL;
+	}
 #else
 	pthread_attr_init(&attr);
 	pthread_attr_setstacksize(&attr, stack_size);
@@ -227,8 +322,12 @@ static struct thread_handle *thread_create_opt(threadFunc entry_point, void *par
 	pthread_attr_destroy(&attr);
 #endif
 
-	thread->prio_set(handle,  prio);
+	// There's no need to do a context switch if the priority
+	// won't be changed
+	if(prio != THREADPRIO_NORMAL)
+		thread->prio_set(handle,  prio);
 
+	InterlockedIncrement(&l_threads_count);
 	return handle;
 }
 
@@ -253,28 +352,10 @@ static void thread_destroy(struct thread_handle *handle)
 
 static struct thread_handle *thread_self(void)
 {
-#ifdef HAS_TLS
-	struct thread_handle *handle = &l_threads[g_rathread_ID];
+	struct thread_handle *handle = &l_threads[g_thread_id];
 
 	if (handle->proc != NULL) // entry point set, so its used!
 		return handle;
-#else
-	// .. so no tls means we have to search the thread by its api-handle ..
-	int i;
-
-#ifdef WIN32
-	HANDLE hSelf;
-	hSelf = GetCurrent = GetCurrentThread();
-#else
-	pthread_t hSelf;
-	hSelf = pthread_self();
-#endif
-
-	for (i = 0; i < THREADS_MAX; i++) {
-		if (l_threads[i].hThread == hSelf  &&  l_threads[i].proc != NULL)
-			return &l_threads[i];
-	}
-#endif
 
 	return NULL;
 }
@@ -282,13 +363,7 @@ static struct thread_handle *thread_self(void)
 /// @copydoc thread_interface::get_tid()
 static int thread_get_tid(void)
 {
-#if defined(HAS_TLS)
-	return g_rathread_ID;
-#elif defined(WIN32)
-	return (int)GetCurrentThreadId();
-#else
-	return (int)pthread_self();
-#endif
+	return g_thread_id;
 }
 
 /// @copydoc thread_interface::wait()
@@ -312,8 +387,20 @@ static bool thread_wait(struct thread_handle *handle, void **out_exit_code)
 /// @copydoc thread_interface::prio_set()
 static void thread_prio_set(struct thread_handle *handle, enum thread_priority prio)
 {
-	handle->prio = THREADPRIO_NORMAL;
-	//@TODO
+	assert(prio < THREADPRIO_LAST && prio >= 0);
+	handle->prio = prio;
+#ifdef _WIN32
+	if(!SetThreadPriority(handle->hThread, thread_dynamic_priority[prio])) {
+		ShowError("thread_prio_set: Failed to set new priority (%d) for thread %d, error %ld\n",
+			prio, handle->myID, GetLastError());
+	}
+#else
+	errno = 0;
+	if(setpriority(PRIO_PROCESS, gettid(), thread_dynamic_priority[prio]) && errno) {
+		ShowError("thread_prio_set: Failed to set new priority (%d) for thread %d, errno %d\n",
+			prio, handle->myID, errno);
+	}
+#endif
 }
 
 /// @copydoc thread_interface::prio_get()
@@ -347,5 +434,5 @@ void thread_defaults(void)
 	thread->prio_set = thread_prio_set;
 	thread->prio_get = thread_prio_get;
 	thread->yield = thread_yield;
-	thread->worker_count = thread_worker_count;
+	thread->count = thread_count;
 }
