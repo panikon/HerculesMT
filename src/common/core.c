@@ -549,7 +549,7 @@ int main(int argc, char **argv)
 	packets->final();
 	sockt->final();
 	DB->final();
-	thread->final();
+	//thread->final();
 	ers_final();
 	rnd->final();
 	cmdline->final();
@@ -558,6 +558,6 @@ int main(int argc, char **argv)
 	nullpo->final();
 	iMalloc->final();
 	showmsg->final(); // Should be after iMalloc->final()
-
+	thread->final();
 	return retval;
 }

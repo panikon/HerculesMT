@@ -154,7 +154,7 @@ static CPCMD_C(ers_report, server)
 static CPCMD_C(mem_report, server)
 {
 #ifdef USE_MEMMGR
-	memmgr_report(line?atoi(line):0);
+	memmgr_report(line?atoi(line):0, MEMORYTYPE_SHARED);
 #endif
 }
 
@@ -181,7 +181,7 @@ static CPCMD(help)
  */
 static CPCMD_C(malloc_usage, server)
 {
-	unsigned int val = (unsigned int)iMalloc->usage();
+	unsigned int val = (unsigned int)iMalloc->usage(MEMORYTYPE_SHARED);
 	ShowInfo("malloc_usage: %.2f MB\n",(double)(val)/1024);
 }
 

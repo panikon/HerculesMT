@@ -291,29 +291,11 @@ struct unit_head_large {
 };
 
 /**
- * Memory identification for memory_information_init
- *
- * @see s_memory_information::tid
- **/
-enum e_memory_identification {
-	EMI_NOT_SET = -2, //< Memory not set
-	EMI_SHARED  = -1, //< Shared memory
-	EMI_THREAD  = 1,  //< Assigned to a thread (any positive id and zero)
-};
-
-/**
  * Memory pool information
  *
  * @see memory_information_init
  **/
 struct s_memory_information {
-	/**
-	 * Thread id
-	 *
-	 * @see e_memory_identification
-	 * @see thread->get_tid
-	 **/
-	int tid;
 	struct block *hash_unfill[BLOCK_DATA_COUNT1 + BLOCK_DATA_COUNT2 + 1];
 	struct block *block_first, *block_last, block_head;
 
@@ -329,11 +311,8 @@ struct s_memory_information {
 
 /**
  * Private thread memory (non shared heap memory)
- *
- * When local_memory_count is 0 local_memory equals to shared_memory
  **/
-static struct s_memory_information *local_memory = NULL;
-int local_memory_count = 0;
+static thread_local struct s_memory_information local_memory = {0};
 
 /**
  * Shared memory
@@ -342,7 +321,7 @@ int local_memory_count = 0;
  * via mutex->create_no_management), this guarantees that the linked list doesn't
  * have any races
  **/
-static struct s_memory_information shared_memory;
+static struct s_memory_information shared_memory = {0};
 static struct mutex_data *shared_memory_mutex = NULL;
 
 static struct block *block_malloc(struct s_memory_information *mem, unsigned short hash);
@@ -666,94 +645,45 @@ static void mfree_(struct s_memory_information *mem, void *ptr, const char *file
 	}
 }
 
-void memory_information_init(struct s_memory_information *mem);
-
-/**
- * Finds thread memory position for current thread
- *
- * If the thread is not found in local_memory searches for an empty position
- * @return Thread index in local_memory
- **/
-static int mmalloc_thread_get_pos(void)
-{
-	int tid = thread->get_tid();
-	int pos = -1;
-	if(local_memory_count == 0) // Using only shared memory
-		return 0;
-	for(int i = 0; i < local_memory_count; i++) {
-		if(local_memory[i].tid == tid)
-			pos = i;
-	}
-	if(pos != -1)
-		return pos;
-
-	for(int i = 0; i < local_memory_count; i++) {
-		if(local_memory[i].tid == EMI_NOT_SET) {
-			local_memory[i].tid = tid;
-			pos = i;
-		}
-	}
-	if(pos == -1) {
-		// This will only happen if there are more threads than expected
-		// Try to fail graciously
-		ShowError("mmalloc_thread_get_pos: Couldn't find valid position in local_memory for TID %d\n",
-			tid);
-		ShowDebug("mmalloc_thread_get_pos: There are more threads than expected (expected %zd)!\n",
-			local_memory_count);
-		struct s_memory_information *new_thread;
-		local_memory_count++;
-		new_thread = realloc(local_memory, sizeof(*new_thread)*local_memory_count);
-		if(!new_thread) {
-			ShowFatalError("mmalloc_thread_get_pos: Failed to allocate memory for local_memory!\n");
-			exit(EXIT_FAILURE);
-		}
-		local_memory = new_thread;
-		pos = local_memory_count-1;
-		memory_information_init(&local_memory[pos]);
-		local_memory[pos].tid = tid;
-	}
-	return pos;
-}
-
 void *mmalloc_thread_(size_t size, const char *file, int line, const char *func)
 {
-	return iMalloc->malloc_mem(&local_memory[mmalloc_thread_get_pos()],
+	return iMalloc->malloc_mem(&local_memory,
 		size, file, line, func);
 }
 
 void *mcalloc_thread_(size_t num, size_t size, const char *file, int line, const char *func)
 {
-	return iMalloc->calloc_mem(&local_memory[mmalloc_thread_get_pos()],
+	return iMalloc->calloc_mem(&local_memory,
 		num, size, file, line, func);
 }
 
 void *mrealloc_thread_(void *p, size_t size, const char *file, int line, const char *func)
 {
-	return iMalloc->realloc_mem(&local_memory[mmalloc_thread_get_pos()],
+	return iMalloc->realloc_mem(&local_memory,
 		p, size, file, line, func);
 }
 
 void *mreallocz_thread_(void *p, size_t size, const char *file, int line, const char *func)
 {
-	return iMalloc->reallocz_mem(&local_memory[mmalloc_thread_get_pos()],
+	return iMalloc->reallocz_mem(&local_memory,
 		p, size, file, line, func);
 }
 
 char *mastrndup_thread_(const char *p, size_t size, const char *file, int line, const char *func)
 {
-	return iMalloc->astrndup_mem(&local_memory[mmalloc_thread_get_pos()],
+	return iMalloc->astrndup_mem(&local_memory,
 		p, size, file, line, func);
 }
 
 char *mastrdup_thread_(const char *p, const char *file, int line, const char *func)
 {
-	return iMalloc->astrdup_mem(&local_memory[mmalloc_thread_get_pos()],
+	return iMalloc->astrdup_mem(&local_memory,
 		p, file, line, func);
 }
 
 void mfree_thread_(void *p, const char *file, int line, const char *func)
 {
-	iMalloc->free_mem(&local_memory[mmalloc_thread_get_pos()],
+	iMalloc->free_mem(&local_memory,
 		p, file, line, func);
 }
 
@@ -950,6 +880,7 @@ static size_t memmgr_usage(struct s_memory_information *mem)
 #ifdef LOG_MEMMGR
 static char memmer_logfile[128]; // File name
 static FILE *log_fp = NULL; // Log file pointer (set at memmgr_log)
+static struct mutex_data *log_mutex = NULL;
 
 /**
  * Logs message to log file
@@ -975,16 +906,6 @@ static void memmgr_log(char *buf, char *vcsinfo)
 	return;
 }
 
-/**
- * Returns descriptive memory type according to mem->tid
- **/
-static const char *memmgr_memory_type_str(struct s_memory_information *mem) {
-	switch(mem->tid) {
-		case EMI_NOT_SET: return "invalid";
-		case EMI_SHARED:  return "shared";
-		default:          return "thread";
-	}
-}
 #endif /* LOG_MEMMGR */
 
 /**
@@ -1043,8 +964,9 @@ static bool memmgr_verify(struct s_memory_information *mem, void *ptr)
  * Frees all allocated blocks and logs if LOG_MEMMGR is defined
  * @param mem Memory information
  * @param vcsinfo Version control information
+ * @param type_str String to write in log
  **/
-static void memmgr_final_sub(struct s_memory_information *mem, char *vcsinfo)
+static void memmgr_final_sub(struct s_memory_information *mem, char *vcsinfo, const char *type_str)
 {
 	struct block *block = mem->block_first;
 	struct unit_head_large *large = mem->unit_head_large_first;
@@ -1062,9 +984,9 @@ static void memmgr_final_sub(struct s_memory_information *mem, char *vcsinfo)
 #ifdef LOG_MEMMGR
 					char buf[1024];
 					sprintf (buf,
-						"%04d : %s line %d size %lu address 0x%p (type: %s, id %d)\n",
+						"%04d : %s line %d size %lu address 0x%p (%s)\n",
 						++count, head->file, head->line, (unsigned long)head->size, ptr,
-						memmgr_memory_type_str(mem), mem->tid);
+						type_str);
 					memmgr_log(buf, vcsinfo);
 #endif /* LOG_MEMMGR */
 					// get block pointer and free it [celest]
@@ -1080,9 +1002,9 @@ static void memmgr_final_sub(struct s_memory_information *mem, char *vcsinfo)
 #ifdef LOG_MEMMGR
 		char buf[1024];
 		sprintf (buf,
-			"%04d : %s line %d size %lu address 0x%p (type: %s, id %d)\n", ++count,
+			"%04d : %s line %d size %lu address 0x%p (%s)\n", ++count,
 			large->unit_head.file, large->unit_head.line, (unsigned long)large->size,
-			&large->unit_head.checksum, memmgr_memory_type_str(mem), mem->tid);
+			&large->unit_head.checksum, type_str);
 		memmgr_log(buf, vcsinfo);
 #endif /* LOG_MEMMGR */
 		large2 = large->next;
@@ -1091,31 +1013,54 @@ static void memmgr_final_sub(struct s_memory_information *mem, char *vcsinfo)
 	}
 #ifdef LOG_MEMMGR
 	if(count == 0) {
-		ShowInfo("Memory manager: No memory leaks found.\n");
+		ShowInfo("[%s:%d] Memory manager: No memory leaks found.\n",
+			type_str, thread->get_tid());
 	} else {
-		ShowWarning("Memory manager: Memory leaks found and fixed.\n");
+		ShowWarning("[%s:%d] Memory manager: Memory leaks found and fixed.\n",
+			type_str, thread->get_tid());
 		fclose(log_fp);
+		log_fp = NULL;
 	}
 #endif /* LOG_MEMMGR */
 }
 
+static void memmgr_local_storage_final(void)
+{
+#ifdef LOG_MEMMGR
+	mutex->lock(log_mutex);
+#endif
+	char vcsinfo[256];
+	snprintf(vcsinfo, sizeof(vcsinfo), "%s rev '%s'", sysinfo->vcstype(),
+	sysinfo->vcsrevision_src());
+	memmgr_final_sub(&local_memory, vcsinfo, "local");
+#ifdef LOG_MEMMGR
+	mutex->unlock(log_mutex);
+#endif
+}
+
 static void memmgr_final(void)
 {
+	memmgr_local_storage_final();
+
+#ifdef LOG_MEMMGR
+	mutex->lock(log_mutex);
+#endif
+	mutex->lock(shared_memory_mutex);
+
 	char vcsinfo[256];
 	snprintf(vcsinfo, sizeof(vcsinfo), "%s rev '%s'", sysinfo->vcstype(),
 	sysinfo->vcsrevision_src()); // Cache VCS info before we free() it
 	sysinfo->final();
-	memmgr_final_sub(&shared_memory, vcsinfo);
-	if(local_memory) {
-		for(int i = 0; i < local_memory_count; i++)
-			memmgr_final_sub(&local_memory[i], vcsinfo);
+	memmgr_final_sub(&shared_memory, vcsinfo, "shared");
 
-		free(local_memory);
-		local_memory_count = 0;
-		local_memory = NULL;
-	}
+	mutex->unlock(shared_memory_mutex);
 	mutex->destroy_no_management(shared_memory_mutex);
 	shared_memory_mutex = NULL;
+#ifdef LOG_MEMMGR
+	mutex->unlock(log_mutex);
+	mutex->destroy_no_management(log_mutex);
+	log_mutex = NULL;
+#endif
 }
 
 /**
@@ -1206,18 +1151,29 @@ static void memmgr_report_sub(struct s_memory_information *mem, int extra)
 
 }
 
-/// @copydoc memmgr_report_sub
-void memmgr_report(int extra)
+/**
+ * Complete report of memory usage
+ *
+ * @param extra Block size
+ * @param type memory type to be reported
+ *
+ * TODO: Add conditional variable to report from all threads
+ **/
+void memmgr_report(int extra, enum memory_type type)
 {
-	ShowInfo("Shared memory:\n");
-	memmgr_report_sub(&shared_memory, extra);
-	if(!local_memory_count)
-		return;
-
-	ShowInfo("Thread memory:\n");
-	for(int i = 0 ; i < local_memory_count; i++) {
-		ShowInfo("Thread(%d/%d):\n", i, local_memory_count);
-		memmgr_report_sub(&local_memory[i], extra);
+	ShowInfo("Memory report:\n");
+	switch(type) {
+		case MEMORYTYPE_SHARED:
+			mutex->lock(shared_memory_mutex);
+			memmgr_report_sub(&shared_memory, extra);
+			mutex->unlock(shared_memory_mutex);
+			break;
+		case MEMORYTYPE_LOCAL:
+			memmgr_report_sub(&local_memory, extra);
+			break;
+		default:
+			ShowError("memmgr_report: Unknown memory type (%d)\n", type);
+			break;
 	}
 }
 
@@ -1225,11 +1181,9 @@ void memmgr_report(int extra)
  * Initializes log data
  **/
 #ifdef LOG_MEMMGR
-static void memmgr_log_init(void)
+static void memmgr_log_init(struct s_memory_information *mem)
 {
-	memset(shared_memory.hash_unfill, 0, sizeof(shared_memory.hash_unfill));
-	for(int i = 0; i < local_memory_count; i++)
-		memset(local_memory[i].hash_unfill, 0, sizeof(local_memory[i].hash_unfill));
+	memset(mem->hash_unfill, 0, sizeof(mem->hash_unfill));
 }
 #endif /* LOG_MEMMGR */
 
@@ -1238,7 +1192,6 @@ static void memmgr_log_init(void)
  **/
 static void memory_information_init(struct s_memory_information *mem)
 {
-	mem->tid = EMI_NOT_SET;
 	mem->unit_head_large_first = NULL;
 
 	mem->usage_bytes = 0;
@@ -1246,34 +1199,36 @@ static void memory_information_init(struct s_memory_information *mem)
 }
 
 /**
+ * Initializes thread local storage of the current thread
+ *
+ * Must be called after every new thread creation
+ **/
+static void memmgr_local_storage_init(void)
+{
+	memory_information_init(&local_memory);
+#ifdef LOG_MEMMGR
+	memmgr_log_init(&local_memory);
+#endif
+}
+
+/**
  * Initializes the Memory Manager.
  */
 static void memmgr_init(void)
 {
-	memmgr_assert(!local_memory);
-	local_memory_count = thread->worker_count();
-	local_memory = malloc(sizeof(*local_memory)*local_memory_count);
-	if(!local_memory) {
-		ShowFatalError("memmgr_init: Failed to allocate memory for private thread memory\n");
-		exit(EXIT_FAILURE);
-	}
-	for(int i = 0; i < local_memory_count; i++)
-		memory_information_init(&local_memory[i]);
-
 	memory_information_init(&shared_memory);
-	shared_memory.tid = EMI_SHARED;
+#ifdef LOG_MEMMGR
+	memmgr_log_init(&shared_memory);
+#endif
+
+	log_mutex = mutex->create_no_management();
 	shared_memory_mutex = mutex->create_no_management();
 	if(!shared_memory_mutex) {
-		ShowError("memmgr_init: Failed to allocate memory for new mutex\n");
-		ShowInfo("memmgr_init: Switching to shared memory only\n");
-		free(local_memory);
-		local_memory = &shared_memory;
-		local_memory_count = 0;
+		ShowFatalError("memmgr_init: Failed to allocate memory for new mutex\n");
+		exit(EXIT_FAILURE);
 	}
 
-#ifdef LOG_MEMMGR
-	memmgr_log_init();
-#endif /* LOG_MEMMGR */
+	memmgr_local_storage_init();
 }
 
 /**
@@ -1316,7 +1271,11 @@ static bool malloc_verify_ptr(struct s_memory_information *mem, void *ptr)
 static bool malloc_verify_ptr_shared(void *ptr)
 {
 #ifdef USE_MEMMGR
-	return memmgr_verify(&shared_memory, ptr) && MEMORY_VERIFY(ptr);
+	bool retval;
+	mutex->lock(shared_memory_mutex);
+	retval = memmgr_verify(&shared_memory, ptr) && MEMORY_VERIFY(ptr);
+	mutex->unlock(shared_memory_mutex);
+	return retval;
 #else
 	return MEMORY_VERIFY(ptr);
 #endif
@@ -1325,7 +1284,7 @@ static bool malloc_verify_ptr_shared(void *ptr)
 static bool malloc_verify_ptr_thread(void *ptr)
 {
 #ifdef USE_MEMMGR
-	return memmgr_verify(&local_memory[mmalloc_thread_get_pos()], ptr) && MEMORY_VERIFY(ptr);
+	return memmgr_verify(&local_memory, ptr) && MEMORY_VERIFY(ptr);
 #else
 	return MEMORY_VERIFY(ptr);
 #endif
@@ -1333,14 +1292,20 @@ static bool malloc_verify_ptr_thread(void *ptr)
 
 /**
  * Returns total heap allocated memory
+ *
+ * TODO: Add conditional variable to report from all threads
  **/
-static size_t malloc_usage(void)
+static size_t malloc_usage(enum memory_type type)
 {
 #ifdef USE_MEMMGR
-	size_t memory_usage = memmgr_usage(&shared_memory);
-	for(int i = 0; i < local_memory_count; i++)
-		memory_usage += memmgr_usage(&local_memory[i]);
-	return memory_usage;
+	size_t usage;
+	if(type == MEMORYTYPE_SHARED) {
+		mutex->lock(shared_memory_mutex);
+		usage = memmgr_usage(&shared_memory);
+		mutex->unlock(shared_memory_mutex);
+	} else
+		usage = memmgr_usage(&local_memory);
+	return usage;
 #else
 	return MEMORY_USAGE();
 #endif
@@ -1397,6 +1362,8 @@ void malloc_defaults(void)
 	iMalloc->verify_ptr_shared = malloc_verify_ptr_shared;
 	iMalloc->verify_ptr_thread = malloc_verify_ptr_thread;
 
+	iMalloc->local_storage_init = memmgr_local_storage_init;
+	iMalloc->local_storage_final = memmgr_local_storage_final;
 // Athena's built-in Memory Manager
 #ifdef USE_MEMMGR
 	// Internally used allocation calls

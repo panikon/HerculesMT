@@ -42,6 +42,7 @@
 // Enable memory manager logging by default
 #define LOG_MEMMGR
 
+// athena-*
 #	define aMalloc(n)    (iMalloc->malloc((n),ALC_MARK))
 #	define aCalloc(m,n)  (iMalloc->calloc((m),(n),ALC_MARK))
 #	define aRealloc(p,n) (iMalloc->realloc((p),(n),ALC_MARK))
@@ -49,6 +50,15 @@
 #	define aStrdup(p)    (iMalloc->astrdup((p),ALC_MARK))
 #	define aStrndup(p,n) (iMalloc->astrndup((p),(n),ALC_MARK))
 #	define aFree(p)      (iMalloc->free((p),ALC_MARK))
+
+// athena-local-*
+#	define alMalloc(n)    (iMalloc->malloc_thread((n),ALC_MARK))
+#	define alCalloc(m,n)  (iMalloc->calloc_thread((m),(n),ALC_MARK))
+#	define alRealloc(p,n) (iMalloc->realloc_thread((p),(n),ALC_MARK))
+#	define alReallocz(p,n) (iMalloc->reallocz_thread((p),(n),ALC_MARK))
+#	define alStrdup(p)    (iMalloc->astrdup_thread((p),ALC_MARK))
+#	define alStrndup(p,n) (iMalloc->astrndup_thread((p),(n),ALC_MARK))
+#	define alFree(p)      (iMalloc->free_thread((p),ALC_MARK))
 
 /////////////// Buffer Creation /////////////////
 // Full credit for this goes to Shinomori [Ajarn]
@@ -72,12 +82,19 @@
 
 ////////////////////////////////////////////////
 
+enum memory_type {
+	MEMORYTYPE_SHARED,
+	MEMORYTYPE_LOCAL,
+};
+
 struct s_memory_information;
 
 struct malloc_interface {
 	void (*init) (void);
 	void (*final) (void);
 	/* Thread */
+	void  (*local_storage_init)(void);
+	void  (*local_storage_final)(void);
 	void* (*malloc_thread)(size_t size, const char *file, int line, const char *func);
 	void* (*calloc_thread)(size_t num, size_t size, const char *file, int line, const char *func);
 	void* (*realloc_thread)(void *p, size_t size, const char *file, int line, const char *func);
@@ -127,7 +144,7 @@ struct malloc_interface {
 	bool (*verify_ptr_thread)(void* ptr);
 	bool (*verify_ptr_shared)(void* ptr);
 	bool (*verify_ptr)(void* ptr);
-	size_t (*usage) (void);
+	size_t (*usage) (enum memory_type type);
 	/* */
 	void (*post_shutdown) (void);
 	void (*init_messages) (void);
@@ -136,7 +153,7 @@ struct malloc_interface {
 #ifdef HERCULES_CORE
 void malloc_defaults(void);
 
-void memmgr_report(int extra);
+void memmgr_report(int extra, enum memory_type type);
 
 HPShared struct malloc_interface *iMalloc;
 #else
