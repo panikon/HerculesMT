@@ -89,7 +89,7 @@ struct showmsg_interface *showmsg;
 
 ///////////////////////////////////////////////////////////////////////////////
 #ifdef _WIN32
-// XXX adapted from eApp (comments are left untouched) [flaviojs]
+// Adapted from eApp [flaviojs]
 
 ///////////////////////////////////////////////////////////////////////////////
 //  ANSI compatible printf with control sequence parser for windows
@@ -101,17 +101,21 @@ struct showmsg_interface *showmsg;
 //  printf("\x1b[3;33;45m"); // Blinking yellow on magenta (blink not implemented)
 //  printf("\x1b[1;30;47m"); // Bright black (grey) on dim white
 //
-//  Style           Foreground      Background
-//  1st Digit       2nd Digit       3rd Digit      RGB
-//  0 - Reset       30 - Black      40 - Black     000
-//  1 - FG Bright   31 - Red        41 - Red       100
-//  2 - Unknown     32 - Green      42 - Green     010
-//  3 - Blink       33 - Yellow     43 - Yellow    110
-//  4 - Underline   34 - Blue       44 - Blue      001
-//  5 - BG Bright   35 - Magenta    45 - Magenta   101
-//  6 - Unknown     36 - Cyan       46 - Cyan      011
-//  7 - Reverse     37 - White      47 - White     111
-//  8 - Concealed (invisible)
+//  Style            Foreground      Background
+//  1st Digit        2nd Digit       3rd Digit      RGB
+//  0 - Reset        30 - Black      40 - Black     000
+//  1 - FG Bright    31 - Red        41 - Red       100
+//  2 - Dim*         32 - Green      42 - Green     010
+//  3 - Italic*      33 - Yellow     43 - Yellow    110
+//  4 - Underline    34 - Blue       44 - Blue      001
+//  5 - BG Bright+   35 - Magenta    45 - Magenta   101
+//  6 - Non-existant 36 - Cyan       46 - Cyan      011
+//  7 - Reverse      37 - White      47 - White     111
+//  8 - Concealed*
+//  9 - Crossed-out*
+// * not implemented
+// + athena uses a different implementation
+// @see showmsg_select_graphics_rendition
 //
 // \033[#A - Cursor Up (CUU)
 //    Moves the cursor up by the specified number of lines without changing columns.
@@ -184,6 +188,114 @@ Escape sequences for Select Character Set
 
 #define is_console(handle) (FILE_TYPE_CHAR==GetFileType(handle))
 
+/**
+ * Selects character attributes depending on acquired parameters
+ * \033[#;...;#m
+ * And then sets equivalent text attributes via SetConsoleTextAttribute
+ *
+ * Several character attribtues are not supported by the default console
+ * window in Windows, even when virtual terminal processing is enabled
+ * Windows 10 (>=10.0.10586).
+ *
+ * @param param Array of display attributes
+ * @param param_length Length of param
+ * @see invisible-island.net/xterm/ctlseqs/ctlseqs.html (Character Attributes (SGR))
+ **/
+void showmsg_select_graphics_rendition(HANDLE console_output, WORD wAttributes,
+	uint8_t *param, uint8_t param_length
+) {
+	for(uint8_t i = 0; i <= param_length; ++i) {
+		uint8_t attribute_type = 0xF0 & param[i];
+		switch(attribute_type) {
+			case 0x00: // Character attribute set
+				switch(param[i]) {
+					case 0: // Reset
+						wAttributes = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
+						break;
+					case 1: // Bright
+						wAttributes |= FOREGROUND_INTENSITY;
+						break;
+					case 4: // Underline
+						wAttributes |= COMMON_LVB_UNDERSCORE;
+						break;
+					case 5: // Background intensity
+						// In VT100/ECMA-48 this is blinking, *athena uses
+						// as a proxy for changing background intensity instead
+						wAttributes |= BACKGROUND_INTENSITY;
+						break;
+					case 7: // Reverse video
+						wAttributes |= COMMON_LVB_REVERSE_VIDEO;
+						break;
+					case 2: // Dim
+					case 3: // Italic
+					case 6: // Non-existant
+					case 8: // Concealed (not implemented)
+					case 9: // Crossed-out
+					default:
+						break;
+				}
+				break;
+			case 0x10: // Font management
+				break;
+			case 0x20: // Character attribute unset
+				switch(param[i]) {
+					case 1: // (1) Can be either not bold or doubly-underline (ECMA-48),
+						    // *athena already uses the former, keeping for compatibility.
+					case 2: // Not bold
+						wAttributes &= ~FOREGROUND_INTENSITY;
+						break;
+					case 4: // Not underlined
+						wAttributes &= ~COMMON_LVB_UNDERSCORE;
+						break;
+					case 5: // Background intensity
+						wAttributes &= ~BACKGROUND_INTENSITY;
+						break;
+					case 7: // Reverse video
+						wAttributes &= ~COMMON_LVB_REVERSE_VIDEO;
+						break;
+					case 3: // Not italicized
+					case 6: // Non-existant
+					case 8: // Visible
+					case 9: // Not crossed out
+					default:
+						break;
+				}
+				break;
+			case 0x30:
+			{
+				// Set foreground color
+				uint8 num = param[i]&0x0F;
+				if(num==9) wAttributes |= FOREGROUND_INTENSITY;
+				if(num>7) num=7; // set white for 37, 38 and 39
+				wAttributes &= ~(FOREGROUND_RED|FOREGROUND_GREEN|FOREGROUND_BLUE);
+				if( (num & 0x01)>0 ) // lowest bit set = red
+					wAttributes |= FOREGROUND_RED;
+				if( (num & 0x02)>0 ) // second bit set = green
+					wAttributes |= FOREGROUND_GREEN;
+				if( (num & 0x04)>0 ) // third bit set = blue
+					wAttributes |= FOREGROUND_BLUE;
+				break;
+			}
+			case 0x40:
+			{
+				// Set Background color
+				uint8 num = param[i]&0x0F;
+				if(num==9) wAttributes |= BACKGROUND_INTENSITY;
+				if(num>7) num=7; // set white for 47, 48 and 49
+				wAttributes &= ~(BACKGROUND_RED|BACKGROUND_GREEN|BACKGROUND_BLUE);
+				if( (num & 0x01)>0 ) // lowest bit set = red
+					wAttributes |= BACKGROUND_RED;
+				if( (num & 0x02)>0 ) // second bit set = green
+					wAttributes |= BACKGROUND_GREEN;
+				if( (num & 0x04)>0 ) // third bit set = blue
+					wAttributes |= BACKGROUND_BLUE;
+				break;
+			}
+		}
+	}
+	SetConsoleTextAttribute(console_output, wAttributes);
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 static int VFPRINTF(HANDLE handle, const char *fmt, va_list argptr)
 {
@@ -220,109 +332,51 @@ static int VFPRINTF(HANDLE handle, const char *fmt, va_list argptr)
 			if(0==WriteConsole(handle, q, 1, &written, 0) )
 				WriteFile(handle,q, 1, &written, 0);
 			p=q+1; //and start searching again
-		} else {
-			// from here, we will skip the '\033['
-			// we break at the first unprocessible position
-			// assuming regular text is starting there
-			uint8 numbers[16], numpoint=0;
-			CONSOLE_SCREEN_BUFFER_INFO info;
+			continue;
+		}
+		// from here, we will skip the '\033['
+		// we break at the first unprocessable position
+		// assuming regular text is starting there
+		uint8 numbers[16], numpoint=0;
+		CONSOLE_SCREEN_BUFFER_INFO info;
 
-			// initialize
-			GetConsoleScreenBufferInfo(handle, &info);
-			memset(numbers,0,sizeof(numbers));
+		// Update console buffer information and reset numbers
+		GetConsoleScreenBufferInfo(handle, &info);
+		memset(numbers,0,sizeof(numbers));
 
-			// skip escape and bracket
-			q=q+2;
-			for (;;) {
-				if (ISDIGIT(*q)) {
-					// add number to number array, only accept 2digits, shift out the rest
-					// so // \033[123456789m will become \033[89m
-					numbers[numpoint] = (numbers[numpoint]<<4) | (*q-'0');
-					++q;
-					// and next character
-					continue;
-				} else if (*q == ';') {
-					// delimiter
-					if (numpoint < ARRAYLENGTH(numbers)) {
-						// go to next array position
-						numpoint++;
-					} else {
-						// array is full, so we 'forget' the first value
-						memmove(numbers, numbers+1, ARRAYLENGTH(numbers)-1);
-						numbers[ARRAYLENGTH(numbers)-1]=0;
-					}
-					++q;
-					// and next number
-					continue;
-				} else if (*q == 'm') {
+		// skip escape and bracket
+		q=q+2;
+		for(;;) {
+			// Process all parameters
+			if(ISDIGIT(*q)) {
+				// add number to number array, only accept 2digits, shift out the rest
+				// so // \033[123456789m will become \033[89m
+				numbers[numpoint] = (numbers[numpoint]<<4) | (*q-'0');
+				++q;
+				// and next character
+				continue;
+			} else if(*q == ';') {
+				// delimiter
+				if (numpoint < ARRAYLENGTH(numbers)) {
+					// go to next array position
+					numpoint++;
+				} else {
+					// array is full, so we 'forget' the first value
+					memmove(numbers, numbers+1, ARRAYLENGTH(numbers)-1);
+					numbers[ARRAYLENGTH(numbers)-1]=0;
+				}
+				++q;
+				// and next number
+				continue;
+			}
+			// Find parameter type
+			switch(*q) {
+				case 'm':
 					// \033[#;...;#m - Set Graphics Rendition (SGR)
-					uint8 i;
-					for (i=0; i<= numpoint; ++i) {
-						if (0x00 == (0xF0 & numbers[i])) {
-							// upper nibble 0
-							if (0 == numbers[i]) {
-								// reset
-								info.wAttributes = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
-							} else if (1 == numbers[i]) {
-								// set foreground intensity
-								info.wAttributes |= FOREGROUND_INTENSITY;
-							} else if (5 == numbers[i]) {
-								// set background intensity
-								info.wAttributes |= BACKGROUND_INTENSITY;
-							} else if (7 == numbers[i]) {
-								// reverse colors (just xor them)
-								info.wAttributes ^= FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE |
-								                    BACKGROUND_RED | BACKGROUND_GREEN | BACKGROUND_BLUE;
-							}
-							//case '2': // not existing
-							//case '3': // blinking (not implemented)
-							//case '4': // underline (not implemented)
-							//case '6': // not existing
-							//case '8': // concealed (not implemented)
-							//case '9': // not existing
-						} else if (0x20 == (0xF0 & numbers[i])) {
-							// off
-
-							if (1 == numbers[i]) {
-								// set foreground intensity off
-								info.wAttributes &= ~FOREGROUND_INTENSITY;
-							} else if (5 == numbers[i]) {
-								// set background intensity off
-								info.wAttributes &= ~BACKGROUND_INTENSITY;
-							} else if (7 == numbers[i]) {
-								// reverse colors (just xor them)
-								info.wAttributes ^= FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE |
-								                    BACKGROUND_RED | BACKGROUND_GREEN | BACKGROUND_BLUE;
-							}
-						} else if (0x30 == (0xF0 & numbers[i])) {
-							// foreground
-							uint8 num = numbers[i]&0x0F;
-							if(num==9) info.wAttributes |= FOREGROUND_INTENSITY;
-							if(num>7) num=7; // set white for 37, 38 and 39
-							info.wAttributes &= ~(FOREGROUND_RED|FOREGROUND_GREEN|FOREGROUND_BLUE);
-							if( (num & 0x01)>0 ) // lowest bit set = red
-								info.wAttributes |= FOREGROUND_RED;
-							if( (num & 0x02)>0 ) // second bit set = green
-								info.wAttributes |= FOREGROUND_GREEN;
-							if( (num & 0x04)>0 ) // third bit set = blue
-								info.wAttributes |= FOREGROUND_BLUE;
-						} else if (0x40 == (0xF0 & numbers[i])) {
-							// background
-							uint8 num = numbers[i]&0x0F;
-							if(num==9) info.wAttributes |= BACKGROUND_INTENSITY;
-							if(num>7) num=7; // set white for 47, 48 and 49
-							info.wAttributes &= ~(BACKGROUND_RED|BACKGROUND_GREEN|BACKGROUND_BLUE);
-							if( (num & 0x01)>0 ) // lowest bit set = red
-								info.wAttributes |= BACKGROUND_RED;
-							if( (num & 0x02)>0 ) // second bit set = green
-								info.wAttributes |= BACKGROUND_GREEN;
-							if( (num & 0x04)>0 ) // third bit set = blue
-								info.wAttributes |= BACKGROUND_BLUE;
-						}
-					}
-					// set the attributes
-					SetConsoleTextAttribute(handle, info.wAttributes);
-				} else if (*q=='J') {
+					showmsg_select_graphics_rendition(handle, info.wAttributes, numbers, numpoint);
+					break;
+				case 'J':
+				{
 					// \033[#J - Erase Display (ED)
 					// \033[0J - Clears the screen from cursor to end of display. The cursor position is unchanged.
 					// \033[1J - Clears the screen from start to cursor. The cursor position is unchanged.
@@ -345,12 +399,14 @@ static int VFPRINTF(HANDLE handle, const char *fmt, va_list argptr)
 					}
 					FillConsoleOutputAttribute(handle, info.wAttributes, cnt, origin, &tmp);
 					FillConsoleOutputCharacter(handle, ' ',              cnt, origin, &tmp);
-				} else if (*q=='K') {
+					break;
+				}
+				case 'K':
+				{
 					// \033[K  : clear line from actual position to end of the line
 					// \033[0K - Clears all characters from the cursor position to the end of the line.
 					// \033[1K - Clears all characters from start of line to the cursor position.
 					// \033[2K - Clears all characters of the whole line.
-
 					uint8 num = (numbers[numpoint]>>4)*10+(numbers[numpoint]&0x0F);
 					COORD origin = {0,info.dwCursorPosition.Y}; //warning C4204
 					SHORT cnt;
@@ -365,7 +421,10 @@ static int VFPRINTF(HANDLE handle, const char *fmt, va_list argptr)
 					}
 					FillConsoleOutputAttribute(handle, info.wAttributes, cnt, origin, &tmp);
 					FillConsoleOutputCharacter(handle, ' ',              cnt, origin, &tmp);
-				} else if (*q == 'H' || *q == 'f') {
+					break;
+				}
+				case 'H':
+				case 'f':
 					// \033[#;#H - Cursor Position (CUP)
 					// \033[#;#f - Horizontal & Vertical Position
 					// The first # specifies the line number, the second # specifies the column.
@@ -376,19 +435,22 @@ static int VFPRINTF(HANDLE handle, const char *fmt, va_list argptr)
 					if( info.dwCursorPosition.X >= info.dwSize.X ) info.dwCursorPosition.Y = info.dwSize.X-1;
 					if( info.dwCursorPosition.Y >= info.dwSize.Y ) info.dwCursorPosition.Y = info.dwSize.Y-1;
 					SetConsoleCursorPosition(handle, info.dwCursorPosition);
-				} else if (*q=='s') {
+					break;
+				case 's':
 					// \033[s - Save Cursor Position (SCP)
 					/* XXX Two streams are being used. Disabled to avoid inconsistency [flaviojs]
 					CONSOLE_SCREEN_BUFFER_INFO info;
 					GetConsoleScreenBufferInfo(handle, &info);
 					saveposition = info.dwCursorPosition;
 					*/
-				} else if (*q=='u') {
+					break;
+				case 'u':
 					// \033[u - Restore cursor position (RCP)
 					/* XXX Two streams are being used. Disabled to avoid inconsistency [flaviojs]
 					SetConsoleCursorPosition(handle, saveposition);
 					*/
-				} else if (*q == 'A') {
+					break;
+				case 'A':
 					// \033[#A - Cursor Up (CUU)
 					// Moves the cursor UP # number of lines
 					info.dwCursorPosition.Y -= (numbers[numpoint])?(numbers[numpoint]>>4)*10+(numbers[numpoint]&0x0F):1;
@@ -396,7 +458,8 @@ static int VFPRINTF(HANDLE handle, const char *fmt, va_list argptr)
 					if( info.dwCursorPosition.Y < 0 )
 						info.dwCursorPosition.Y = 0;
 					SetConsoleCursorPosition(handle, info.dwCursorPosition);
-				} else if (*q == 'B') {
+					break;
+				case 'B':
 					// \033[#B - Cursor Down (CUD)
 					// Moves the cursor DOWN # number of lines
 					info.dwCursorPosition.Y += (numbers[numpoint])?(numbers[numpoint]>>4)*10+(numbers[numpoint]&0x0F):1;
@@ -404,7 +467,8 @@ static int VFPRINTF(HANDLE handle, const char *fmt, va_list argptr)
 					if( info.dwCursorPosition.Y >= info.dwSize.Y )
 						info.dwCursorPosition.Y = info.dwSize.Y-1;
 					SetConsoleCursorPosition(handle, info.dwCursorPosition);
-				} else if (*q == 'C') {
+					break;
+				case 'C':
 					// \033[#C - Cursor Forward (CUF)
 					// Moves the cursor RIGHT # number of columns
 					info.dwCursorPosition.X += (numbers[numpoint])?(numbers[numpoint]>>4)*10+(numbers[numpoint]&0x0F):1;
@@ -412,7 +476,8 @@ static int VFPRINTF(HANDLE handle, const char *fmt, va_list argptr)
 					if( info.dwCursorPosition.X >= info.dwSize.X )
 						info.dwCursorPosition.X = info.dwSize.X-1;
 					SetConsoleCursorPosition(handle, info.dwCursorPosition);
-				} else if (*q == 'D') {
+					break;
+				case 'D':
 					// \033[#D - Cursor Backward (CUB)
 					// Moves the cursor LEFT # number of columns
 					info.dwCursorPosition.X -= (numbers[numpoint])?(numbers[numpoint]>>4)*10+(numbers[numpoint]&0x0F):1;
@@ -420,7 +485,8 @@ static int VFPRINTF(HANDLE handle, const char *fmt, va_list argptr)
 					if( info.dwCursorPosition.X < 0 )
 						info.dwCursorPosition.X = 0;
 					SetConsoleCursorPosition(handle, info.dwCursorPosition);
-				} else if (*q == 'E') {
+					break;
+				case 'E':
 					// \033[#E - Cursor Next Line (CNL)
 					// Moves the cursor down the indicated # of rows, to column 1
 					info.dwCursorPosition.Y += (numbers[numpoint])?(numbers[numpoint]>>4)*10+(numbers[numpoint]&0x0F):1;
@@ -429,7 +495,8 @@ static int VFPRINTF(HANDLE handle, const char *fmt, va_list argptr)
 					if( info.dwCursorPosition.Y >= info.dwSize.Y )
 						info.dwCursorPosition.Y = info.dwSize.Y-1;
 					SetConsoleCursorPosition(handle, info.dwCursorPosition);
-				} else if (*q == 'F') {
+					break;
+				case 'F':
 					// \033[#F - Cursor Preceding Line (CPL)
 					// Moves the cursor up the indicated # of rows, to column 1.
 					info.dwCursorPosition.Y -= (numbers[numpoint])?(numbers[numpoint]>>4)*10+(numbers[numpoint]&0x0F):1;
@@ -438,7 +505,8 @@ static int VFPRINTF(HANDLE handle, const char *fmt, va_list argptr)
 					if( info.dwCursorPosition.Y < 0 )
 						info.dwCursorPosition.Y = 0;
 					SetConsoleCursorPosition(handle, info.dwCursorPosition);
-				} else if (*q == 'G') {
+					break;
+				case 'G':
 					// \033[#G - Cursor Horizontal Absolute (CHA)
 					// Moves the cursor to indicated column in current row.
 					info.dwCursorPosition.X = (numbers[numpoint])?(numbers[numpoint]>>4)*10+((numbers[numpoint]&0x0F)-1):0;
@@ -446,22 +514,28 @@ static int VFPRINTF(HANDLE handle, const char *fmt, va_list argptr)
 					if( info.dwCursorPosition.X >= info.dwSize.X )
 						info.dwCursorPosition.X = info.dwSize.X-1;
 					SetConsoleCursorPosition(handle, info.dwCursorPosition);
-				} else if (*q == 'L' || *q == 'M' || *q == '@' || *q == 'P') {
+					break;
+				case 'L':
+				case 'M':
+				case '@':
+				case 'P':
 					// not implemented, just skip
-				} else {
+					break;
+				default:
 					// no number nor valid sequencer
 					// something is fishy, we break and give the current char free
 					--q;
-				}
-				// skip the sequencer and search again
-				p = q+1;
-				break;
-			}// end while
-		}
+					break;
+			}
+			// skip the sequencer and search again
+			p = q+1;
+			break;
+		}// end for(;;)
 	}
-	if (*p) // write the rest of the buffer
+	if(*p) { // write the rest of the buffer
 		if( 0==WriteConsole(handle, p, (DWORD)strlen(p), &written, 0) )
 			WriteFile(handle, p, (DWORD)strlen(p), &written, 0);
+	}
 	FREEBUF(tempbuf);
 	return 0;
 }
