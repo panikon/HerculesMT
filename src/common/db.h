@@ -1062,8 +1062,16 @@ HPShared struct db_interface *DB;
  * Vector library based on defines (dynamic array).
  *
  * @remark
- *    This library uses aMalloc, aRealloc, aFree.
- */
+ *    This library uses the internal memory manager
+ *     *_SHARED uses shared memory allocation
+ *     *_LOCAL  uses local memory allocation
+ *    The default usage uses shared memory allocation
+ * @see VECTOR_RESIZE_
+ * @see VECTOR_ENSURE_
+ * @see VECTOR_CLEAR_
+ * @see VECTOR_PUSHCOPY_ENSURE_
+ * @see VECTOR_INIT_CAPACITY_
+ **/
 
 /**
  * Declares an anonymous vector struct.
@@ -1182,21 +1190,23 @@ HPShared struct db_interface *DB;
 	( VECTOR_INDEX(_vec, VECTOR_LENGTH(_vec)-1) )
 
 /**
- * Resizes the vector.
+ * Resizes the vector
  *
  * Excess values are discarded, new positions are zeroed.
  *
  * @param _vec Vector.
  * @param _n   New size.
+ * @param _ma  Malloc function.
+ * @param _re  Realloc function.
  */
-#define VECTOR_RESIZE(_vec, _n) \
+#define VECTOR_RESIZE_SUB(_vec, _n, _ma, _re) \
 	do { \
 		if ((_n) > VECTOR_CAPACITY(_vec)) { \
 			/* increase size */ \
 			if (VECTOR_CAPACITY(_vec) == 0) \
-				VECTOR_DATA(_vec) = aMalloc((_n)*sizeof(VECTOR_FIRST(_vec))); /* allocate new */ \
+				VECTOR_DATA(_vec) = _ma((_n)*sizeof(VECTOR_FIRST(_vec))); /* allocate new */ \
 			else \
-				VECTOR_DATA(_vec) = aRealloc(VECTOR_DATA(_vec), (_n)*sizeof(VECTOR_FIRST(_vec))); /* reallocate */ \
+				VECTOR_DATA(_vec) = _re(VECTOR_DATA(_vec), (_n)*sizeof(VECTOR_FIRST(_vec))); /* reallocate */ \
 			memset(VECTOR_DATA(_vec)+VECTOR_LENGTH(_vec), 0, (VECTOR_CAPACITY(_vec)-VECTOR_LENGTH(_vec))*sizeof(VECTOR_FIRST(_vec))); /* clear new data */ \
 			VECTOR_CAPACITY(_vec) = (_n); /* update capacity */ \
 		} else if ((_n) == 0 && VECTOR_CAPACITY(_vec) > 0) { \
@@ -1206,12 +1216,27 @@ HPShared struct db_interface *DB;
 			VECTOR_LENGTH(_vec) = 0; /* clear length */ \
 		} else if ((_n) < VECTOR_CAPACITY(_vec)) { \
 			/* reduce size */ \
-			VECTOR_DATA(_vec) = aRealloc(VECTOR_DATA(_vec), (_n)*sizeof(VECTOR_FIRST(_vec))); /* reallocate */ \
+			VECTOR_DATA(_vec) = _re(VECTOR_DATA(_vec), (_n)*sizeof(VECTOR_FIRST(_vec))); /* reallocate */ \
 			VECTOR_CAPACITY(_vec) = (_n); /* update capacity */ \
 			if ((_n) - VECTOR_LENGTH(_vec) > 0) \
 				VECTOR_LENGTH(_vec) = (_n); /* update length */ \
 		} \
 	} while(false)
+
+/**
+ * Resizes the vector.
+ *
+ * Excess values are discarded, new positions are zeroed.
+ * _SHARED Uses shared memory allocation
+ * _LOCAL  Uses local memory allocation
+ *
+ * @param _vec Vector.
+ * @param _n   New size.
+ * @see VECTOR_RESIZE_SUB
+ */
+#define VECTOR_RESIZE(_vec, _n) VECTOR_RESIZE_SUB(_vec, _n, aMalloc, aRealloc)
+#define VECTOR_RESIZE_SHARED(_vec, _n) VECTOR_RESIZE_SUB(_vec, _n, aMalloc, aRealloc)
+#define VECTOR_RESIZE_LOCAL(_vec, _n) VECTOR_RESIZE_SUB(_vec, _n, alMalloc, alRealloc)
 
 /**
  * Ensures that the array has the target number of empty positions.
@@ -1222,14 +1247,30 @@ HPShared struct db_interface *DB;
  * @param _n    Desired empty positions.
  * @param _step Increase.
  */
-#define VECTOR_ENSURE(_vec, _n, _step) \
+#define VECTOR_ENSURE_SUB(_vec, _n, _step, _mem) \
 	do { \
 		int _newcapacity_ = VECTOR_CAPACITY(_vec); \
 		while ((_n) + VECTOR_LENGTH(_vec) > _newcapacity_) \
 			_newcapacity_ += (_step); \
 		if (_newcapacity_ > VECTOR_CAPACITY(_vec)) \
-			VECTOR_RESIZE(_vec, _newcapacity_); \
+			VECTOR_RESIZE##_mem(_vec, _newcapacity_); \
 	} while(false)
+
+/**
+ * Ensures that the array has the target number of empty positions.
+ *
+ * Increases the capacity in multiples of _step.
+ * _SHARED Uses shared memory allocation
+ * _LOCAL  Uses local memory allocation
+ *
+ * @param _vec  Vector.
+ * @param _n    Desired empty positions.
+ * @param _step Increase.
+ * @see VECTOR_ENSURE_SUB
+ */
+#define VECTOR_ENSURE(_vec, _n, _step) VECTOR_ENSURE_SUB(_vec, _n, _step, _SHARED)
+#define VECTOR_ENSURE_SHARED(_vec, _n, _step) VECTOR_ENSURE_SUB(_vec, _n, _step, _SHARED)
+#define VECTOR_ENSURE_LOCAL(_vec, _n, _step) VECTOR_ENSURE_SUB(_vec, _n, _step, _LOCAL)
 
 /**
  * Inserts a zeroed value in the target index.
@@ -1411,55 +1452,67 @@ HPShared struct db_interface *DB;
  * Clears the vector, freeing allocated data.
  *
  * @param _vec Vector.
+ * @param _fr Free.
  */
-#define VECTOR_CLEAR(_vec) \
+#define VECTOR_CLEAR_SUB(_vec, _fr) \
 	do { \
 		if (VECTOR_CAPACITY(_vec) > 0) { \
-			aFree(VECTOR_DATA(_vec)); VECTOR_DATA(_vec) = NULL; /* clear allocated array */ \
+			_fr(VECTOR_DATA(_vec)); VECTOR_DATA(_vec) = NULL; /* clear allocated array */ \
 			VECTOR_CAPACITY(_vec) = 0; /* clear capacity */ \
 			VECTOR_LENGTH(_vec) = 0; /* clear length */ \
 		} \
 	} while(false)
 
 /**
- * Ensures that there is enough capacity and then appends a value at
- * the end of the vector using VECTOR_PUSHCOPY.
+ * Clears the vector, freeing allocated data.
+ * _SHARED Uses shared memory allocation
+ * _LOCAL  Uses local memory allocation
  *
  * @param _vec Vector.
- * @param _val Value.
- * @param _step Increase factor.
+ * @see VECTOR_CLEAR_SUB
  */
-#define VECTOR_PUSHCOPY_ENSURE(_vec, _val, _step) \
-	do { \
-		VECTOR_ENSURE(_vec, 1, _step); \
-		VECTOR_PUSHCOPY(_vec, _val); \
-	} while(false)
+#define VECTOR_CLEAR(_vec) VECTOR_CLEAR_SUB(_vec, aFree)
+#define VECTOR_CLEAR_SHARED(_vec) VECTOR_CLEAR_SUB(_vec, aFree)
+#define VECTOR_CLEAR_LOCAL(_vec) VECTOR_CLEAR_SUB(_vec, alFree)
 
 /**
  * Ensures that there is enough capacity and then appends a value at
- * the end of the vector using VECTOR_PUSH.
+ * the end of the vector using VECTOR_PUSHCOPY.
+ * _SHARED Uses shared memory allocation
+ * _LOCAL  Uses local memory allocation
  *
  * @param _vec Vector.
  * @param _val Value.
  * @param _step Increase factor.
  */
-#define VECTOR_PUSH_ENSURE(_vec, _val, _step) \
+#define VECTOR_PUSHCOPY_ENSURE_SUB(_vec, _val, _step, _mem) \
 	do { \
-		VECTOR_ENSURE(_vec, 1, _step); \
-		VECTOR_PUSH(_vec, _val); \
+		VECTOR_ENSURE##_mem(_vec, 1, _step); \
+		VECTOR_PUSHCOPY(_vec, _val); \
 	} while(false)
+#define VECTOR_PUSHCOPY_ENSURE(_vec, _val, _step) \
+	VECTOR_PUSHCOPY_ENSURE_SUB(_vec, _val, _step, _SHARED)
+#define VECTOR_PUSHCOPY_ENSURE_SHARED(_vec, _val, _step) \
+	VECTOR_PUSHCOPY_ENSURE_SUB(_vec, _val, _step, _SHARED)
+#define VECTOR_PUSHCOPY_ENSURE_LOCAL(_vec, _val, _step) \
+	VECTOR_PUSHCOPY_ENSURE_SUB(_vec, _val, _step, _LOCAL)
 
 /**
  * Initializes a vector with provided capacity
+ * _SHARED Uses shared memory allocation
+ * _LOCAL  Uses local memory allocation
  *
  * @param _vec Vector.
  * @param _n Initial capacity.
  **/
-#define VECTOR_INIT_CAPACITY(_vec, _n) \
+#define VECTOR_INIT_CAPACITY_SUB(_vec, _n, _mem) \
 	do { \
 		VECTOR_INIT(_vec); \
-		VECTOR_RESIZE(_vec, _n); \
+		VECTOR_RESIZE##_mem(_vec, _n); \
 	} while(false)
+#define VECTOR_INIT_CAPACITY(_vec, _n) VECTOR_INIT_CAPACITY_SUB(_vec, _n, _SHARED)
+#define VECTOR_INIT_CAPACITY_SHARED(_vec, _n) VECTOR_INIT_CAPACITY_SUB(_vec, _n, _SHARED)
+#define VECTOR_INIT_CAPACITY_LOCAL(_vec, _n) VECTOR_INIT_CAPACITY_SUB(_vec, _n, _LOCAL)
 
 /**
  * Binary heap library based on defines.

@@ -39,6 +39,24 @@
 #endif
 #endif
 
+#define STRINGISE_IMPL(x) #x
+#define STRINGISE(x) STRINGISE_IMPL(x)
+
+/**
+ * Portable warning preprocessor directive
+ * Adapted from stackoverflow.com/a/1911632/
+ *
+ * Usage: #pragma WARN("warning message")
+ **/
+#if _MSC_VER
+#   define FILE_LINE_LINK __FILE__ "(" STRINGISE(__LINE__) ") : "
+// Including warning() before is a hack to make MSVC consider
+// this message as a warning in the 'Error list'
+#   define WARN(exp) warning() __pragma(message(FILE_LINE_LINK exp))
+#else // CLANG and GCC
+#   define WARN(exp) GCC warning (exp)
+#endif
+
 //Caps values to min/max
 #define cap_value(a, min, max) (((a) >= (max)) ? (max) : ((a) <= (min)) ? (min) : (a))
 
