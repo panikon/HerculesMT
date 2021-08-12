@@ -805,74 +805,44 @@ static void showmsg_prefix(char *prefix, size_t prefix_len, enum msg_type flag, 
 			break;
 		case MSG_STATUS: //Bright Green (To inform about good things)
 			strncat(prefix,
-				   (flag)?CL_GREEN"["MSG_STATUS_STR"]"CL_RESET":" : MSG_STATUS_STR, prefix_len);
+				   (color)?CL_GREEN"["MSG_STATUS_STR"]"CL_RESET":" : MSG_STATUS_STR, prefix_len);
 			break;
 		case MSG_SQL: //Bright Violet (For dumping out anything related with SQL) 
 			// Actually, this is mostly used for SQL errors with the database,
 			// as successes can as well just be anything else... [Skotlex]
 			strncat(prefix,
-				   (flag)?CL_MAGENTA"["MSG_SQL_STR"]"CL_RESET":" : MSG_SQL_STR, prefix_len);
+				   (color)?CL_MAGENTA"["MSG_SQL_STR"]"CL_RESET":" : MSG_SQL_STR, prefix_len);
 			break;
 		case MSG_INFORMATION: //Bright White (Variable information)
 			strncat(prefix,
-				   (flag)?CL_WHITE"["MSG_INFORMATION_STR"]"CL_RESET":" : MSG_INFORMATION_STR, prefix_len);
+				   (color)?CL_WHITE"["MSG_INFORMATION_STR"]"CL_RESET":" : MSG_INFORMATION_STR, prefix_len);
 			break;
 		case MSG_NOTICE: //Bright White (Less than a warning)
 			strncat(prefix,
-				   (flag)?CL_WHITE"["MSG_NOTICE_STR"]"CL_RESET":" : MSG_NOTICE_STR, prefix_len);
+				   (color)?CL_WHITE"["MSG_NOTICE_STR"]"CL_RESET":" : MSG_NOTICE_STR, prefix_len);
 			break;
 		case MSG_WARNING: //Bright Yellow
 			strncat(prefix,
-				   (flag)?CL_YELLOW"["MSG_WARNING_STR"]"CL_RESET":" : MSG_WARNING_STR, prefix_len);
+				   (color)?CL_YELLOW"["MSG_WARNING_STR"]"CL_RESET":" : MSG_WARNING_STR, prefix_len);
 			break;
 		case MSG_DEBUG: //Bright Cyan, important stuff!
 			strncat(prefix,
-				   (flag)?CL_CYAN"["MSG_DEBUG_STR"]"CL_RESET":" : MSG_DEBUG_STR, prefix_len);
+				   (color)?CL_CYAN"["MSG_DEBUG_STR"]"CL_RESET":" : MSG_DEBUG_STR, prefix_len);
 			break;
 		case MSG_ERROR: //Bright Red  (Regular errors)
 			strncat(prefix,
-				   (flag)?CL_RED"["MSG_ERROR_STR"]"CL_RESET":" : MSG_ERROR_STR, prefix_len);
+				   (color)?CL_RED"["MSG_ERROR_STR"]"CL_RESET":" : MSG_ERROR_STR, prefix_len);
 			break;
 		case MSG_FATALERROR: //Bright Red (Fatal errors, abort(); if possible)
 			strncat(prefix,
-				   (flag)?CL_RED"["MSG_FATALERROR_STR"]"CL_RESET":" : MSG_FATALERROR_STR, prefix_len);
+				   (color)?CL_RED"["MSG_FATALERROR_STR"]"CL_RESET":" : MSG_FATALERROR_STR, prefix_len);
 			break;
 		default:
 			ShowError("showmsg_prefix_color: Unknown flag %d\n", flag);
 			strncat(prefix,
-				   (flag)?CL_WHITE"["MSG_UNKNOWN_STR"]"CL_RESET":" : MSG_UNKNOWN_STR, prefix_len);
+				   (color)?CL_WHITE"["MSG_UNKNOWN_STR"]"CL_RESET":" : MSG_UNKNOWN_STR, prefix_len);
 			break;
 	}
-}
-
-/**
- * Should this message type be silenced when printing?
- *
- * @see showmsg->silent
- * @see ShowMessageFormat
- **/
-static bool showmsg_is_silent(enum msg_type flag)
-{
-	return ((flag == MSG_INFORMATION && showmsg->silent&1) ||
-	        (flag == MSG_STATUS      && showmsg->silent&2) ||
-	        (flag == MSG_NOTICE      && showmsg->silent&4) ||
-	        (flag == MSG_WARNING     && showmsg->silent&8) ||
-	        (flag == MSG_ERROR       && showmsg->silent&16) ||
-	        (flag == MSG_SQL         && showmsg->silent&16) ||
-	        (flag == MSG_DEBUG       && showmsg->silent&32));
-}
-
-/**
- * Should this message flag be logged?
- *
- * @see showmsg->console_log
- * @see showmsg_log
- **/
-static bool showmsg_is_log(enum msg_type flag)
-{
-	return ( ( flag == MSG_WARNING && showmsg->console_log&1 ) ||
-	       ( ( flag == MSG_ERROR || flag == MSG_SQL ) && showmsg->console_log&2 ) ||
-	       ( flag == MSG_DEBUG && showmsg->console_log&4 ) ); //[Ind]
 }
 
 /**
@@ -924,9 +894,9 @@ static int showmsg_print(enum msg_type flag, const char *string, int str_len)
 		ShowError("showmsg_print: string was empty\n");
 		return 1;
 	}
-	if(showmsg_is_log(flag))
+	if(showmsg->console_log&flag)
 		showmsg_log(flag, string);
-	if(showmsg_is_silent(flag))
+	if(showmsg->silent&flag)
 		return 0; // Do not display this message
 
 	if (showmsg->timestamp_format[0] && flag != MSG_NONE) {
@@ -937,7 +907,7 @@ static int showmsg_print(enum msg_type flag, const char *string, int str_len)
 	showmsg_prefix(prefix, sizeof(prefix), flag, true);
 
 	// Print message
-	if(flag == MSG_ERROR || flag == MSG_FATALERROR || flag == MSG_SQL) {
+	if(MSG_ERROR_FLAG&flag) {
 		//Send Errors to StdErr [Skotlex]
 		FPRINTF(STDERR, "%s %s", prefix, string);
 		FFLUSH(STDERR);

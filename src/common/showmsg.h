@@ -116,17 +116,28 @@ struct config_setting_t;
 
 #define CL_SPACE   "           "   // space aquivalent of the print messages
 
+/**
+ * Message types
+ *
+ * These types are also the flags used in showmsg->silent and showmsg->console_log
+ **/
 enum msg_type {
-	MSG_NONE,
-	MSG_STATUS,
-	MSG_SQL,
-	MSG_INFORMATION,
-	MSG_NOTICE,
-	MSG_WARNING,
-	MSG_DEBUG,
-	MSG_ERROR,
-	MSG_FATALERROR
+	MSG_NONE        = 0x1,
+	MSG_STATUS      = 0x2,
+	MSG_SQL         = 0x4,
+	MSG_INFORMATION = 0x8,
+	MSG_NOTICE      = 0x10,
+	MSG_WARNING     = 0x20,
+	MSG_DEBUG       = 0x40,
+	MSG_ERROR       = 0x80,
+	MSG_FATALERROR	= 0x100,
 };
+
+/**
+ * Messages to be treated as errors when displaying
+ * These messages are sent to stderr instead of stdout
+ **/
+#define MSG_ERROR_FLAG (MSG_ERROR|MSG_FATALERROR|MSG_SQL)
 
 /**
  * Equivalent prefix strings
@@ -146,9 +157,15 @@ enum msg_type {
 
 struct showmsg_interface {
 	bool stdout_with_ansisequence; //If the color ANSI sequences are to be used. [flaviojs]
-	int silent; //Specifies how silent the console is. [Skotlex]
-	int console_log; //Specifies what error messages to log. [Ind]
 	char timestamp_format[20]; //For displaying Timestamps [Skotlex]
+	/**
+	 * Console flags
+	 * All these flags use msg_type bitwise flags
+	 * @see msg_type
+	 * @see showmsg_print
+	 **/
+	int silent;      //Specifies how silent the console is. [Skotlex]
+	int console_log; //Specifies what error messages to log. [Ind]
 
 	void (*init) (void);
 	void (*final) (void);
