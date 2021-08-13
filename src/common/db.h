@@ -1099,13 +1099,18 @@ HPShared struct db_interface *DB;
 	}
 
 /**
+ * Vector static initializer.
+ **/
+#define VECTOR_STATIC_INITIALIZER {0, 0, NULL}
+
+/**
  * Declares and initializes an anonymous vector variable.
  *
  * @param _type Type of data to be contained.
  * @param _var  Variable name.
  */
 #define VECTOR_VAR(_type, _var) \
-	VECTOR_DECL(_type) _var = {0, 0, NULL}
+	VECTOR_DECL(_type) _var = VECTOR_STATIC_INITIALIZER
 
 /**
  * Declares and initializes a named vector variable.
@@ -1114,7 +1119,7 @@ HPShared struct db_interface *DB;
  * @param _var  Variable name.
  */
 #define VECTOR_STRUCT_VAR(_name, _var) \
-	struct _name _var = {0, 0, NULL}
+	struct _name _var = VECTOR_STATIC_INITIALIZER
 
 /**
  * Initializes a vector.
@@ -1198,8 +1203,9 @@ HPShared struct db_interface *DB;
  * @param _n   New size.
  * @param _ma  Malloc function.
  * @param _re  Realloc function.
+ * @param _fr  Free function.
  */
-#define VECTOR_RESIZE_SUB(_vec, _n, _ma, _re) \
+#define VECTOR_RESIZE_SUB(_vec, _n, _ma, _re, _fr) \
 	do { \
 		if ((_n) > VECTOR_CAPACITY(_vec)) { \
 			/* increase size */ \
@@ -1211,7 +1217,7 @@ HPShared struct db_interface *DB;
 			VECTOR_CAPACITY(_vec) = (_n); /* update capacity */ \
 		} else if ((_n) == 0 && VECTOR_CAPACITY(_vec) > 0) { \
 			/* clear vector */ \
-			aFree(VECTOR_DATA(_vec)); VECTOR_DATA(_vec) = NULL; /* free data */ \
+			_fr(VECTOR_DATA(_vec)); VECTOR_DATA(_vec) = NULL; /* free data */ \
 			VECTOR_CAPACITY(_vec) = 0; /* clear capacity */ \
 			VECTOR_LENGTH(_vec) = 0; /* clear length */ \
 		} else if ((_n) < VECTOR_CAPACITY(_vec)) { \
@@ -1234,9 +1240,9 @@ HPShared struct db_interface *DB;
  * @param _n   New size.
  * @see VECTOR_RESIZE_SUB
  */
-#define VECTOR_RESIZE(_vec, _n) VECTOR_RESIZE_SUB(_vec, _n, aMalloc, aRealloc)
-#define VECTOR_RESIZE_SHARED(_vec, _n) VECTOR_RESIZE_SUB(_vec, _n, aMalloc, aRealloc)
-#define VECTOR_RESIZE_LOCAL(_vec, _n) VECTOR_RESIZE_SUB(_vec, _n, alMalloc, alRealloc)
+#define VECTOR_RESIZE(_vec, _n) VECTOR_RESIZE_SUB(_vec, _n, aMalloc, aRealloc, aFree)
+#define VECTOR_RESIZE_SHARED(_vec, _n) VECTOR_RESIZE(_vec, _n)
+#define VECTOR_RESIZE_LOCAL(_vec, _n) VECTOR_RESIZE_SUB(_vec, _n, alMalloc, alRealloc, alFree)
 
 /**
  * Ensures that the array has the target number of empty positions.
@@ -1850,5 +1856,254 @@ HPShared struct db_interface *DB;
  */
 #define BHEAP_MAXTOPCMP(v1, v2) \
 	( (v1) == (v2) ? 0 : (v1) > (v2) ? -1 : 1 )
+
+/**
+ * Queue (FIFO) library based on macros.
+ *
+ * @remark
+ *    This library uses the internal memory manager (via VECTOR)
+ *     *_SHARED uses shared memory allocation
+ *     *_LOCAL  uses local memory allocation
+ *    The default usage uses shared memory allocation
+ *
+ * The memory used by this structure is contiguous and grows dynamically
+ * Dequeue is O(1), and if there's still memory remaining enqueue is O(1)
+ **/
+
+/**
+ * Declares an anonymous queue struct.
+ *
+ * @param _type Type of data to be contained.
+ */
+#define QUEUE_DECL(_type)          \
+	struct {                       \
+		VECTOR_DECL(_type) _data_; \
+		int _back_;                \
+		int _front_;               \
+	}
+
+/**
+ * Declares a named queue struct.
+ *
+ * @param _name Structure name.
+ * @param _type Type of data to be contained.
+ */
+#define QUEUE_STRUCT_DECL(_name, _type) \
+	struct _name {                      \
+		VECTOR_DECL(_type) _data_;      \
+		int _back_;                     \
+		int _front_;                    \
+	}
+
+#define QUEUE_DEFAULT_BACK -1
+#define QUEUE_DEFAULT_FRONT 0
+/**
+ * Queue static initializer.
+ **/
+#define QUEUE_STATIC_INITIALIZER {VECTOR_STATIC_INITIALIZER, QUEUE_DEFAULT_BACK, QUEUE_DEFAULT_FRONT}
+
+/**
+ * Declares and initializes an anonymous queue variable.
+ *
+ * @param _type Type of data to be contained.
+ * @param _var  Variable name.
+ */
+#define QUEUE_VAR(_type, _var) \
+	QUEUE_DECL(_type) _var = QUEUE_STATIC_INITIALIZER
+
+/**
+ * Declares and initializes a named queue variable.
+ *
+ * @param _name Structure name.
+ * @param _var  Variable name.
+ */
+#define QUEUE_STRUCT_VAR(_name, _var) \
+	struct _name _var = QUEUE_STATIC_INITIALIZER
+
+/**
+ * Returns pointer of vector data
+ *
+ * @param _que Queue.
+ * @return Pointer of vector data.
+ **/
+#define QUEUE_VECTOR(_que)      ((_que)._data_)
+
+/**
+ * Returns current queue capacity
+ *
+ * @param _que Queue.
+ * @return Current queue capacity
+ **/
+#define QUEUE_CAPACITY(_que)    VECTOR_CAPACITY(QUEUE_VECTOR(_que))
+
+/**
+ * Returns number of active elements of a queue
+ *
+ * @param _que Queue.
+ * @return Current queue length
+ **/
+#define QUEUE_LENGTH(_que)      VECTOR_LENGTH(QUEUE_VECTOR(_que))
+
+/**
+ * Returns the value at the target index.
+ *
+ * @param _que Queue.
+ * @param _idx Index.
+ * @return Value.
+ **/
+#define QUEUE_INDEX(_que, _idx) (VECTOR_INDEX(QUEUE_VECTOR(_que), _idx))
+
+/**
+ * Returns the back of the queue (last inserted value)
+ *
+ * @param _que Queue.
+ * @return Value.
+ **/
+#define QUEUE_BACK(_que)        (QUEUE_INDEX((_que), (_que)._back_))
+
+/**
+ * Returns the front of the queue (older value)
+ *
+ * @param _que Queue.
+ * @return Value.
+ **/
+#define QUEUE_FRONT(_que)       (QUEUE_INDEX((_que), (_que)._front_))
+
+/**
+ * Queue dynamic initializer.
+ **/
+ #define QUEUE_DYNAMIC_INITIALIZER(_que)      \
+	do {                                      \
+		VECTOR_INIT(QUEUE_VECTOR(_que));      \
+		(_que)._back_ = QUEUE_DEFAULT_BACK;   \
+		(_que)._front_ = QUEUE_DEFAULT_FRONT; \
+	} while(false)
+
+/**
+ * Dequeues a value (from the front).
+ *
+ * @param _que Queue
+ **/
+#define QUEUE_DEQUEUE(_que)                                           \
+	do {                                                              \
+		if(!QUEUE_LENGTH(_que))                                       \
+			break;                                                    \
+		if((_que)._front_ != (_que)._back_) {                         \
+			(_que)._front_ = ((_que)._front_+1)%QUEUE_CAPACITY(_que); \
+		} else {                                                      \
+			/* This is the last queued item */                        \
+			(_que)._front_ = 0;                                       \
+			(_que)._back_ = 0;                                        \
+		}                                                             \
+		QUEUE_LENGTH(_que) -= 1;                                      \
+	} while(false)
+
+/**
+ * Grows queue and moves all data beggining from _front_ to the right
+ *
+ * @param _que Queue
+ * @param _step Growth factor
+ * @param _mem Memory manager type
+ **/
+#define QUEUE_GROW(_que, _step, _mem)                                   \
+	do {                                                                \
+		int _old_size_ = QUEUE_CAPACITY(_que);                          \
+		VECTOR_RESIZE##_mem(QUEUE_VECTOR(_que), _old_size_*(_step));    \
+		if((_que)._front_ > (_que)._back_) {                            \
+			/* _back_ was wrapped, reposition in new vector */          \
+			memcpy(&QUEUE_INDEX(_que, _old_size_),                      \
+			       &QUEUE_INDEX(_que, 0),                               \
+			       sizeof(QUEUE_INDEX(_que, 0))*(_que)._front_);        \
+			(_que)._back_ += _old_size_;                                \
+		}                                                               \
+	} while(false)
+
+/**
+ * Inserts value into queue, assignment (internal)
+ *
+ * @param _que Queue
+ * @param _idx Index inside vector
+ * @param _var Variable to be inserted
+ **/
+#define QUEUE_INSERT_EQUAL(_que, _idx, _var) QUEUE_INDEX((_que), (_idx)) = (_var)
+
+/**
+ * Inserts value into queue, memory copy (internal)
+ *
+ * @param _que Queue
+ * @param _idx Index inside vector
+ * @param _var Variable to be inserted
+ **/
+#define QUEUE_INSERT_COPY(_que, _idx, _var)                  \
+	do {                                                     \
+		memcpy(&QUEUE_INDEX((_que), (_idx)),                 \
+		&(_var), sizeof(VECTOR_FIRST(QUEUE_VECTOR(_que))));  \
+	} while(0)
+
+/**
+ * Enqueues a value, grows queue if necessary.
+ *
+ * @param _que Queue
+ * @param _var Variable to be inserted
+ * @param _mem Memory management type
+ * @param _type _EQUAL (assignment) or _COPY (copy)
+ **/
+#define QUEUE_ENQUEUE_SUB(_que, _var, _step, _mem, _type)                    \
+	do {                                                                     \
+		if(QUEUE_LENGTH(_que)+1 >= QUEUE_CAPACITY(_que))                     \
+			QUEUE_GROW(_que, _step, _mem);                                   \
+		(_que)._back_ = ((_que)._back_+1)%QUEUE_CAPACITY(_que);              \
+		QUEUE_INSERT##_type(_que, (_que)._back_, _var);                      \
+		QUEUE_LENGTH(_que) += 1;                                             \
+	} while(false)
+#define QUEUE_ENQUEUE(_que, _var, _step)             QUEUE_ENQUEUE_SUB(_que, _var, _step, _SHARED, _EQUAL)
+#define QUEUE_ENQUEUE_SHARED(_que, _var, _step)      QUEUE_ENQUEUE(_que, _var, _step)
+#define QUEUE_ENQUEUE_LOCAL(_que, _var, _step)       QUEUE_ENQUEUE_SUB(_que, _var, _step, _LOCAL, _EQUAL)
+#define QUEUE_ENQUEUE_COPY(_que, _var, _step)        QUEUE_ENQUEUE_SUB(_que, _var, _step, _SHARED, _COPY)
+#define QUEUE_ENQUEUE_COPY_SHARED(_que, _var, _step) QUEUE_ENQUEUE_COPY(_que, _var, _step)
+#define QUEUE_ENQUEUE_COPY_LOCAL(_que, _var, _step)  QUEUE_ENQUEUE_SUB(_que, _var, _step, _LOCAL, _COPY)
+
+/**
+ * Removes all values from queue.
+ *
+ * Does not free the allocated data.
+ **/
+#define QUEUE_TRUNCATE(_que)                  \
+	do {                                      \
+		VECTOR_TRUNCATE(QUEUE_VECTOR(_que));  \
+		(_que)._front_ = QUEUE_DEFAULT_FRONT; \
+		(_que)._back_ =  QUEUE_DEFAULT_BACK;  \
+	} while(false)
+
+/**
+ * Clears the queue, freeing allocated data.
+ *
+ * @param _que Queue.
+ * @param _fr Free.
+ */
+#define QUEUE_CLEAR_SUB(_que, _mem)             \
+	do {                                        \
+		QUEUE_TRUNCATE(_que);                   \
+		VECTOR_CLEAR##_mem(QUEUE_VECTOR(_que)); \
+	} while(false)
+#define QUEUE_CLEAR(_que) QUEUE_CLEAR_SUB(_que, _SHARED)
+#define QUEUE_CLEAR_SHARED(_que) QUEUE_CLEAR(_que)
+#define QUEUE_CLEAR_LOCAL(_que) QUEUE_CLEAR_SUB(_que, _LOCAL)
+
+/**
+ * Initializes queue with provided capacity
+ *
+ * @param _que Queue
+ * @param _n Number of elements
+ * @param _mem Memory manager type
+ **/
+#define QUEUE_INIT_CAPACITY_SUB(_que, _n, _mem)             \
+	do {                                                    \
+		QUEUE_DYNAMIC_INITIALIZER(_que);                    \
+		VECTOR_INIT_CAPACITY##_mem(QUEUE_VECTOR(_que), _n); \
+	} while(false)
+#define QUEUE_INIT_CAPACITY(_que, _n) QUEUE_INIT_CAPACITY_SUB(_que, _n, _SHARED)
+#define QUEUE_INIT_CAPACITY_SHARED(_que, _n) QUEUE_INIT_CAPACITY(_que, _n)
+#define QUEUE_INIT_CAPACITY_LOCAL(_que, _n) QUEUE_INIT_CAPACITY_SUB(_que, _n, _LOCAL)
 
 #endif /* COMMON_DB_H */
