@@ -31,7 +31,7 @@
 #ifdef SHOWMSG_USE_THREAD
 #include "common/thread.h"
 #include "common/mutex.h"
-#include "common/db.h" // VECTOR_
+#include "common/db.h" // QUEUE_
 #endif
 
 #include <stdarg.h>
@@ -551,7 +551,7 @@ static int FPRINTF(HANDLE handle, const char *fmt, ...)
 	return ret;
 }
 
-#define FFLUSH(handle) (void)(handle)
+#define FFLUSH(handle) FlushFileBuffers(handle)
 
 #define STDOUT GetStdHandle(STD_OUTPUT_HANDLE)
 #define STDERR GetStdHandle(STD_ERROR_HANDLE)
@@ -730,7 +730,7 @@ struct showmsg_queue_data {
 	char *str;           //< Formatted output (without flag or colors)
 	enum msg_type flag;  //< Message type
 };
-VECTOR_STRUCT_DECL(s_message_queue, struct showmsg_queue_data) showmsg_queue;
+QUEUE_STRUCT_DECL(s_message_queue, struct showmsg_queue_data) showmsg_queue;
 
 /**
  * Pushes a new message to showmsg_queue
@@ -750,7 +750,7 @@ static int vShowMessage_thread_(enum msg_type flag, const char *string, va_list 
 		return message.len;
 
 	mutex->lock(showmsg_mutex);
-	VECTOR_PUSHCOPY_ENSURE(showmsg_queue, message, SHOWMSG_QUEUE_GROWTH_FACTOR);
+	QUEUE_ENQUEUE_COPY(showmsg_queue, message, SHOWMSG_QUEUE_GROWTH_FACTOR);
 	mutex->cond_signal(showmsg_wake); // Wake worker
 	mutex->unlock(showmsg_mutex);
 	return 0;
@@ -759,22 +759,31 @@ static int vShowMessage_thread_(enum msg_type flag, const char *string, va_list 
 static int showmsg_print(enum msg_type flag, const char *string, int str_len);
 
 /**
+ * Dequeues all remaining messages and prints  them via showmsg_print
+ **/
+static void showmsg_dequeue_print(void)
+{
+	while(QUEUE_LENGTH(showmsg_queue)) {
+		struct showmsg_queue_data *message;
+		QUEUE_DEQUEUE(showmsg_queue);
+		message = &QUEUE_FRONT(showmsg_queue);
+		showmsg_print(message->flag, message->str, message->len);
+		if(message->str)
+			iMalloc->rfree(message->str);
+	}
+}
+
+/**
  * Message worker thread
  *
- * Pops showmsg_queue and displays its message (LIFO)
+ * Pops showmsg_queue and displays its message (FIFO)
  **/
 static void *showmsg_worker(void *param)
 {
 	mutex->lock(showmsg_mutex);
 	while(showmsg_runflag) {
 		mutex->cond_wait(showmsg_wake, showmsg_mutex, -1);
-		while(VECTOR_LENGTH(showmsg_queue)) {
-			struct showmsg_queue_data *message;
-			message = &VECTOR_POP(showmsg_queue);
-			showmsg_print(message->flag, message->str, message->len);
-			if(message->str)
-				iMalloc->rfree(message->str);
-		}
+		showmsg_dequeue_print();
 	}
 	mutex->unlock(showmsg_mutex);
 
@@ -797,7 +806,8 @@ static void showmsg_runflag_set(bool runflag)
  **/
 static void showmsg_thread_cleanup(void)
 {
-	VECTOR_CLEAR(showmsg_queue);
+	showmsg_dequeue_print(); // Try to print everything that's remaining
+	QUEUE_CLEAR(showmsg_queue);
 	if(showmsg_mutex) {
 		mutex->destroy_no_management(showmsg_mutex);
 		showmsg_mutex = NULL;
@@ -836,7 +846,13 @@ static void showmsg_thread_final(void)
  **/
 static bool showmsg_thread_init(void)
 {
-	VECTOR_INIT_CAPACITY(showmsg_queue, SHOWMSG_QUEUE_INITIAL_CAPACITY);
+	// Force flush everything that was written prior to thread execution
+	// so we can be sure that there won't be any races to any of the 
+	// console outputs
+	FFLUSH(STDERR);
+	FFLUSH(STDOUT);
+
+	QUEUE_INIT_CAPACITY(showmsg_queue, SHOWMSG_QUEUE_INITIAL_CAPACITY);
 	// Messages can be shown even after memmgr_final
 	showmsg_mutex = mutex->create_no_management();
 	if(!showmsg_mutex) {
@@ -984,6 +1000,8 @@ static int showmsg_print(enum msg_type flag, const char *string, int str_len)
 	if(MSG_ERROR_FLAG&flag) {
 		//Send Errors to StdErr [Skotlex]
 		FPRINTF(STDERR, "%s %s", prefix, string);
+		// Even if stderr is usually unbuffered we still need to display the last
+		// pushed message as soon as possible. So flush anyway.
 		FFLUSH(STDERR);
 	} else {
 		if(flag != MSG_NONE)
