@@ -57,10 +57,18 @@ struct thread_interface *thread;
 
 struct thread_handle {
 	unsigned int myID;
+	/**
+	 * Thread name
+	 *
+	 * In UNIX the name is hard limited to 16 characters including the terminating '\0'
+	 * @see man7.org/linux/man-pages/man3/pthread_setname_np.3.html
+	 **/
+	char name[16];
 
 	enum thread_priority prio;
 	threadFunc proc;
 	void *param;
+	void *result;
 
 	#ifdef WIN32
 	HANDLE hThread;
@@ -76,6 +84,9 @@ struct thread_handle {
  *
  * Threads that were created by our subsystem
  * l_threads[0] is the main thread
+ *
+ * @remark Only the thread that owns the id can change values
+ * inside of it.
  **/
 static struct thread_handle l_threads[THREADS_MAX];
 static int32_t l_threads_count = 0;
@@ -192,7 +203,8 @@ static void thread_final(void)
 	// Shouldn't happen ... Kill 'em all!
 	for (i = 1; i < THREADS_MAX; i++) {
 		if (l_threads[i].proc != NULL){
-			ShowWarning("thread_final: unterminated Thread (tid %d entry_point %p) - forcing to terminate (kill)\n", i, l_threads[i].proc);
+			ShowWarning("thread_final: unterminated Thread (tid %d, name %s, entry_point %p)"
+				"- forcing to terminate (kill)\n", i, l_threads[i].name, l_threads[i].proc);
 			thread->destroy(&l_threads[i]);
 		}
 	}
@@ -211,6 +223,7 @@ static void thread_terminated(struct thread_handle *handle)
 	handle->param = NULL;
 	handle->proc = NULL;
 	handle->prio = THREADPRIO_NORMAL;
+	handle->name[0] = '\0';
 	InterlockedDecrement(&l_threads_count);
 }
 
@@ -222,11 +235,11 @@ static void *thread_main_redirector(void *p)
 {
 	sigset_t set; // on Posix Thread platforms
 #endif
-	void *ret;
 	struct thread_handle *self = p;
 
 	// Update myID @ TLS to right id.
 	g_thread_id = self->myID;
+	thread->name_set(NULL);
 
 #ifndef WIN32
 	// When using posix threads
@@ -242,7 +255,7 @@ static void *thread_main_redirector(void *p)
 #endif
 
 	iMalloc->local_storage_init();
-	ret = self->proc(self->param);
+	self->result = self->proc(self->param);
 	iMalloc->local_storage_final();
 #ifdef WIN32
 	CloseHandle(self->hThread);
@@ -250,9 +263,9 @@ static void *thread_main_redirector(void *p)
 
 	thread_terminated(self);
 #ifdef WIN32
-	return (DWORD)ret;
+	return (DWORD)self->result;
 #else
-	return ret;
+	return self->result;
 #endif
 }
 
@@ -263,15 +276,100 @@ int thread_count(void) {
 	return InterlockedExchangeAdd(&l_threads_count, 0);
 }
 
-/// @copydoc thread_interface::create()
-static struct thread_handle *thread_create(threadFunc entry_point, void *param)
+/// @copydoc thread_interface::exit()
+static void thread_exit(void *result)
 {
-	return thread->create_opt(entry_point, param, THREAD_STACK_SIZE, THREADPRIO_NORMAL);
+	struct thread_handle *self = thread->self();
+	self->result = result;
+	thread_terminated(self);
+#ifdef WIN32
+	_endthreadex(0);
+#else
+	pthread_exit(NULL);
+#endif
+}
+
+#if defined(WIN32)
+
+#ifdef DEBUG
+#pragma pack(push,8)
+typedef struct tagTHREADNAME_INFO
+{
+	DWORD dwType; // Must be 0x1000.
+	LPCSTR szName; // Pointer to name (in user addr space).
+	DWORD dwThreadID; // Thread ID (-1=caller thread).
+	DWORD dwFlags; // Reserved for future use, must be zero.
+} THREADNAME_INFO;
+#pragma pack(pop)
+#endif
+
+/**
+ * SetThreadName
+ * Sets thread name for the debugger
+ *
+ * @param dwThreadID System thread id
+ * @param threadName New name (must be valid in user addr space)
+ *
+ * Used for setting the thread name when debugging in MSVC (windows' threads
+ * don't have names)
+ * @see docs.microsoft.com/en-us/visualstudio/debugger/how-to-set-a-thread-name-in-native-code
+ **/
+void SetThreadName(DWORD dwThreadID, const char *threadName)
+{
+#ifdef DEBUG
+	THREADNAME_INFO info;
+	info.dwType = 0x1000;
+	info.szName = threadName;
+	info.dwThreadID = dwThreadID;
+	info.dwFlags = 0;
+#pragma warning(push)
+#pragma warning(disable: 6320 6322)
+	__try{
+		RaiseException(0x406D1388, 0, sizeof(info) / sizeof(ULONG_PTR), (ULONG_PTR*)&info);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER){
+	}
+#endif // DEBUG
+}
+
+#endif // WIN32
+
+/// @copydoc thread_interface::name_get()
+const char *thread_name_get(void)
+{
+	struct thread_handle *handle = thread->self();
+	return handle->name;
+}
+
+/// @copydoc thread_interface::name_set()
+void thread_name_set(const char *name)
+{
+	struct thread_handle *handle = thread->self();
+
+	if(name) {
+		if(handle->name)
+			handle->name[0] = '\0';
+
+		strncpy(handle->name, name, sizeof(handle->name));
+		handle->name[sizeof(handle->name)-1] = '\0';
+	}
+#ifdef WIN32
+	SetThreadName(GetCurrentThreadId(), handle->name);
+#else
+	pthread_setname_np(handle->hThread, handle->name);
+#endif
+}
+
+/// @copydoc thread_interface::create()
+static struct thread_handle *thread_create(const char *name, threadFunc entry_point, void *param)
+{
+	return thread->create_opt(name, entry_point, param, THREAD_STACK_SIZE, THREADPRIO_NORMAL);
 }
 
 /// @copydoc thread_interface::create_opt()
-static struct thread_handle *thread_create_opt(threadFunc entry_point, void *param, size_t stack_size, enum thread_priority prio)
-{
+static struct thread_handle *thread_create_opt(const char *name, threadFunc entry_point,
+	void *param, size_t stack_size, enum thread_priority prio
+) {
 #ifndef WIN32
 	pthread_attr_t attr;
 #endif
@@ -300,9 +398,19 @@ static struct thread_handle *thread_create_opt(threadFunc entry_point, void *par
 
 	handle->proc = entry_point;
 	handle->param = param;
+	strncpy(handle->name, name, sizeof(handle->name));
+	handle->name[sizeof(handle->name)-1] = '\0';
 
 #ifdef WIN32
-	handle->hThread = CreateThread(NULL, stack_size, thread_main_redirector, handle, 0, NULL);
+	/**
+	 * docs.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createthread
+	 * CreateThread shouldn't be called by executables that call the CRT,
+	 * _beginthreadex should be used instead. [Panikon]
+	 * @see stackoverflow.com/a/331754 for a discussion on the subject
+	 **/
+	handle->hThread = (HANDLE)_beginthreadex(NULL, stack_size,
+		thread_main_redirector, handle, 0, NULL);
+
 	if(!handle->hThread) {
 		ShowError("thread_create_opt: failed to create new thread (entry_point: %p) "
 			"error: %ld\n", GetLastError());
@@ -372,16 +480,17 @@ static bool thread_wait(struct thread_handle *handle, void **out_exit_code)
 	// Hint:
 	// no thread data cleanup routine call here!
 	// its managed by the callProxy itself..
-#ifdef WIN32
-	// FIXME: out_exit_code is not being set in WIN32 [Panikon]
-	WaitForSingleObject(handle->hThread, INFINITE);
-	return true;
-#else
-	if (pthread_join(handle->hThread, out_exit_code) == 0)
-		return true;
-	return false;
-#endif
+	bool retval = true;
 
+#ifdef WIN32
+	WaitForSingleObject(handle->hThread, INFINITE);
+#else
+	if (pthread_join(handle->hThread, NULL))
+		retval = false;
+#endif
+	if(out_exit_code)
+		*out_exit_code = handle->result;
+	return retval;
 }
 
 /// @copydoc thread_interface::prio_set()
@@ -391,14 +500,14 @@ static void thread_prio_set(struct thread_handle *handle, enum thread_priority p
 	handle->prio = prio;
 #ifdef _WIN32
 	if(!SetThreadPriority(handle->hThread, thread_dynamic_priority[prio])) {
-		ShowError("thread_prio_set: Failed to set new priority (%d) for thread %d, error %ld\n",
-			prio, handle->myID, GetLastError());
+		ShowError("thread_prio_set: Failed to set new priority (%d) for thread[%d] %s, error %ld\n",
+			prio, handle->myID, handle->name, GetLastError());
 	}
 #else
 	errno = 0;
 	if(setpriority(PRIO_PROCESS, gettid(), thread_dynamic_priority[prio]) && errno) {
-		ShowError("thread_prio_set: Failed to set new priority (%d) for thread %d, errno %d\n",
-			prio, handle->myID, errno);
+		ShowError("thread_prio_set: Failed to set new priority (%d) for thread[%d] %s, errno %d\n",
+			prio, handle->myID, handle->name, errno);
 	}
 #endif
 }
@@ -427,10 +536,13 @@ void thread_defaults(void)
 	thread->final = thread_final;
 	thread->create = thread_create;
 	thread->create_opt = thread_create_opt;
+	thread->exit = thread_exit;
 	thread->destroy = thread_destroy;
 	thread->self = thread_self;
 	thread->get_tid = thread_get_tid;
 	thread->wait = thread_wait;
+	thread->name_set = thread_name_set;
+	thread->name_get = thread_name_get;
 	thread->prio_set = thread_prio_set;
 	thread->prio_get = thread_prio_get;
 	thread->yield = thread_yield;

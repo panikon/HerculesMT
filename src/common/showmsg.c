@@ -869,7 +869,7 @@ static bool showmsg_thread_init(void)
 	}
 
 	showmsg_runflag = true;
-	showmsg_thread = thread->create(showmsg_worker, NULL);
+	showmsg_thread = thread->create("Message", showmsg_worker, NULL);
 	if(!showmsg_thread) {
 		ShowError("showmsg_thread_init: Failed to create worker thread\n");
 		showmsg_thread_cleanup();

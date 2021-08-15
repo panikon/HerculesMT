@@ -557,7 +557,7 @@ static void console_parse_init(void)
 	console->input->ptmutex = mutex->create();
 	console->input->ptcond = mutex->cond_create();
 
-	if( (console->input->pthread = thread->create(console->input->pthread_main, NULL)) == NULL ){
+	if( (console->input->pthread = thread->create("Console", console->input->pthread_main, NULL)) == NULL ){
 		ShowFatalError("console_parse_init: failed to spawn console_parse thread.\n");
 		exit(EXIT_FAILURE);
 	}

@@ -69,6 +69,7 @@
 #include <ws2tcpip.h>
 #include <mswsock.h>
 #include <mmsystem.h>
+#include <process.h>
 #include <synchapi.h>
 
 #if (_WIN32_WINNT < 0x0600)

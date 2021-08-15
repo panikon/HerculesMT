@@ -63,18 +63,22 @@ struct thread_interface {
 	/**
 	 * Creates a new Thread.
 	 *
+	 * @param name       Name used for debugging purposes.
 	 * @param enty_point Thread's entry point.
 	 * @param param      General purpose parameter, would be given as
 	 *                   parameter to the thread's entry point.
 	 *
 	 * @return The created thread object.
 	 * @retval NULL in case of failure.
+	 *
+	 * @see thread_interface::name_set
 	 */
-	struct thread_handle *(*create) (threadFunc entry_point, void *param);
+	struct thread_handle *(*create) (const char *name, threadFunc entry_point, void *param);
 
 	/**
 	 * Creates a new Thread (with more creation options).
 	 *
+	 * @param name       Name used for debugging purposes.
 	 * @param enty_point Thread's entry point.
 	 * @param param      General purpose parameter, would be given as
 	 *                   parameter to the thread's entry point.
@@ -83,8 +87,18 @@ struct thread_interface {
 	 *
 	 * @return The created thread object.
 	 * @retval NULL in case of failure.
+	 *
+	 * @see thread_interface::name_set
 	 */
-	struct thread_handle *(*create_opt) (threadFunc entry_point, void *param, size_t stack_size, enum thread_priority prio);
+	struct thread_handle *(*create_opt) (const char *name, threadFunc entry_point, void *param, size_t stack_size, enum thread_priority prio);
+
+	/**
+	 * Exits current thread immediately.
+	 * Doesn't return.
+	 *
+	 * @param result Value to be reported on thread_join
+	 **/
+	void (*exit)(void *result);
 
 	/**
 	 * Destroys the given Thread immediately.
@@ -135,10 +149,26 @@ struct thread_interface {
 	bool (*wait) (struct thread_handle *handle, void **out_exit_code);
 
 	/**
+	 * Sets name of current thread.
+	 *
+	 * @param name   New name (maximum 16 characters including '\0')
+	 *               If NULL uses current name to update system name.
+	 * @see thread_handle::name
+	 **/
+	void (*name_set)(const char *name);
+
+	/**
+	 * Returns name of current thread.
+	 **/
+	const char *(*name_get)(void);
+
+	/**
 	 * Sets the given priority in the OS scheduler.
 	 *
 	 * @param handle The thread to set the priority for.
 	 * @param prio   The priority to set (@see enum thread_priority).
+	 *
+	 * @warning This must only be used for the current thread.
 	 */
 	void (*prio_set) (struct thread_handle *handle, enum thread_priority prio);
 
