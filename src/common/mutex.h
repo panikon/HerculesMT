@@ -110,6 +110,7 @@ struct mutex_interface {
 	 * @param m             The mutex used for synchronization (must have been acquired).
 	 * @param timeout_ticks Timeout in ticks (-1 = INFINITE)
 	 * @return Was wait successful? When timeout is infinite always returns true
+	 * @see showmsg_worker for an example
 	 */
 	bool (*cond_wait) (struct cond_data *c, struct mutex_data *m, sysint timeout_ticks);
 

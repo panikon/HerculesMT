@@ -166,18 +166,40 @@ static void rdtsc_calibrate(void)
 
 /**
  * platform-abstracted tick retrieval
- * @return server's current tick
+ * @return server's current tick in milliseconds
  */
 static int64 sys_tick(void)
 {
 #if defined(WIN32)
+#ifdef ENABLE_PERFORMANCE_COUNTER
+	/**
+	 * Windows high-resolution timer (number of counts)
+	 * @see docs.microsoft.com/en-us/windows/win32/sysinfo/acquiring-high-resolution-time-stamp
+	 *
+	 * QPS activation can lead to performance degradation in systems with
+	 * AMD Cool'n'Quiet technology enabled in the BIOS.
+	 * @see docs.microsoft.com/en-us/troubleshoot/windows-server/performance/programs-queryperformancecounter-function-perform-poorly
+	 **/
+	static LARGE_INTEGER frequency_cache = {0};
+	static bool has_qps = true;
+	if(!frequency_cache.HighPart && has_qps) {
+		has_qps = QueryPerformanceFrequency(&frequency_cache);
+		if(!has_qps)
+			ShowWarning("sys_tick: high-resolution timing not supported,"
+				" falling back to low resolution\n");
+	}
+
+	if(has_qps) {
+		LARGE_INTEGER ticks;
+		// When QueryPerformanceCounter is available it does not fail.
+		QueryPerformanceCounter(&ticks);
+		ticks.QuadPart *= 1000;
+		ticks.QuadPart /= frequency_cache.QuadPart;
+		return ticks.QuadPart;
+	} // Fall-back to GetTickCount if QPS is unavailable
+#endif
 	// Windows: GetTickCount/GetTickCount64: Return the number of
 	//   milliseconds that have elapsed since the system was started.
-
-	// TODO: GetTickCount/GetTickCount64 has a resolution of only 10~15ms.
-	//       Ai4rei recommends that we replace it with either performance
-	//       counters or multimedia timers if we want it to be more accurate.
-	//       I'm leaving this for a future follow-up patch.
 
 	// GetTickCount64 is only available in Windows Vista / Windows Server
 	//   2008 or newer. Since we still support older versions, this runtime

@@ -1061,7 +1061,11 @@ static void sysinfo_final(void)
 static const char *sysinfo_time(void)
 {
 #if defined(WIN32)
+#ifdef ENABLE_PERFORMANCE_COUNTER
+	return "QPS";
+#else
 	return "ticks count";
+#endif
 #elif defined(ENABLE_RDTSC)
 	return "rdtsc";
 #elif defined(HAVE_MONOTONIC_CLOCK)
