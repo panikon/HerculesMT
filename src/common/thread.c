@@ -31,6 +31,8 @@
 #include "common/atomic.h"
 #include "common/mutex.h"
 
+#include "common/thread.h"
+
 #ifdef WIN32
 #	include "common/winapi.h"
 #else
@@ -279,6 +281,8 @@ static void *thread_main_redirector(void *p)
 	iMalloc->local_storage_init();
 	self->result = self->proc(self->param);
 	iMalloc->local_storage_final();
+	ers_final(MEMORYTYPE_LOCAL);
+
 #ifdef WIN32
 	CloseHandle(self->hThread);
 	self->hThread = NULL;

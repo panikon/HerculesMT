@@ -511,6 +511,7 @@ int main(int argc, char **argv)
 	set_server_type();
 
 	Sql_Init();
+	ers_init();
 	DB->init();
 	signals_init();
 
@@ -549,8 +550,7 @@ int main(int argc, char **argv)
 	packets->final();
 	sockt->final();
 	DB->final();
-	//thread->final();
-	ers_final();
+	ers_final(MEMORYTYPE_SHARED);
 	rnd->final();
 	cmdline->final();
 	//sysinfo->final(); Called by iMalloc->final()
