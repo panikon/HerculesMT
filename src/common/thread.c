@@ -30,6 +30,7 @@
 #include "common/nullpo.h"
 #include "common/atomic.h"
 #include "common/mutex.h"
+#include "common/ers.h"
 
 #include "common/thread.h"
 
@@ -201,7 +202,7 @@ static void thread_init(void)
 	g_thread_id = 0;
 	l_threads[0].prio = THREADPRIO_NORMAL;
 	l_threads[0].proc = (threadFunc)0xDEADCAFE;
-	l_threads[0].proc = THREADSTATUS_RUN;
+	l_threads[0].status = THREADSTATUS_RUN;
 	l_threads_count = 1;
 
 	thread_prio_init();

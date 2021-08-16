@@ -96,6 +96,7 @@
 #include "common/nullpo.h"
 #include "common/showmsg.h"
 #include "common/strlib.h"
+#include "common/rwlock.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -360,6 +361,7 @@ static struct db_stats {
 /* [Ind/Hercules] */
 static struct eri *db_iterator_ers;
 static struct eri *db_alloc_ers;
+static struct ers_collection_t *db_ers_collection = NULL;
 
 /*****************************************************************************\
  *  (2) Section of private functions used by the database system.            *
@@ -862,12 +864,22 @@ static void db_free_unlock(struct DBMap_impl *db)
 	if (db->free_lock)
 		return; // Not last lock
 
+	if (!db->free_count)
+		return; // No operation
+
+	rwlock->read_lock(ers_global_lock());
+	rwlock->read_lock(db->nodes->collection_lock);
+	rwlock->write_lock(db->nodes->cache_lock);
 	for (i = 0; i < db->free_count ; i++) {
 		db_rebalance_erase(db->free_list[i].node, db->free_list[i].root);
 		db_dup_key_free(db, db->free_list[i].node->key);
 		DB_COUNTSTAT(db_node_free);
 		ers_free(db->nodes, db->free_list[i].node);
 	}
+	rwlock->write_unlock(db->nodes->cache_lock);
+	rwlock->read_unlock(db->nodes->collection_lock);
+	rwlock->read_unlock(ers_global_lock());
+
 	db->free_count = 0;
 }
 
@@ -1514,7 +1526,15 @@ static void dbit_obj_destroy(struct DBIterator *self)
 	// unlock the database
 	db_free_unlock(it->db);
 	// free iterator
+	rwlock->read_lock(ers_global_lock());
+	rwlock->read_lock(db_iterator_ers->collection_lock);
+
+	rwlock->write_lock(db_iterator_ers->cache_lock);
 	ers_free(db_iterator_ers,self);
+	rwlock->write_unlock(db_iterator_ers->cache_lock);
+
+	rwlock->read_unlock(db_iterator_ers->collection_lock);
+	rwlock->read_unlock(ers_global_lock());
 }
 
 /**
@@ -1532,7 +1552,17 @@ static struct DBIterator *db_obj_iterator(struct DBMap *self)
 	struct DBIterator_impl *it;
 
 	DB_COUNTSTAT(db_iterator);
+
+	rwlock->read_lock(ers_global_lock());
+	rwlock->read_lock(db_iterator_ers->collection_lock);
+
+	rwlock->write_lock(db_iterator_ers->cache_lock);
 	it = ers_alloc(db_iterator_ers, struct DBIterator_impl);
+	rwlock->write_unlock(db_iterator_ers->cache_lock);
+
+	rwlock->read_unlock(db_iterator_ers->collection_lock);
+	rwlock->read_unlock(ers_global_lock());
+
 	/* Interface of the iterator **/
 	it->vtable.first   = dbit_obj_first;
 	it->vtable.last    = dbit_obj_last;
@@ -1755,6 +1785,87 @@ static unsigned int db_obj_getall(struct DBMap *self, struct DBData **buf, unsig
 }
 
 /**
+ * Adds new entry at the next valid position.
+ * This function should be called after failure to find a node.
+ *
+ * @param self Interface of the database
+ * @param hash Calculated hash for key via <code>db->hash</code>
+ * @param c Last valid comparison <code>db->cmp</code>
+ * @param parent This entry's parent
+ * @return pointer to new node
+ * @retval NULL Failed to create node
+ * @remarks db must be locked via <code>db_free_lock</code>
+ * @see db_obj_vensure
+ * @see db_obj_put
+ **/
+struct DBNode *db_obj_create(struct DBMap *self, unsigned int hash, int c, struct DBNode *parent)
+{
+	struct DBMap_impl *db = (struct DBMap_impl *)self;
+	struct DBNode *node;
+
+	if (db->item_count == UINT32_MAX) {
+		ShowError("db_obj_create: item_count overflow, aborting item insertion.\n"
+				"Database allocated at %s:%d",
+				db->alloc_file, db->alloc_line);
+		return NULL;
+	}
+
+	DB_COUNTSTAT(db_node_alloc);
+
+	rwlock->read_lock(ers_global_lock());
+	rwlock->read_lock(db->nodes->collection_lock);
+	rwlock->write_lock(db->nodes->cache_lock);
+	node = ers_alloc(db->nodes, struct DBNode);
+	rwlock->write_unlock(db->nodes->cache_lock);
+	rwlock->read_unlock(db->nodes->collection_lock);
+	rwlock->read_unlock(ers_global_lock());
+
+	node->left = NULL;
+	node->right = NULL;
+	node->deleted = 0;
+	db->item_count++;
+	if (c == 0) { // hash entry is empty
+		node->color = BLACK;
+		node->parent = NULL;
+		db->ht[hash] = node;
+	} else {
+		node->color = RED;
+		if (c < 0) { // put at the left
+			parent->left = node;
+			node->parent = parent;
+		} else { // put at the right
+			parent->right = node;
+			node->parent = parent;
+		}
+		if (parent->color == RED) // two consecutive RED nodes, must rebalance
+			db_rebalance(node, &db->ht[hash]);
+	}
+
+	return node;
+}
+
+/**
+ * Puts key and data in provided node
+ *
+ * @param self Interface of the database
+ * @param node Node to be filled
+ * @param key Key that identifies the data
+ * @param data Data to be put in the database
+ **/
+void db_obj_fill(struct DBMap *self, struct DBNode *node, union DBKey key, struct DBData data)
+{
+	struct DBMap_impl *db = (struct DBMap_impl *)self;
+	if (db->options&DB_OPT_DUP_KEY) {
+		node->key = db_dup_key(db, key);
+		if (db->options&DB_OPT_RELEASE_KEY)
+			db->release(key, node->data, DB_RELEASE_KEY);
+	} else {
+		node->key = key;
+	}
+	node->data = data;
+}
+
+/**
  * Get the data of the entry identified by the key.
  * If the entry does not exist, an entry is added with the data returned by
  * <code>create</code>.
@@ -1806,44 +1917,14 @@ static struct DBData *db_obj_vensure(struct DBMap *self, union DBKey key, DBCrea
 	// Create node if necessary
 	if (node == NULL) {
 		va_list argscopy;
-		if (db->item_count == UINT32_MAX) {
-			ShowError("db_vensure: item_count overflow, aborting item insertion.\n"
-					"Database allocated at %s:%d",
-					db->alloc_file, db->alloc_line);
-				return NULL;
-		}
-		DB_COUNTSTAT(db_node_alloc);
-		node = ers_alloc(db->nodes, struct DBNode);
-		node->left = NULL;
-		node->right = NULL;
-		node->deleted = 0;
-		db->item_count++;
-		if (c == 0) { // hash entry is empty
-			node->color = BLACK;
-			node->parent = NULL;
-			db->ht[hash] = node;
-		} else {
-			node->color = RED;
-			if (c < 0) { // put at the left
-				parent->left = node;
-				node->parent = parent;
-			} else { // put at the right
-				parent->right = node;
-				node->parent = parent;
-			}
-			if (parent->color == RED) // two consecutive RED nodes, must rebalance
-				db_rebalance(node, &db->ht[hash]);
-		}
-		// put key and data in the node
-		if (db->options&DB_OPT_DUP_KEY) {
-			node->key = db_dup_key(db, key);
-			if (db->options&DB_OPT_RELEASE_KEY)
-				db->release(key, node->data, DB_RELEASE_KEY);
-		} else {
-			node->key = key;
+		node = db_obj_create(self, hash, c, parent);
+		if(!node) {
+			ShowError("db_ensure: Failed to create node for db allocated at %s:%d\n",
+				db->alloc_file, db->alloc_line);
+			return NULL;
 		}
 		va_copy(argscopy, args);
-		node->data = create(key, argscopy);
+		db_obj_fill(self, node, key, create(key, argscopy));
 		va_end(argscopy);
 	}
 	data = &node->data;
@@ -1893,8 +1974,6 @@ static struct DBData *db_obj_ensure(struct DBMap *self, union DBKey key, DBCreat
  * @protected
  * @see #db_malloc_dbn(void)
  * @see struct DBMap#put()
- * FIXME: If this method fails shouldn't it return another value?
- *        Other functions rely on this to know if they were able to put something [Panikon]
  */
 static int db_obj_put(struct DBMap *self, union DBKey key, struct DBData data, struct DBData *out_data)
 {
@@ -1921,12 +2000,6 @@ static int db_obj_put(struct DBMap *self, union DBKey key, struct DBData data, s
 		return 0; // nullpo candidate
 	}
 
-	if (db->item_count == UINT32_MAX) {
-		ShowError("db_put: item_count overflow, aborting item insertion.\n"
-				"Database allocated at %s:%d",
-				db->alloc_file, db->alloc_line);
-		return 0;
-	}
 	// search for an equal node
 	db_free_lock(db);
 	hash = db->hash(key, db->maxlen)%HASH_SIZE;
@@ -1952,38 +2025,14 @@ static int db_obj_put(struct DBMap *self, union DBKey key, struct DBData data, s
 	}
 	// allocate a new node if necessary
 	if (node == NULL) {
-		DB_COUNTSTAT(db_node_alloc);
-		node = ers_alloc(db->nodes, struct DBNode);
-		node->left = NULL;
-		node->right = NULL;
-		node->deleted = 0;
-		db->item_count++;
-		if (c == 0) { // hash entry is empty
-			node->color = BLACK;
-			node->parent = NULL;
-			db->ht[hash] = node;
-		} else {
-			node->color = RED;
-			if (c < 0) { // put at the left
-				parent->left = node;
-				node->parent = parent;
-			} else { // put at the right
-				parent->right = node;
-				node->parent = parent;
-			}
-			if (parent->color == RED) // two consecutive RED nodes, must rebalance
-				db_rebalance(node, &db->ht[hash]);
+		node = db_obj_create(self, hash, c, parent);
+		if(!node) {
+			ShowError("db_put: Failed to create node for db allocated at %s:%d\n",
+				db->alloc_file, db->alloc_line);
+			return 0;
 		}
 	}
-	// put key and data in the node
-	if (db->options&DB_OPT_DUP_KEY) {
-		node->key = db_dup_key(db, key);
-		if (db->options&DB_OPT_RELEASE_KEY)
-			db->release(key, data, DB_RELEASE_KEY);
-	} else {
-		node->key = key;
-	}
-	node->data = data;
+	db_obj_fill(self, node, key, data);
 	db->cache = node;
 	db_free_unlock(db);
 	return retval;
@@ -2156,6 +2205,10 @@ static int db_obj_vclear(struct DBMap *self, DBApply func, va_list args)
 
 	db_free_lock(db);
 	db->cache = NULL;
+
+	rwlock->read_lock(ers_global_lock());
+	rwlock->read_lock(db->nodes->collection_lock);
+	rwlock->write_lock(db->nodes->cache_lock);
 	for (i = 0; i < HASH_SIZE; i++) {
 		// Apply the func and delete in the order: left tree, right tree, current node
 		node = db->ht[i];
@@ -2195,6 +2248,10 @@ static int db_obj_vclear(struct DBMap *self, DBApply func, va_list args)
 		}
 		db->ht[i] = NULL;
 	}
+	rwlock->write_unlock(db->nodes->cache_lock);
+	rwlock->read_unlock(db->nodes->collection_lock);
+	rwlock->read_unlock(ers_global_lock());
+
 	db->free_count = 0;
 	db->item_count = 0;
 	db_free_unlock(db);
@@ -2279,9 +2336,25 @@ static int db_obj_vdestroy(struct DBMap *self, DBApply func, va_list args)
 	aFree(db->free_list);
 	db->free_list = NULL;
 	db->free_max = 0;
+
+	rwlock->read_lock(ers_global_lock());
+	struct rwlock_data *collection_lock = db->nodes->collection_lock;
+	rwlock->write_lock(collection_lock);
 	ers_destroy(db->nodes);
+	rwlock->write_unlock(collection_lock);
+	rwlock->read_unlock(ers_global_lock());
+	// When it's the last key db_free_unlock tries to lock
+	// ers_global_lock() and collection lock as well
 	db_free_unlock(db);
+
+	rwlock->read_lock(ers_global_lock());
+	rwlock->read_lock(db_alloc_ers->collection_lock);
+	rwlock->write_lock(db_alloc_ers->cache_lock);
 	ers_free(db_alloc_ers, db);
+	rwlock->write_unlock(db_alloc_ers->cache_lock);
+	rwlock->read_unlock(db_alloc_ers->collection_lock);
+	rwlock->read_unlock(ers_global_lock());
+
 	return sum;
 }
 
@@ -2584,7 +2657,16 @@ static struct DBMap *db_alloc(const char *file, const char *func, int line, enum
 		case DB_UINT64: DB_COUNTSTAT(db_uint64_alloc); break;
 	}
 #endif /* DB_ENABLE_STATS */
+
+	rwlock->read_lock(ers_global_lock());
+	rwlock->read_lock(db_alloc_ers->collection_lock);
+
+	rwlock->write_lock(db_alloc_ers->cache_lock);
 	db = ers_alloc(db_alloc_ers, struct DBMap_impl);
+	rwlock->write_unlock(db_alloc_ers->cache_lock);
+
+	rwlock->read_unlock(db_alloc_ers->collection_lock);
+	rwlock->read_unlock(ers_global_lock());
 
 	options = DB->fix_options(type, options);
 	/* Interface of the database */
@@ -2616,7 +2698,14 @@ static struct DBMap *db_alloc(const char *file, const char *func, int line, enum
 	db->free_lock = 0;
 	/* Other */
 	snprintf(ers_name, 50, "db_alloc:nodes:%s:%s:%d",func,file,line);
-	db->nodes = ers_new(sizeof(struct DBNode),ers_name,ERS_OPT_WAIT|ERS_OPT_FREE_NAME|ERS_OPT_CLEAN);
+
+	rwlock->read_lock(ers_global_lock());
+	rwlock->write_lock(ers_collection_lock(db_ers_collection));
+	db->nodes = ers_new(db_ers_collection, sizeof(struct DBNode),
+		ers_name,ERS_OPT_WAIT|ERS_OPT_FREE_NAME|ERS_OPT_CLEAN);
+	rwlock->write_unlock(ers_collection_lock(db_ers_collection));
+	rwlock->read_unlock(ers_global_lock());
+
 	db->cmp = DB->default_cmp(type);
 	db->hash = DB->default_hash(type);
 	db->release = DB->default_release(type, options);
@@ -2805,20 +2894,43 @@ static void *db_data2ptr(struct DBData *data)
 
 /**
  * Initializes the database system.
+ *
+ * @remarks Acquires write g_ers_list_lock
  * @public
  * @see #db_final(void)
  */
 static void db_init(void)
 {
-	db_iterator_ers = ers_new(sizeof(struct DBIterator_impl),"db.c::db_iterator_ers",ERS_OPT_CLEAN|ERS_OPT_FLEX_CHUNK);
-	db_alloc_ers = ers_new(sizeof(struct DBMap_impl),"db.c::db_alloc_ers",ERS_OPT_CLEAN|ERS_OPT_FLEX_CHUNK);
+	struct rwlock_data *ers_list_lock = ers_global_lock();
+
+	rwlock->write_lock(ers_list_lock);
+	db_ers_collection = ers_collection_create(MEMORYTYPE_SHARED);
+	rwlock->write_unlock(ers_list_lock);
+	if(!db_ers_collection) {
+		ShowFatalError("db_init: Failed to setup ERS collection\n");
+		exit(EXIT_FAILURE);
+	}
+	rwlock->read_lock(ers_list_lock);
+	rwlock->write_lock(ers_collection_lock(db_ers_collection));
+
+	db_iterator_ers = ers_new(db_ers_collection, sizeof(struct DBIterator_impl),
+		"db.c::db_iterator_ers",ERS_OPT_CLEAN|ERS_OPT_FLEX_CHUNK);
+	db_alloc_ers = ers_new(db_ers_collection, sizeof(struct DBMap_impl),
+		"db.c::db_alloc_ers",ERS_OPT_CLEAN|ERS_OPT_FLEX_CHUNK);
+	// Don't need to get cache_lock because this is a new collection
+	// and there's no one trying to access these caches
 	ers_chunk_size(db_alloc_ers, 50);
 	ers_chunk_size(db_iterator_ers, 10);
+
+	rwlock->write_unlock(ers_collection_lock(db_ers_collection));
+	rwlock->read_unlock(ers_list_lock);
 	DB_COUNTSTAT(db_init);
 }
 
 /**
  * Finalizes the database system.
+ *
+ * @remarks Acquires write g_ers_list_lock and write db_ers_collection
  * @public
  * @see #db_init(void)
  */
@@ -2916,8 +3028,19 @@ static void db_final(void)
 			stats.db_data2ui,         stats.db_data2ptr,
 			stats.db_init,            stats.db_final);
 #endif /* DB_ENABLE_STATS */
+
+	struct rwlock_data *ers_list_lock = ers_global_lock();
+	rwlock->write_lock(ers_list_lock);
+
+	assert(db_iterator_ers->collection_lock == db_alloc_ers->collection_lock);
+	struct rwlock_data *collection_lock = db_iterator_ers->collection_lock;
+	rwlock->write_lock(collection_lock);
 	ers_destroy(db_iterator_ers);
 	ers_destroy(db_alloc_ers);
+	rwlock->write_unlock(collection_lock);
+
+	ers_collection_destroy(db_ers_collection);
+	rwlock->write_unlock(ers_list_lock);
 }
 
 // Link DB System - jAthena

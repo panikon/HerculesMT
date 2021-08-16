@@ -525,9 +525,9 @@ ERS *ers_new(struct ers_collection_t *collection, uint32 size, char *name,
 	instance->VTable.collection = collection;
 	instance->VTable.collection_lock = collection->lock;
 	instance->VTable.cache_lock = instance->Cache->lock;
-	//rwlock->write_lock(instance->Cache->lock);
+	rwlock->write_lock(instance->Cache->lock);
 	instance->Cache->ReferenceCount++;
-	//rwlock->write_unlock(instance->Cache->lock);
+	rwlock->write_unlock(instance->Cache->lock);
 
 	if (collection->instance_list == NULL) {
 		collection->instance_list = instance;
