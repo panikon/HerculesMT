@@ -29,6 +29,12 @@
 #include "common/showmsg.h"
 #include "common/utils.h"
 
+#ifdef TIMER_USE_THREAD
+#include "common/thread.h"
+#include "common/rwlock.h"
+#include "common/mutex.h"
+#endif
+
 #ifdef WIN32
 #	include "common/winapi.h" // GetTickCount()
 #else
@@ -42,6 +48,24 @@
 
 static struct timer_interface timer_s;
 struct timer_interface *timer;
+
+#ifdef TIMER_USE_THREAD
+/**
+ * Interface to be used by timer functions
+ *
+ * This is a copy of timer_s but without any of the
+ * *_thread functions.
+ * All functions in this interface do not try to
+ * reacquire any locks.
+ **/
+static struct timer_interface timer_thread_s;
+#endif
+/**
+ * Pointer to interface that's passed to timer functions
+ * When TIMER_USE_THREAD is set this is a pointer to timer_thread_s,
+ * otherwise this is the same as timer.
+ **/
+struct timer_interface *tm;
 
 // If the server can't handle processing thousands of monsters
 // or many connected clients, please increase TIMER_MIN_INTERVAL.
@@ -57,6 +81,15 @@ static int timer_data_num = 1;
 static int *free_timer_list = NULL;
 static int free_timer_list_max = 0;
 static int free_timer_list_pos = 0;
+
+// Thread state
+#ifdef TIMER_USE_THREAD
+struct thread_handle *timer_thread_handle = NULL;
+struct mutex_data *timer_perform_mutex = NULL;
+struct mutex_data *timer_shutdown_mutex = NULL;
+struct cond_data *timer_shutdown_event = NULL;
+bool timer_run = true;
+#endif
 
 
 /// Comparator for the timer heap. (minimum tick at top)
@@ -84,20 +117,27 @@ static struct timer_func_list {
 	char* name;
 } *tfl_root = NULL;
 
-/// Sets the name of a timer function.
-static int timer_add_func_list(TimerFunc func, char *name)
+/**
+ * Sets the name of a timer function.
+ *
+ * This is not strictly required in order to add a timer with this function
+ * 'attached', the function list is used when the server is reporting errors.
+ **/
+static void timer_add_func_list(TimerFunc func, char *name)
 {
 	struct timer_func_list* tfl;
 
-	nullpo_ret(func);
-	nullpo_ret(name);
+	nullpo_retv(func);
+	nullpo_retv(name);
 	if (name) {
 		for( tfl=tfl_root; tfl != NULL; tfl=tfl->next )
 		{// check suspicious cases
 			if( func == tfl->func )
-				ShowWarning("timer_add_func_list: duplicating function %p(%s) as %s.\n",tfl->func,tfl->name,name);
+				ShowWarning("timer_add_func_list: duplicating function %p(%s) as %s.\n",
+					tfl->func,tfl->name,name);
 			else if( strcmp(name,tfl->name) == 0 )
-				ShowWarning("timer_add_func_list: function %p has the same name as %p(%s)\n",func,tfl->func,tfl->name);
+				ShowWarning("timer_add_func_list: function %p has the same name as %p(%s)\n",
+					func,tfl->func,tfl->name);
 		}
 		CREATE(tfl,struct timer_func_list,1);
 		tfl->next = tfl_root;
@@ -105,7 +145,6 @@ static int timer_add_func_list(TimerFunc func, char *name)
 		tfl->name = aStrdup(name);
 		tfl_root = tfl;
 	}
-	return 0;
 }
 
 /// Returns the name of the timer function.
@@ -285,7 +324,10 @@ static int64 timer_gettick(void)
  * CORE : Timer Heap
  *--------------------------------------*/
 
-/// Adds a timer to the timer_heap
+/**
+ * Adds a timer to the timer_heap
+ * @mutex timer_perform_mutex
+ **/
 static void push_timer_heap(int tid)
 {
 	BHEAP_ENSURE(timer_heap, 1, 256);
@@ -296,7 +338,10 @@ static void push_timer_heap(int tid)
  * Timer Management
  *--------------------------*/
 
-/// Returns a free timer id.
+/**
+ * Returns a free timer id.
+ * @mutex timer_perform_mutex
+ **/
 static int acquire_timer(void)
 {
 	int tid;
@@ -329,45 +374,25 @@ static int acquire_timer(void)
 	return tid;
 }
 
-/// Starts a new timer that is deleted once it expires (single-use).
-/// Returns the timer's id.
-static int timer_add(int64 tick, TimerFunc func, int id, intptr_t data)
+/**
+ * Starts a new timer.
+ *
+ * @param tick     Starting tick.
+ * @param id       General purpose storage.
+ * @param data     General purpose storage.
+ * @param interval Timer interval
+ * @param type     Timer flag (@see timer flags)
+ * @return Timer id
+ * @retval INVALID_TIMER in failure
+ * @mutex timer_perform_mutex
+ **/
+static int timer_add_sub(int64 tick, TimerFunc func, int id, intptr_t data, int interval, unsigned char type)
 {
 	int tid;
-
 	nullpo_retr(INVALID_TIMER, func);
 
-	tid = acquire_timer();
-	if (timer_data[tid].type != 0 && timer_data[tid].type != TIMER_REMOVE_HEAP)
-	{
-		ShowError("timer_add error: wrong tid type: %d, [%d]%p(%s) -> %p(%s)\n", timer_data[tid].type, tid, func, search_timer_func_list(func), timer_data[tid].func, search_timer_func_list(timer_data[tid].func));
-		Assert_retr(INVALID_TIMER, 0);
-	}
-	if (timer_data[tid].func != NULL)
-	{
-		ShowError("timer_add error: func non NULL: [%d]%p(%s) -> %p(%s)\n", tid, func, search_timer_func_list(func), timer_data[tid].func, search_timer_func_list(timer_data[tid].func));
-		Assert_retr(INVALID_TIMER, 0);
-	}
-	timer_data[tid].tick     = tick;
-	timer_data[tid].func     = func;
-	timer_data[tid].id       = id;
-	timer_data[tid].data     = data;
-	timer_data[tid].type     = TIMER_ONCE_AUTODEL;
-	timer_data[tid].interval = 1000;
-	push_timer_heap(tid);
-
-	return tid;
-}
-
-/// Starts a new timer that automatically restarts itself (infinite loop until manually removed).
-/// Returns the timer's id, or INVALID_TIMER if it fails.
-static int timer_add_interval(int64 tick, TimerFunc func, int id, intptr_t data, int interval)
-{
-	int tid;
-
-	nullpo_retr(INVALID_TIMER, func);
 	if (interval < 1) {
-		ShowError("timer_add_interval: invalid interval (tick=%"PRId64" %p[%s] id=%d data=%"PRIdPTR" diff_tick=%"PRId64")\n",
+		ShowError("timer_add_sub: invalid interval (tick=%"PRId64" %p[%s] id=%d data=%"PRIdPTR" diff_tick=%"PRId64")\n",
 		          tick, func, search_timer_func_list(func), id, data, DIFF_TICK(tick, timer->gettick()));
 		return INVALID_TIMER;
 	}
@@ -375,40 +400,92 @@ static int timer_add_interval(int64 tick, TimerFunc func, int id, intptr_t data,
 	tid = acquire_timer();
 	if (timer_data[tid].type != 0 && timer_data[tid].type != TIMER_REMOVE_HEAP)
 	{
-		ShowError("timer_add_interval: wrong tid type: %d, [%d]%p(%s) -> %p(%s)\n", timer_data[tid].type, tid, func, search_timer_func_list(func), timer_data[tid].func, search_timer_func_list(timer_data[tid].func));
+		ShowError("timer_add_sub: wrong tid type: %d, [%d]%p(%s) -> %p(%s)\n",
+			timer_data[tid].type, tid, func, search_timer_func_list(func),
+			timer_data[tid].func, search_timer_func_list(timer_data[tid].func));
 		Assert_retr(INVALID_TIMER, 0);
-		return INVALID_TIMER;
 	}
 	if (timer_data[tid].func != NULL)
 	{
-		ShowError("timer_add_interval: func non NULL: [%d]%p(%s) -> %p(%s)\n", tid, func, search_timer_func_list(func), timer_data[tid].func, search_timer_func_list(timer_data[tid].func));
+		ShowError("timer_add_sub: func non NULL: [%d]%p(%s) -> %p(%s)\n",
+			tid, func, search_timer_func_list(func), timer_data[tid].func,
+			search_timer_func_list(timer_data[tid].func));
 		Assert_retr(INVALID_TIMER, 0);
-		return INVALID_TIMER;
 	}
 	timer_data[tid].tick     = tick;
 	timer_data[tid].func     = func;
 	timer_data[tid].id       = id;
 	timer_data[tid].data     = data;
-	timer_data[tid].type     = TIMER_INTERVAL;
+	timer_data[tid].type     = type;
 	timer_data[tid].interval = interval;
 	push_timer_heap(tid);
 
 	return tid;
 }
 
-/// Retrieves internal timer data
-static const struct TimerData *timer_get(int tid)
+/**
+ * Starts a new timer that is deleted once it expires (single-use).
+ *
+ * @param tick     Starting tick.
+ * @param id       General purpose storage.
+ * @param data     General purpose storage.
+ * @return Timer id
+ * @retval INVALID_TIMER in failure
+ * @see timer_add_sub
+ **/
+static int timer_add(int64 tick, TimerFunc func, int id, intptr_t data)
 {
-	Assert_retr(NULL, tid > 0);
-	return ( tid >= 0 && tid < timer_data_num ) ? &timer_data[tid] : NULL;
+	return timer->add_sub(tick, func, id, data, 1000, TIMER_ONCE_AUTODEL);
 }
 
-/// Marks a timer specified by 'id' for immediate deletion once it expires.
-/// Param 'func' is used for debug/verification purposes.
-/// Returns 0 on success, < 0 on failure.
+/**
+ * Starts a new timer that automatically restarts itself
+ * (infinite loop until manually removed)
+ *
+ * @param tick     Starting tick.
+ * @param id       General purpose storage.
+ * @param data     General purpose storage.
+ * @param interval Timer interval
+ * @return Timer id
+ * @retval INVALID_TIMER in failure
+ * @see timer_add_sub
+ **/
+static int timer_add_interval(int64 tick, TimerFunc func, int id, intptr_t data, int interval)
+{
+	return timer->add_sub(tick, func, id, data, interval, TIMER_INTERVAL);
+}
+
+/**
+ * Retrieves internal timer data by copy
+ *
+ * @mutex timer_perfom_mutex
+ **/
+static const struct TimerData timer_get(int tid)
+{
+	/**
+	 * Why return by copy? This way the callee can be sure of the ownership
+	 * of the data and that the obtained timer specific data (except the general
+	 * purpose storage) won't change. The previous implementation was already
+	 * using a const pointer, so not much of the behavior will change [Panikon]
+	 **/
+	Assert_retr((struct TimerData){0}, tid > 0);
+	return ( tid >= 0 && tid < timer_data_num ) ? timer_data[tid] : (struct TimerData){0};
+}
+
+/**
+ * Marks a timer specified by 'id' for immediate deletion once it expires
+ *
+ * @param tid Timer id to be deleted
+ * @param func used for debug/verification purposes
+ * @retval 0 Success
+ * @retval -1 No such timer
+ * @retval -2 Function mismatch
+ * @retval -3 Already deleted
+ * @mutex timer_perfom_mutex
+ **/
 static int timer_do_delete(int tid, TimerFunc func)
 {
-	nullpo_ret(func);
+	nullpo_retr(-2, func);
 
 	if (tid < 1 || tid >= timer_data_num) {
 		ShowError("timer_do_delete error : no such timer [%d](%p(%s))\n", tid, func, search_timer_func_list(func));
@@ -434,8 +511,12 @@ static int timer_do_delete(int tid, TimerFunc func)
 	return 0;
 }
 
-/// Adjusts a timer's expiration time.
-/// Returns the new tick value, or -1 if it fails.
+/**
+ * Adjusts a timer's expiration time.
+ *
+ * @return New tick value, or -1 if it fails.
+ * @see timer_settick
+ **/
 static int64 timer_addtick(int tid, int64 tick)
 {
 	if (tid < 1 || tid >= timer_data_num) {
@@ -453,6 +534,7 @@ static int64 timer_addtick(int tid, int64 tick)
  * @param tick New expiration time.
  * @return The new tick value.
  * @retval -1 in case of failure.
+ * @mutex timer_perform_mutex
  */
 static int64 timer_settick(int tid, int64 tick)
 {
@@ -490,11 +572,119 @@ static int64 timer_settick(int tid, int64 tick)
 	return tick;
 }
 
+#ifdef TIMER_USE_THREAD
+// @copydoc timer_add_func_list
+static void timer_add_func_list_guard(TimerFunc func, char *name)
+{
+	mutex->lock(timer_perform_mutex);
+	timer_add_func_list(func, name);
+	mutex->unlock(timer_perform_mutex);
+}
+
+/**
+ * @copydoc timer_add_sub
+ * @remarks Adds mutex guards to timer_add_sub calls
+ **/
+static int timer_add_sub_guard(int64 tick, TimerFunc func, int id, intptr_t data, int interval, unsigned char type)
+{
+	int tid;
+	mutex->lock(timer_perform_mutex);
+	tid = timer_add_sub(tick, func, id, data, interval, type);
+	mutex->unlock(timer_perform_mutex);
+	return tid;
+}
+
+/**
+ * @copydoc timer_addtick
+ * @remarks Instead of using timer as the interface uses tm
+ **/
+static int64 timer_addtick_tm(int tid, int64 tick)
+{
+	if (tid < 1 || tid >= timer_data_num) {
+		ShowError("timer_addtick error : no such timer [%d]\n", tid);
+		Assert_retr(-1, 0);
+		return -1;
+	}
+	return tm->settick(tid, timer_data[tid].tick+tick);
+}
+
+/**
+ * @copydoc timer_add
+ * @remarks Instead of using timer as the interface uses tm
+ **/
+static int timer_add_tm(int64 tick, TimerFunc func, int id, intptr_t data)
+{
+	return tm->add_sub(tick, func, id, data, 1000, TIMER_ONCE_AUTODEL);
+}
+
+/**
+ * @copydoc timer_add_interval
+ * @remarks Instead of using timer as the interface uses tm
+ **/
+static int timer_add_interval_tm(int64 tick, TimerFunc func, int id, intptr_t data, int interval)
+{
+	return tm->add_sub(tick, func, id, data, interval, TIMER_INTERVAL);
+}
+
+/**
+ * @copydoc timer_do_delete
+ * @remarks Adds mutex guards
+ **/
+static int timer_do_delete_guard(int tid, TimerFunc func)
+{
+	int ret;
+	mutex->lock(timer_perform_mutex);
+	ret = timer_do_delete(tid, func);
+	mutex->unlock(timer_perform_mutex);
+	return ret;
+}
+
+/**
+ * @copydoc timer_get
+ * @remarks Adds mutex guards to timer_get calls
+ **/
+static const struct TimerData timer_get_guard(int tid)
+{
+	struct TimerData td;
+	mutex->lock(timer_perform_mutex);
+	td = ( tid >= 0 && tid < timer_data_num ) ? timer_data[tid] : (struct TimerData){0};
+	mutex->unlock(timer_perform_mutex);
+	return td;
+}
+
+/**
+ * @copydoc timer_add_sub
+ * @remarks Adds mutex guards to timer_settick calls
+ **/
+static int64 timer_settick_guard(int tid, int64 tick)
+{
+	int64 ret;
+	mutex->lock(timer_perform_mutex);
+	ret = timer_settick(tid, tick);
+	mutex->unlock(timer_perform_mutex);
+	return tid;
+}
+
+#endif
+
+/**
+ * Returns timer mutex when TIMER_USE_THREAD is defined
+ **/
+static struct mutex_data *timer_get_mutex(void)
+{
+#ifdef TIMER_USE_THREAD
+	return timer_perform_mutex;
+#else
+	return NULL;
+#endif
+}
+
 /**
  * Executes all expired timers.
  *
  * @param tick The current tick.
  * @return The value of the smallest non-expired timer (or 1 second if there aren't any).
+ * @mutex timer_perform_mutex
  */
 static int do_timer(int64 tick)
 {
@@ -515,9 +705,9 @@ static int do_timer(int64 tick)
 		if( timer_data[tid].func ) {
 			if( diff < -1000 )
 				// timer was delayed for more than 1 second, use current tick instead
-				timer_data[tid].func(tid, tick, timer_data[tid].id, timer_data[tid].data);
+				timer_data[tid].func(tm, tid, tick, timer_data[tid].id, timer_data[tid].data);
 			else
-				timer_data[tid].func(tid, timer_data[tid].tick, timer_data[tid].id, timer_data[tid].data);
+				timer_data[tid].func(tm, tid, timer_data[tid].tick, timer_data[tid].id, timer_data[tid].data);
 		}
 
 		// in the case the function didn't change anything...
@@ -555,6 +745,79 @@ static unsigned long timer_get_uptime(void)
 	return (unsigned long)difftime(time(NULL), start_time);
 }
 
+#ifdef TIMER_USE_THREAD
+
+/**
+ * Timer worker thread
+ **/
+void *timer_thread(void *not_used)
+{
+	mutex->lock(timer_shutdown_mutex);
+	while(timer_run) {
+		mutex->cond_wait(timer_shutdown_event, timer_shutdown_mutex, TIMER_MIN_INTERVAL);
+		mutex->lock(timer_perform_mutex);
+		timer->perform(timer->gettick_nocache());
+		mutex->unlock(timer_perform_mutex);
+	}
+	mutex->unlock(timer_shutdown_mutex);
+	return NULL;
+}
+
+/**
+ * Cleans up timer thread state
+ **/
+static void timer_thread_cleanup(void)
+{
+	if(timer_shutdown_mutex)
+		mutex->destroy(timer_shutdown_mutex);
+	if(timer_perform_mutex)
+		mutex->destroy(timer_perform_mutex);
+	if(timer_shutdown_event)
+		mutex->cond_destroy(timer_shutdown_event);
+
+	timer_perform_mutex  = NULL;
+	timer_shutdown_mutex = NULL;
+	timer_shutdown_event = NULL;
+}
+
+/**
+ * Sends shutdown signal to timer thread
+ **/
+static void timer_thread_shutdown(void)
+{
+	ShowInfo("Timer thread shutdown signal...\n");
+	mutex->lock(timer_shutdown_mutex);
+	timer_run = false;
+	mutex->cond_signal(timer_shutdown_event);
+	mutex->unlock(timer_shutdown_mutex);
+
+	thread->wait(timer_thread_handle, NULL);
+	ShowInfo("Timer thread terminated successfuly\n");
+	timer_thread_handle = NULL;
+}
+
+/**
+ * Initializes timer thread state
+ **/
+static void timer_thread_init(void)
+{
+	timer_perform_mutex = mutex->create();
+	timer_shutdown_mutex = mutex->create();
+	timer_shutdown_event = mutex->cond_create();
+	if(!timer_perform_mutex || !timer_shutdown_mutex || !timer_shutdown_event) {
+		ShowFatalError("timer_thread_init: Failed to setup thread state!\n");
+		exit(EXIT_FAILURE);
+	}
+	timer_thread_handle = thread->create("Timer", timer_thread, NULL);
+	if(!timer_thread_handle) {
+		ShowFatalError("timer_thread_init: Could not begin timer_thread!\n");
+		exit(EXIT_FAILURE);
+	}
+	ShowInfo("Started timer thread\n");
+}
+
+#endif // TIMER_USE_THREAD
+
 static void timer_init(void)
 {
 #if defined(ENABLE_RDTSC)
@@ -562,12 +825,20 @@ static void timer_init(void)
 #endif
 
 	time(&start_time);
+#ifdef TIMER_USE_THREAD
+	timer_thread_init();
+#endif
 }
 
 static void timer_final(void)
 {
 	struct timer_func_list *tfl;
 	struct timer_func_list *next;
+
+#ifdef TIMER_USE_THREAD
+	timer_thread_shutdown();
+	mutex->lock(timer_perform_mutex); // Stop any timer handling by other threads
+#endif
 
 	for( tfl=tfl_root; tfl != NULL; tfl = next ) {
 		next = tfl->next; // copy next pointer
@@ -578,6 +849,11 @@ static void timer_final(void)
 	if (timer_data) aFree(timer_data);
 	BHEAP_CLEAR(timer_heap);
 	if (free_timer_list) aFree(free_timer_list);
+
+#ifdef TIMER_USE_THREAD
+	mutex->unlock(timer_perform_mutex);
+	timer_thread_cleanup();
+#endif
 }
 
 /*=====================================
@@ -589,18 +865,52 @@ void timer_defaults(void)
 {
 	timer = &timer_s;
 
-	/* funcs */
+	// Functions that don't access the time heap
 	timer->gettick = timer_gettick;
 	timer->gettick_nocache = timer_gettick_nocache;
-	timer->add = timer_add;
-	timer->add_interval = timer_add_interval;
-	timer->add_func_list = timer_add_func_list;
-	timer->get = timer_get;
-	timer->delete = timer_do_delete;
-	timer->addtick = timer_addtick;
-	timer->settick = timer_settick;
 	timer->get_uptime = timer_get_uptime;
 	timer->perform = do_timer;
 	timer->init = timer_init;
 	timer->final = timer_final;
+	timer->get_mutex = timer_get_mutex;
+	/**
+	 * Functions with time heap access
+	 * The functions that aren't replaced by the *_guard alternatives are the
+	 * ones that internally make calls directly to the timer-> interface. They're
+	 * also the ones that need *_tm replacements in order to change their
+	 * behavior when calling them from the unguarded interface.
+	 **/
+#ifdef TIMER_USE_THREAD
+	timer->delete  = timer_do_delete_guard;
+	timer->settick = timer_settick_guard;
+	timer->add_sub = timer_add_sub_guard;
+	timer->add_func_list = timer_add_func_list_guard;
+	timer->get = timer_get_guard;
+#else
+	timer->delete = timer_do_delete;
+	timer->add_sub = timer_add_sub;
+	timer->settick = timer_settick;
+	timer->add_func_list = timer_add_func_list;
+	timer->get = timer_get;
+#endif
+	timer->add = timer_add;
+	timer->add_interval = timer_add_interval;
+	timer->addtick = timer_addtick;
+
+#ifdef TIMER_USE_THREAD
+	tm = &timer_thread_s;
+	memcpy(&timer_thread_s, &timer, sizeof(timer_thread_s));
+
+	tm->delete        = timer_do_delete;
+	tm->settick       = timer_settick;
+	tm->add_sub       = timer_add_sub;
+	tm->add_func_list = timer_add_func_list;
+	tm->get           = timer_get;
+
+	tm->add           = timer_add_tm;
+	tm->add_interval  = timer_add_interval_tm;
+	tm->addtick       = timer_addtick_tm;
+#else
+	tm = timer;
+#endif
 }

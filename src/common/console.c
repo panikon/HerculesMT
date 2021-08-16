@@ -519,7 +519,7 @@ static void *cThread_main(void *x)
 	return NULL;
 }
 
-static int console_parse_timer(int tid, int64 tick, int id, intptr_t data)
+static int console_parse_timer(struct timer_interface *td, int tid, int64 tick, int id, intptr_t data)
 {
 	int i;
 	EnterSpinLock(console->input->ptlock);

@@ -192,7 +192,7 @@ static int Sql_Ping(struct Sql *self)
 /// Wrapper function for Sql_Ping.
 ///
 /// @private
-static int Sql_P_KeepaliveTimer(int tid, int64 tick, int id, intptr_t data)
+static int Sql_P_KeepaliveTimer(struct timer_interface *td, int tid, int64 tick, int id, intptr_t data)
 {
 	struct Sql *self = (struct Sql *)data;
 	ShowInfo("Pinging SQL server to keep connection alive...\n");

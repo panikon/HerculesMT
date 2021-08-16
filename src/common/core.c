@@ -538,8 +538,11 @@ int main(int argc, char **argv)
 
 	// Main runtime cycle
 	while (core->runflag != CORE_ST_STOP) {
+#ifndef TIMER_USE_THREAD
 		int next = timer->perform(timer->gettick_nocache());
 		sockt->perform(next);
+		// Turn off socket temporarily
+#endif
 	}
 
 	console->final();

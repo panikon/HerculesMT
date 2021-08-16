@@ -26,6 +26,14 @@
 #define DIFF_TICK(a,b) ((a)-(b))
 #define DIFF_TICK32(a,b) ((int32)((a)-(b)))
 
+/**
+ * Multi-threaded timer heap
+ *
+ * When defined the timer functions are processed in a different thread
+ * and all timer insertion / deletion are guarded by a lock.
+ **/
+#define TIMER_USE_THREAD
+
 #define INVALID_TIMER (-1)
 
 // timer flags
@@ -35,9 +43,18 @@ enum {
 	TIMER_REMOVE_HEAP = 0x10,
 };
 
-// Struct declaration
-
-typedef int (*TimerFunc)(int tid, int64 tick, int id, intptr_t data);
+/**
+ * Timer entry function
+ *
+ * @param tm   Timer interface.
+ *             All timer related functions inside a timer func must be called
+ *             from the provided interface, otherwise there could be deadlocks.
+ *             Even if TIMER_USE_THREAD is not defined, as to keep code portable.
+ * @param tick Current tick
+ * @param id   Id set when adding the timer (not the same as timer id!)
+ * @param data General purpose storage
+ **/
+typedef int (*TimerFunc)(struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data);
 
 struct TimerData {
 	int64 tick;
@@ -64,13 +81,16 @@ struct timer_interface {
 
 	int (*add) (int64 tick, TimerFunc func, int id, intptr_t data);
 	int (*add_interval) (int64 tick, TimerFunc func, int id, intptr_t data, int interval);
-	const struct TimerData *(*get) (int tid);
+	int (*add_sub) (int64 tick, TimerFunc func, int id, intptr_t data, int interval, unsigned char type);
+	const struct TimerData (*get) (int tid);
 	int (*delete) (int tid, TimerFunc func);
+
+	struct mutex_data *(*get_mutex) (void);
 
 	int64 (*addtick) (int tid, int64 tick);
 	int64 (*settick) (int tid, int64 tick);
 
-	int (*add_func_list) (TimerFunc func, char* name);
+	void (*add_func_list) (TimerFunc func, char* name);
 
 	unsigned long (*get_uptime) (void);
 

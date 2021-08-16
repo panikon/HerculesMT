@@ -98,8 +98,9 @@ int do_init(int argc, char **argv) {
 	struct s_test_suite first = {0};
 	struct s_test_suite *current = &first;
 
-	current = test_rwlock_add(current);
-	current = test_ers_add(current);
+	current = test_timer_add(current);
+	//current = test_rwlock_add(current);
+	//current = test_ers_add(current);
 	//showmsg->silent |= MSG_DEBUG;
 	test_do(first.next);
 
