@@ -501,8 +501,7 @@ static void *mreallocz_(struct s_memory_information *mem, void *memblock, size_t
 	void *p = NULL;
 
 	if(memblock == NULL) {
-		p = iMalloc->malloc_mem(mem, size,file,line,func);
-		memset(p,0,size);
+		p = iMalloc->calloc_mem(mem, 1, size, file, line, func);
 		return p;
 	}
 

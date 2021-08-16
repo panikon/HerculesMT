@@ -29,6 +29,7 @@
 #include "common/utils.h" // cap_value
 #include "common/nullpo.h"
 #include "common/atomic.h"
+#include "common/mutex.h"
 
 #ifdef WIN32
 #	include "common/winapi.h"
@@ -41,6 +42,7 @@
 #	include <unistd.h>
 #   include <errno.h>
 #endif
+#include <stdlib.h>
 
 /** @file
  * Thread interface implementation.
@@ -54,6 +56,12 @@ struct thread_interface *thread;
 #define THREADS_MAX 130
 /// Default thread stack size upon creation
 #define THREAD_STACK_SIZE (1<<23) // 8MB
+
+enum e_thread_status {
+	THREADSTATUS_CLEAN = 0x0,   //< Thread ready to be setup
+	THREADSTATUS_RESERVED,      //< Thread reserved for setup
+	THREADSTATUS_RUN,           //< Thread running
+};
 
 struct thread_handle {
 	unsigned int myID;
@@ -69,6 +77,7 @@ struct thread_handle {
 	threadFunc proc;
 	void *param;
 	void *result;
+	enum thread_status status;
 
 	#ifdef WIN32
 	HANDLE hThread;
@@ -90,6 +99,7 @@ struct thread_handle {
  **/
 static struct thread_handle l_threads[THREADS_MAX];
 static int32_t l_threads_count = 0;
+static struct mutex_data *l_threads_mutex = NULL;
 
 /**
  * Internal representation of thread id
@@ -189,9 +199,15 @@ static void thread_init(void)
 	g_thread_id = 0;
 	l_threads[0].prio = THREADPRIO_NORMAL;
 	l_threads[0].proc = (threadFunc)0xDEADCAFE;
+	l_threads[0].proc = THREADSTATUS_RUN;
 	l_threads_count = 1;
 
 	thread_prio_init();
+	l_threads_mutex = mutex->create();
+	if(!l_threads_mutex) {
+		ShowFatalError("thread_init: Failed to setup thread mutex!\n");
+		exit(EXIT_FAILURE);
+	}
 }
 
 /// @copydoc thread_interface::final()
@@ -199,15 +215,18 @@ static void thread_final(void)
 {
 	register int i;
 
+	mutex->lock(l_threads_mutex);
 	// Unterminated Threads Left?
 	// Shouldn't happen ... Kill 'em all!
 	for (i = 1; i < THREADS_MAX; i++) {
 		if (l_threads[i].proc != NULL){
-			ShowWarning("thread_final: unterminated Thread (tid %d, name %s, entry_point %p)"
+			ShowWarning("thread_final: unterminated Thread (tid %d, name '%s', entry_point %p)"
 				"- forcing to terminate (kill)\n", i, l_threads[i].name, l_threads[i].proc);
 			thread->destroy(&l_threads[i]);
 		}
 	}
+	mutex->unlock(l_threads_mutex);
+	mutex->destroy(l_threads_mutex);
 }
 
 /**
@@ -219,11 +238,14 @@ static void thread_final(void)
  */
 static void thread_terminated(struct thread_handle *handle)
 {
+	mutex->lock(l_threads_mutex);
 	// Preserve handle->myID and handle->hThread, set everything else to its default value
 	handle->param = NULL;
 	handle->proc = NULL;
 	handle->prio = THREADPRIO_NORMAL;
+	handle->status = THREADSTATUS_CLEAN;
 	handle->name[0] = '\0';
+	mutex->unlock(l_threads_mutex);
 	InterlockedDecrement(&l_threads_count);
 }
 
@@ -259,8 +281,8 @@ static void *thread_main_redirector(void *p)
 	iMalloc->local_storage_final();
 #ifdef WIN32
 	CloseHandle(self->hThread);
+	self->hThread = NULL;
 #endif
-
 	thread_terminated(self);
 #ifdef WIN32
 	return (DWORD)self->result;
@@ -356,6 +378,7 @@ void thread_name_set(const char *name)
 #ifdef WIN32
 	SetThreadName(GetCurrentThreadId(), handle->name);
 #else
+	// TODO: Test
 	pthread_setname_np(handle->hThread, handle->name);
 #endif
 }
@@ -383,12 +406,15 @@ static struct thread_handle *thread_create_opt(const char *name, threadFunc entr
 		stack_size += tmp;
 
 	// Get a free Thread Slot.
+	mutex->lock(l_threads_mutex);
 	for (i = 0; i < THREADS_MAX; i++) {
-		if(l_threads[i].proc == NULL){
+		if(l_threads[i].proc == NULL && l_threads[i].status == THREADSTATUS_CLEAN){
 			handle = &l_threads[i];
+			l_threads[i].status = THREADSTATUS_RESERVED;
 			break;
 		}
 	}
+	mutex->unlock(l_threads_mutex);
 
 	if (handle == NULL) {
 		ShowError("thread_create_opt: cannot create new thread (entry_point: %p)"
@@ -400,6 +426,7 @@ static struct thread_handle *thread_create_opt(const char *name, threadFunc entr
 	handle->param = param;
 	strncpy(handle->name, name, sizeof(handle->name));
 	handle->name[sizeof(handle->name)-1] = '\0';
+	bool creation_success;
 
 #ifdef WIN32
 	/**
@@ -410,25 +437,30 @@ static struct thread_handle *thread_create_opt(const char *name, threadFunc entr
 	 **/
 	handle->hThread = (HANDLE)_beginthreadex(NULL, stack_size,
 		thread_main_redirector, handle, 0, NULL);
-
-	if(!handle->hThread) {
+	creation_success = (handle->hThread != NULL);
+	if(!creation_success) {
 		ShowError("thread_create_opt: failed to create new thread (entry_point: %p) "
 			"error: %ld\n", GetLastError());
-		handle->proc = NULL;
-		handle->param = NULL;
-		return NULL;
 	}
 #else
 	pthread_attr_init(&attr);
 	pthread_attr_setstacksize(&attr, stack_size);
 
-	if (pthread_create(&handle->hThread, &attr, thread_main_redirector, handle) != 0) {
+	int retval = pthread_create(&handle->hThread, &attr, thread_main_redirector, handle);
+	creation_success = (retval != 0);
+	pthread_attr_destroy(&attr);
+	if(!creation_success) {
+		ShowError("thread_create_opt: failed to create new thread (entry_point: %p) "
+			"error: %d\n", retval);
+	}
+#endif
+	if(!creation_success) {
+		mutex->lock(l_threads_mutex);
 		handle->proc = NULL;
 		handle->param = NULL;
-		return NULL;
+		handle->status = THREADSTATUS_CLEAN;
+		mutex->unlock(l_threads_mutex);
 	}
-	pthread_attr_destroy(&attr);
-#endif
 
 	// There's no need to do a context switch if the priority
 	// won't be changed
@@ -474,6 +506,51 @@ static int thread_get_tid(void)
 	return g_thread_id;
 }
 
+/// @copydoc thread_interface::wait_multiple
+static bool thread_wait_multiple(struct thread_handle *handle[], int count, void **out_exit_code)
+{
+	bool retval = true;
+	int failed_ret_count = 0;
+#ifdef WIN32
+	for(int i = 0; i < count; i++) {
+		/**
+		 * WaitForSingleObject was chosen because even if a handle becomes invalid
+		 * while waiting we can still recover and wait for the others in the list,
+		 * and there are no hard limits to the number of objects we can wait without
+		 * having to resort to creating another waiting thread.
+		 **/
+		DWORD wait_result = WaitForSingleObject(handle[i]->hThread, INFINITE);
+		if(wait_result != WAIT_OBJECT_0) {
+			DWORD error_code = GetLastError();
+			if(error_code == ERROR_INVALID_HANDLE && handle[i]->status != THREADSTATUS_RUN)
+				continue; // Thread probably already ended
+			ShowError("thread_wait_multiple(%d/%d): "
+				"Failed to wait for thread[%d] %s, wait_result %ld, error code %ld\n",
+				i, count-1, handle[i]->myID, handle[i]->name, wait_result, GetLastError());
+			failed_ret_count++;
+		}
+	}
+#else
+	// TODO: Test
+	for(int i = 0; i < count; i++) {
+		int ret = pthread_join(handle[i]->hThread, NULL);
+		if(ret != 0) {
+			ShowError("thread_wait_multiple(%d/%d): Failed to wait for thread[%d] %s, error: %d\n",
+				i, count-1, handle[i]->myID, handle[i]->name, ret);
+			failed_ret_count++;
+			// Continue trying to join remaining threads
+		}
+	}
+#endif
+	if(failed_ret_count == count)
+		retval = false;
+	if(out_exit_code) {
+		for(int i = 0; i < count; i++)
+			out_exit_code[i] = handle[i]->result;
+	}
+	return retval;
+}
+
 /// @copydoc thread_interface::wait()
 static bool thread_wait(struct thread_handle *handle, void **out_exit_code)
 {
@@ -504,6 +581,7 @@ static void thread_prio_set(struct thread_handle *handle, enum thread_priority p
 			prio, handle->myID, handle->name, GetLastError());
 	}
 #else
+	// TODO: Test
 	errno = 0;
 	if(setpriority(PRIO_PROCESS, gettid(), thread_dynamic_priority[prio]) && errno) {
 		ShowError("thread_prio_set: Failed to set new priority (%d) for thread[%d] %s, errno %d\n",
@@ -541,6 +619,7 @@ void thread_defaults(void)
 	thread->self = thread_self;
 	thread->get_tid = thread_get_tid;
 	thread->wait = thread_wait;
+	thread->wait_multiple = thread_wait_multiple;
 	thread->name_set = thread_name_set;
 	thread->name_get = thread_name_get;
 	thread->prio_set = thread_prio_set;

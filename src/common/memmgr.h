@@ -37,6 +37,11 @@
 #endif
 #endif
 
+enum memory_type {
+	MEMORYTYPE_NOT_SET,
+	MEMORYTYPE_SHARED,
+	MEMORYTYPE_LOCAL,
+};
 
 //////////////////////////////////////////////////////////////////////
 // Enable memory manager logging by default
@@ -60,6 +65,26 @@
 #	define alStrndup(p,n) (iMalloc->astrndup_thread((p),(n),ALC_MARK))
 #	define alFree(p)      (iMalloc->free_thread((p),ALC_MARK))
 
+/**
+ * Convenience macros to define the flavor of *alloc that's
+ * going to be called, depending on _memtype (@see enum memory_type)_
+ * athena-memory-*
+ **/
+#	define amMalloc(n,_memtype) \
+	( ((_memtype) == MEMORYTYPE_LOCAL)? alMalloc((n)):aMalloc((n)) )
+#	define amCalloc(m,n,_memtype) \
+	( ((_memtype) == MEMORYTYPE_LOCAL)? alCalloc((m),(n)):aCalloc((m),(n)) )
+#	define amRealloc(p,n,_memtype) \
+	( ((_memtype) == MEMORYTYPE_LOCAL)? alRealloc((p),(n)):aRealloc((p),(n)) )
+#	define amReallocz(p,n,_memtype) \
+	( ((_memtype) == MEMORYTYPE_LOCAL)? alReallocz((p),(n)):aReallocz((p),(n)) )
+#	define amStrdup(p,_memtype) \
+	( ((_memtype) == MEMORYTYPE_LOCAL)? alStrdup((p)):aStrdup((p)) )
+#	define amStrndup(p,n,_memtype) \
+	( ((_memtype) == MEMORYTYPE_LOCAL)? alStrndup((p),(n)):aStrndup((p),(n)) )
+#	define amFree(p,_memtype) \
+	( ((_memtype) == MEMORYTYPE_LOCAL)? alFree((p)):aFree((p)) )
+
 /////////////// Buffer Creation /////////////////
 // Full credit for this goes to Shinomori [Ajarn]
 
@@ -70,6 +95,13 @@
 
 #else // others don't, so we emulate them
 
+/**
+ * TODO: Verify the feasibility of replacing aCalloc with alloca. [Panikon]
+ * FIXME: The current 'portable' implementation of CREATE_BUFFER behaves differently
+ * depending on the compiler, while in GCC it allocates memory on the stack (without
+ * any initialization whatsoever) in other compilers it's allocating initialized memory
+ * on the heap via aCalloc. [Panikon]
+ **/
 #define CREATE_BUFFER(name, type, size) type *name = (type *) aCalloc((size), sizeof(type))
 #define DELETE_BUFFER(name) aFree(name)
 
@@ -80,12 +112,12 @@
 #define CREATE(result, type, number) ((result) = (type *) aCalloc((number), sizeof(type)))
 #define RECREATE(result, type, number) ((result) = (type *) aReallocz((result), sizeof(type) * (number)))
 
-////////////////////////////////////////////////
+#define lCREATE(result, type, number) ((result) = (type *) alCalloc((number), sizeof(type)))
+#define lRECREATE(result, type, number) ((result) = (type *) alReallocz((result), sizeof(type) * (number)))
 
-enum memory_type {
-	MEMORYTYPE_SHARED,
-	MEMORYTYPE_LOCAL,
-};
+#define CREATE_MEMORY(_res, _t, _n, _memtype) ( (_res) = amCalloc((_n), sizeof(_t), (_memtype)) )
+#define RECREATE_MEMORY(_res, _t, _n, _memtype) ( (_res) = amReallocz((_res), (sizeof(_t)*(_n)), (_memtype)) )
+////////////////////////////////////////////////
 
 struct s_memory_information;
 

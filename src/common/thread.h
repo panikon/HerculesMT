@@ -148,6 +148,18 @@ struct thread_interface {
 	 */
 	bool (*wait) (struct thread_handle *handle, void **out_exit_code);
 
+	
+	/**
+	 * Waits for multiple threads.
+	 *
+	 * @param handle[in]         Array of thread_handle pointers
+	 * @param count[in]          Length of handle
+	 * @param out_exit_code[out] Pointer to array of exit codes
+	 * @return Success state
+	 *         If all waiting fails returns false, otherwise returns true.
+	 */
+	bool (*wait_multiple)(struct thread_handle *handle[], int count, void **out_exit_code);
+
 	/**
 	 * Sets name of current thread.
 	 *
