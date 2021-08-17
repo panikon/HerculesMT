@@ -52,5 +52,6 @@ struct s_test_suite *test_add(struct s_test_suite *test, test_function_t functio
 struct s_test_suite *test_rwlock_add(struct s_test_suite *test);
 struct s_test_suite *test_ers_add(struct s_test_suite *test);
 struct s_test_suite *test_timer_add(struct s_test_suite *test);
+struct s_test_suite *test_misc_add(struct s_test_suite *test);
 
 #endif /* TEST_ENTRY_H */

@@ -108,6 +108,7 @@ struct mutex_interface {
 	 *
 	 * @param c             The condition var to wait for signaled state.
 	 * @param m             The mutex used for synchronization (must have been acquired).
+	 *                      This mutex is released while waiting but reacquired after return.
 	 * @param timeout_ticks Timeout in ticks (-1 = INFINITE)
 	 * @return Was wait successful? When timeout is infinite always returns true
 	 * @see showmsg_worker for an example

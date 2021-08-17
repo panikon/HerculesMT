@@ -1197,15 +1197,16 @@ HPShared struct db_interface *DB;
 /**
  * Resizes the vector
  *
- * Excess values are discarded, new positions are zeroed.
+ * Excess values are discarded.
  *
  * @param _vec Vector.
  * @param _n   New size.
  * @param _ma  Malloc function.
  * @param _re  Realloc function.
  * @param _fr  Free function.
+ * @param _zero Should the new data be zeroed?
  */
-#define VECTOR_RESIZE_SUB(_vec, _n, _ma, _re, _fr) \
+#define VECTOR_RESIZE_SUB(_vec, _n, _ma, _re, _fr, _zero) \
 	do { \
 		if ((_n) > VECTOR_CAPACITY(_vec)) { \
 			/* increase size */ \
@@ -1213,7 +1214,8 @@ HPShared struct db_interface *DB;
 				VECTOR_DATA(_vec) = _ma((_n)*sizeof(VECTOR_FIRST(_vec))); /* allocate new */ \
 			else \
 				VECTOR_DATA(_vec) = _re(VECTOR_DATA(_vec), (_n)*sizeof(VECTOR_FIRST(_vec))); /* reallocate */ \
-			memset(VECTOR_DATA(_vec)+VECTOR_LENGTH(_vec), 0, (VECTOR_CAPACITY(_vec)-VECTOR_LENGTH(_vec))*sizeof(VECTOR_FIRST(_vec))); /* clear new data */ \
+			if((_zero))\
+				memset(VECTOR_DATA(_vec)+VECTOR_LENGTH(_vec), 0, (VECTOR_CAPACITY(_vec)-VECTOR_LENGTH(_vec))*sizeof(VECTOR_FIRST(_vec))); /* clear new data */ \
 			VECTOR_CAPACITY(_vec) = (_n); /* update capacity */ \
 		} else if ((_n) == 0 && VECTOR_CAPACITY(_vec) > 0) { \
 			/* clear vector */ \
@@ -1236,13 +1238,14 @@ HPShared struct db_interface *DB;
  * _SHARED Uses shared memory allocation
  * _LOCAL  Uses local memory allocation
  *
- * @param _vec Vector.
- * @param _n   New size.
+ * @param _vec  Vector.
+ * @param _n    New size.
+ * @param _zero Should the new data be zeroed?
  * @see VECTOR_RESIZE_SUB
  */
-#define VECTOR_RESIZE(_vec, _n) VECTOR_RESIZE_SUB(_vec, _n, aMalloc, aRealloc, aFree)
-#define VECTOR_RESIZE_SHARED(_vec, _n) VECTOR_RESIZE(_vec, _n)
-#define VECTOR_RESIZE_LOCAL(_vec, _n) VECTOR_RESIZE_SUB(_vec, _n, alMalloc, alRealloc, alFree)
+#define VECTOR_RESIZE_SHARED(_vec, _n, _zero) VECTOR_RESIZE_SUB(_vec, _n, aMalloc, aRealloc, aFree, _zero)
+#define VECTOR_RESIZE_LOCAL(_vec, _n, _zero) VECTOR_RESIZE_SUB(_vec, _n, alMalloc, alRealloc, alFree, _zero)
+#define VECTOR_RESIZE(_vec, _n) VECTOR_RESIZE_SHARED(_vec, _n, true)
 
 /**
  * Ensures that the array has the target number of empty positions.
@@ -1259,7 +1262,7 @@ HPShared struct db_interface *DB;
 		while ((_n) + VECTOR_LENGTH(_vec) > _newcapacity_) \
 			_newcapacity_ += (_step); \
 		if (_newcapacity_ > VECTOR_CAPACITY(_vec)) \
-			VECTOR_RESIZE##_mem(_vec, _newcapacity_); \
+			VECTOR_RESIZE##_mem(_vec, _newcapacity_, true); \
 	} while(false)
 
 /**
@@ -1514,7 +1517,7 @@ HPShared struct db_interface *DB;
 #define VECTOR_INIT_CAPACITY_SUB(_vec, _n, _mem) \
 	do { \
 		VECTOR_INIT(_vec); \
-		VECTOR_RESIZE##_mem(_vec, _n); \
+		VECTOR_RESIZE##_mem(_vec, _n, true); \
 	} while(false)
 #define VECTOR_INIT_CAPACITY(_vec, _n) VECTOR_INIT_CAPACITY_SUB(_vec, _n, _SHARED)
 #define VECTOR_INIT_CAPACITY_SHARED(_vec, _n) VECTOR_INIT_CAPACITY_SUB(_vec, _n, _SHARED)
@@ -1984,38 +1987,32 @@ HPShared struct db_interface *DB;
  *
  * @param _que Queue
  **/
-#define QUEUE_DEQUEUE(_que)                                           \
-	do {                                                              \
-		if(!QUEUE_LENGTH(_que))                                       \
-			break;                                                    \
-		if((_que)._front_ != (_que)._back_) {                         \
-			(_que)._front_ = ((_que)._front_+1)%QUEUE_CAPACITY(_que); \
-		} else {                                                      \
-			/* This is the last queued item */                        \
-			(_que)._front_ = 0;                                       \
-			(_que)._back_ = 0;                                        \
-		}                                                             \
-		QUEUE_LENGTH(_que) -= 1;                                      \
+#define QUEUE_DEQUEUE(_que)                                       \
+	do {                                                          \
+		if(!QUEUE_LENGTH(_que))                                   \
+			break;                                                \
+		(_que)._front_ = ((_que)._front_+1)%QUEUE_CAPACITY(_que); \
+		QUEUE_LENGTH(_que) -= 1;                                  \
 	} while(false)
 
 /**
- * Grows queue and moves all data beggining from _front_ to the right
+ * Grows queue
  *
  * @param _que Queue
  * @param _step Growth factor
  * @param _mem Memory manager type
  **/
-#define QUEUE_GROW(_que, _step, _mem)                                   \
-	do {                                                                \
-		int _old_size_ = QUEUE_CAPACITY(_que);                          \
-		VECTOR_RESIZE##_mem(QUEUE_VECTOR(_que), _old_size_*(_step));    \
-		if((_que)._front_ > (_que)._back_) {                            \
-			/* _back_ was wrapped, reposition in new vector */          \
-			memcpy(&QUEUE_INDEX(_que, _old_size_),                      \
-			       &QUEUE_INDEX(_que, 0),                               \
-			       sizeof(QUEUE_INDEX(_que, 0))*(_que)._front_);        \
-			(_que)._back_ += _old_size_;                                \
-		}                                                               \
+#define QUEUE_GROW(_que, _step, _mem)                                                \
+	do {                                                                             \
+		int _old_size_ = (QUEUE_CAPACITY(_que))?QUEUE_CAPACITY(_que):1;              \
+		VECTOR_RESIZE##_mem(QUEUE_VECTOR(_que), _old_size_*(_step), false);          \
+		if((_que)._front_ > (_que)._back_ && (_que)._back_ != QUEUE_DEFAULT_BACK) {  \
+			/* _back_ was wrapped, reposition in new vector */                       \
+			memcpy(&QUEUE_INDEX(_que, _old_size_),                                   \
+			       &QUEUE_INDEX(_que, 0),                                            \
+			       sizeof(QUEUE_INDEX(_que, 0))*(_que)._front_);                     \
+			(_que)._back_ += _old_size_;                                             \
+		}                                                                            \
 	} while(false)
 
 /**

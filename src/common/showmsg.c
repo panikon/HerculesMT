@@ -770,13 +770,14 @@ static int showmsg_print(enum msg_type flag, const char *string, int str_len);
 
 /**
  * Dequeues all remaining messages and prints  them via showmsg_print
+ * @mutex showmsg_mutex
  **/
 static void showmsg_dequeue_print(void)
 {
 	while(QUEUE_LENGTH(showmsg_queue)) {
 		struct showmsg_queue_data *message;
-		QUEUE_DEQUEUE(showmsg_queue);
 		message = &QUEUE_FRONT(showmsg_queue);
+		QUEUE_DEQUEUE(showmsg_queue);
 		showmsg_print(message->flag, message->str, message->len);
 		if(message->str)
 			iMalloc->rfree(message->str);
@@ -987,7 +988,7 @@ static int showmsg_print(enum msg_type flag, const char *string, int str_len)
 {
 	char prefix[100];
 	if(!string || *string == '\0' || !str_len) {
-		ShowError("showmsg_print: string was empty\n");
+		ShowWarning("showmsg_print: string was empty. Possible queue corruption!\n");
 		return 1;
 	}
 	if(showmsg->console_log&flag)
