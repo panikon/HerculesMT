@@ -559,8 +559,14 @@ int main(int argc, char **argv)
 	//sysinfo->final(); Called by iMalloc->final()
 
 	nullpo->final();
-	iMalloc->final();
-	showmsg->final(); // Should be after iMalloc->final()
+	showmsg->final();
 	thread->final();
+	// In the end of each thread there's a call to the memory manager in order
+	// to cleanup thread_local memory, even if there are still calls to showmsg_*
+	// functions in the memory manager this is not an issue as those calls are
+	// treated as if SHOWMSG_USE_THREAD was not defined @see vShowMessage_
+	// ERS local storage is also cleaned up after thread end
+	// @see thread_main_redirector
+	iMalloc->final();
 	return retval;
 }

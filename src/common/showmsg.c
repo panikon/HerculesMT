@@ -691,7 +691,17 @@ char *vshowmsg_(const char *format, va_list ap, int *out_len)
 	char *buffer = NULL;
 
 	va_copy(apcopy, ap);
+#if !defined(WIN32) || _MSC_VER >= 1900
 	len = vsnprintf(NULL, 0, format, apcopy);
+#else
+	/**
+	 * In MSVC versions older than 2015 vsnprintf maps to _vsnprintf, the latter
+	 * isn't C99 compliant and doesn't accept NULL as buffer, the other differences
+	 * won't matter for our usage of vsnprintf in the remainder of this function
+	 * @see docs.microsoft.com/en-us/cpp/c-runtime-library/reference/vsnprintf-vsnprintf-vsnprintf-l-vsnwprintf-vsnwprintf-l
+	 **/
+	len = _vscprintf(format, apcopy);
+#endif
 	if(len > 0) {
 		len++;
 		// Memory management uses showmsg functions and showmsg is used
@@ -701,9 +711,9 @@ char *vshowmsg_(const char *format, va_list ap, int *out_len)
 			FPRINTF(STDERR, "vshowmsg_: rmalloc out of memory!\n");
 			exit(EXIT_FAILURE);
 		}
-		len = vsnprintf(buffer, len, format, apcopy);
+		len = vsnprintf(buffer, len, format, ap);
 		if(len < 0)
-			aFree(buffer);
+			iMalloc->rfree(buffer);
 	}
 	va_end(apcopy);
 	*out_len = len;
@@ -806,7 +816,6 @@ static void showmsg_runflag_set(bool runflag)
  **/
 static void showmsg_thread_cleanup(void)
 {
-	showmsg_dequeue_print(); // Try to print everything that's remaining
 	QUEUE_CLEAR(showmsg_queue);
 	if(showmsg_mutex) {
 		mutex->destroy_no_management(showmsg_mutex);
@@ -815,10 +824,6 @@ static void showmsg_thread_cleanup(void)
 	if(showmsg_wake) {
 		mutex->cond_destroy_no_management(showmsg_wake);
 		showmsg_wake = NULL;
-	}
-	if(showmsg_thread) {
-		thread->destroy(showmsg_thread);
-		showmsg_thread = NULL;
 	}
 	showmsg_runflag = false;
 }
@@ -835,6 +840,7 @@ static void showmsg_thread_final(void)
 
 	showmsg_runflag_set(false);
 	thread->wait(showmsg_thread, NULL);
+	showmsg_thread = NULL;
 	showmsg_thread_cleanup();
 }
 
@@ -1021,12 +1027,12 @@ static int vShowMessage_(enum msg_type flag, const char *string, va_list ap)
 #ifdef SHOWMSG_USE_THREAD
 	if(showmsg_thread) {
 		va_copy(apcopy, ap);
-		ret = vShowMessage_thread_(flag, string, ap);
+		ret = vShowMessage_thread_(flag, string, apcopy);
 		va_end(apcopy);
 		return ret;
 	}
 	// Fall-through
-	// System wasn't initialized yet
+	// Thread is not currently active
 #endif
 	int len = 0;
 	va_copy(apcopy, ap);

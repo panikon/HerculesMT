@@ -879,7 +879,7 @@ static size_t memmgr_usage(struct s_memory_information *mem)
 #ifdef LOG_MEMMGR
 static char memmer_logfile[128]; // File name
 static FILE *log_fp = NULL; // Log file pointer (set at memmgr_log)
-static struct mutex_data *log_mutex = NULL;
+static struct mutex_data *log_fp_mutex = NULL;
 
 /**
  * Logs message to log file
@@ -1026,14 +1026,14 @@ static void memmgr_final_sub(struct s_memory_information *mem, char *vcsinfo, co
 static void memmgr_local_storage_final(void)
 {
 #ifdef LOG_MEMMGR
-	mutex->lock(log_mutex);
+	mutex->lock(log_fp_mutex);
 #endif
 	char vcsinfo[256];
 	snprintf(vcsinfo, sizeof(vcsinfo), "%s rev '%s'", sysinfo->vcstype(),
 	sysinfo->vcsrevision_src());
 	memmgr_final_sub(&local_memory, vcsinfo, "local");
 #ifdef LOG_MEMMGR
-	mutex->unlock(log_mutex);
+	mutex->unlock(log_fp_mutex);
 #endif
 }
 
@@ -1042,7 +1042,7 @@ static void memmgr_final(void)
 	memmgr_local_storage_final();
 
 #ifdef LOG_MEMMGR
-	mutex->lock(log_mutex);
+	mutex->lock(log_fp_mutex);
 #endif
 	mutex->lock(shared_memory_mutex);
 
@@ -1056,9 +1056,9 @@ static void memmgr_final(void)
 	mutex->destroy_no_management(shared_memory_mutex);
 	shared_memory_mutex = NULL;
 #ifdef LOG_MEMMGR
-	mutex->unlock(log_mutex);
-	mutex->destroy_no_management(log_mutex);
-	log_mutex = NULL;
+	mutex->unlock(log_fp_mutex);
+	mutex->destroy_no_management(log_fp_mutex);
+	log_fp_mutex = NULL;
 #endif
 }
 
@@ -1220,7 +1220,7 @@ static void memmgr_init(void)
 	memmgr_log_init(&shared_memory);
 #endif
 
-	log_mutex = mutex->create_no_management();
+	log_fp_mutex = mutex->create_no_management();
 	shared_memory_mutex = mutex->create_no_management();
 	if(!shared_memory_mutex) {
 		ShowFatalError("memmgr_init: Failed to allocate memory for new mutex\n");
