@@ -161,10 +161,10 @@ typedef struct eri {
 	 * Lock pointers
 	 *
 	 * @remarks
-	 * All acquirals of cache_lock must be preceded by an acquiral
+	 * All acquirals of cache_mutex must be preceded by an acquiral
 	 * of collection_lock (read or write)
 	 **/
-	struct rwlock_data *cache_lock;      //< @see cache_list::lock
+	struct mutex_data *cache_mutex;      //< @see cache_list::mutex
 	struct rwlock_data *collection_lock; //< @see ers_collection_t::lock
 
 	/**
@@ -175,9 +175,8 @@ typedef struct eri {
 	 * @param self Interface of the entry manager
 	 * @return An entry
 	 *
-	 * @readlock g_ers_list_lock
 	 * @readlock collection_lock
-	 * @writelock cache_lock
+	 * @mutex cache_mutex
 	 */
 	void *(*alloc)(struct eri *self);
 
@@ -189,9 +188,8 @@ typedef struct eri {
 	 * @param self Interface of the entry manager
 	 * @param entry Entry to be freed
 	 *
-	 * @readlock g_ers_list_lock
 	 * @readlock collection_lock
-	 * @writelock cache_lock
+	 * @mutex cache_mutex
 	 */
 	void (*free)(struct eri *self, void *entry);
 
@@ -201,9 +199,8 @@ typedef struct eri {
 	 * @param self Interface of the entry manager
 	 * @return Size of the entries of this manager in bytes
 	 *
-	 * @readlock g_ers_list_lock
 	 * @readlock collection_lock
-	 * @readlock cache_lock
+	 * @mutex cache_mutex
 	 */
 	size_t (*entry_size)(struct eri *self);
 
@@ -217,8 +214,8 @@ typedef struct eri {
 	 * @param self Interface of the entry manager
 	 * @return Number of leaks detected
 	 *
-	 * @readlock g_ers_list_lock
 	 * @writelock collection_lock
+	 * Acquires cache lock internally
 	 */
 	int (*destroy)(struct eri *self);
 
@@ -229,15 +226,15 @@ typedef struct eri {
 	 * @param new_size New chunk size in bytes
 	 * @see ers_cache::ChunkSize
 	 *
-	 * @readlock ers_list_lock
-	 * @writelock cache_lock
+	 * @readlock collection_lock
+	 * @mutex cache_mutex
 	 */
 	void (*chunk_size) (struct eri *self, unsigned int new_size);
 } ERS;
 
 #ifdef DISABLE_ERS
 // Use memory manager to allocate/free and disable other interface functions
-#	define ers_alloc(obj,type) ((void)(obj), (type *)aMalloc(sizeof(type)))
+#	define ers_alloc(obj) ((void)(obj), aMalloc(sizeof(type)))
 #	define ers_free(obj,entry) ((void)(obj), aFree(entry))
 #	define ers_entry_size(obj) ((void)(obj), (size_t)0)
 #	define ers_destroy(obj) ((void)(obj), (void)0)
@@ -252,12 +249,11 @@ typedef struct eri {
 #else /* not DISABLE_ERS */
 // These defines should be used to allow the code to keep working whenever
 // the system is disabled
-#	define ers_alloc(obj,type) ((type *)(obj)->alloc(obj))
+#	define ers_alloc(obj) ((obj)->alloc(obj))
 #	define ers_free(obj,entry) ((obj)->free((obj),(entry)))
 #	define ers_entry_size(obj) ((obj)->entry_size(obj))
 #	define ers_destroy(obj)    ((obj)->destroy(obj))
 #	define ers_chunk_size(obj,size) ((obj)->chunk_size((obj),(size)))
-
 #ifdef HERCULES_CORE
 
 /**
@@ -273,7 +269,6 @@ typedef struct eri {
  * @param options ERS options (@see ERSOptions)
  * @return Interface of the object
  *
- * @readlock g_ers_list_lock
  * @writelock ers_collection_t::lock
  * @warning Be extra careful when setting up a new instance, because internally
  *          this function tries to acquire the write lock of the cache.
@@ -284,8 +279,6 @@ void ers_report(void);
 struct ers_collection_t *ers_collection_create(enum memory_type memory_type);
 void ers_collection_destroy(struct ers_collection_t *ers_cur);
 struct rwlock_data *ers_collection_lock(struct ers_collection_t *collection);
-
-struct rwlock_data *ers_global_lock(void);
 
 /**
  * Clears the remainder of the managers

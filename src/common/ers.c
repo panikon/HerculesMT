@@ -71,6 +71,9 @@
 #include "common/nullpo.h"
 #include "common/showmsg.h" // ShowMessage, ShowError, ShowFatalError, CL_BOLD, CL_NORMAL
 #include "common/rwlock.h"
+#include "common/mutex.h"
+#include "common/utils.h"
+#include "common/db.h" // INDEX_MAP_
 
 #include <stdlib.h>
 #include <string.h>
@@ -90,18 +93,14 @@ struct ers_instance_t;
 /**
  * ERS cache for an entry size
  *
- * @lock ers_cache::lock
+ * @lock ers_cache::mutex
  **/
 typedef struct ers_cache
 {
 	/**
 	 * Lock used on all cache operations
-	 *
-	 * @remarks
-	 * All acquirals of cache_lock must be preceded by an acquiral
-	 * of collection_lock (read or write)
 	 **/
-	struct rwlock_data *lock;
+	struct mutex_data *mutex;
 
 	// Allocated object size, including ers_list size
 	unsigned int ObjectSize;
@@ -133,8 +132,10 @@ typedef struct ers_cache
 	// Misc options, some options are shared from the instance
 	enum ERSOptions Options;
 
-	// Linked list
-	struct ers_cache *Next, *Prev;
+	/**
+	 * Position in cache list
+	 **/
+	uint32_t pos;
 } ers_cache_t;
 
 struct ers_instance_t {
@@ -162,6 +163,9 @@ struct ers_instance_t {
 #endif
 	struct ers_instance_t *Next, *Prev;
 };
+
+// Cache list type
+INDEX_MAP_STRUCT_DECL(s_cache_list, ers_cache_t);
 
 /**
  * ERS instances and caches
@@ -206,12 +210,10 @@ struct ers_collection_t {
 	struct ers_instance_t *instance_list;
 
 	/**
-	 * Doubly-linked list of entry caches
-	 *
-	 * @readlock g_ers_list_lock
+	 * List of all caches of this collection
 	 * @lock ers_collection_t::lock
 	 **/
-	ers_cache_t *cache_list;
+	struct s_cache_list cache_list;
 
 	/**
 	 * Lock used to handle any operations in this collection
@@ -219,13 +221,9 @@ struct ers_collection_t {
 	struct rwlock_data *lock;
 
 	/**
-	 * Doubly-linked list implementation, this is used in order
-	 * to debug and also finalize all collections if necessary
-	 *
-	 * @writelock g_ers_list_lock
-	 * @writelock ers_collection_t::lock
+	 * Position in ers collection list
 	 **/
-	struct ers_collection_t *next, *prev;
+	uint32_t pos;
 };
 
 /**
@@ -237,20 +235,19 @@ static struct ers_collection_t *ers_global = NULL;
 
 /**
  * All ERS collections of this server
- *
- * All of the collections are in a doubly-linked list (ers_list)
- * and thus in order to access the information within a read-lock
- * of ers_list_lock should be acquired. Write-locks should only
- * be acquired in insertion/deletion operations.
- * @warning NEVER try to acquire _write_ g_ers_list_lock while holding
- *          a cache_list::lock!
- * @remarks The order of lock acquiral should always be g_ers_list_lock
- *          and then cache_list::lock
  **/
-static struct ers_collection_t *g_ers_list = NULL;
-static struct rwlock_data *g_ers_list_lock = NULL;
+INDEX_MAP_STRUCT_DECL(s_collection_list, struct ers_collection_t);
+static struct s_collection_list g_ers_list = INDEX_MAP_STATIC_INITIALIZER(MEMORYTYPE_SHARED);
+struct mutex_data *g_ers_list_mutex = NULL; //< Free index list mutex
 
-static thread_local struct ers_collection_t *l_ers_list = NULL; // Local ers list
+static thread_local struct s_collection_list l_ers_list = INDEX_MAP_STATIC_INITIALIZER(MEMORYTYPE_LOCAL);
+
+/**
+ * Initial length of free index lists, the length of the lists is always
+ * ers_list_free_length * 32
+ **/
+#define ERS_LIST_FREE_INITIAL 2
+#define ERS_CACHE_LIST_FREE_INITIAL 2
 
 /**
  * Creates an ERS cache
@@ -276,9 +273,9 @@ static ers_cache_t *ers_create_cache(unsigned int size, enum ERSOptions options)
 	cache->Max = 0;
 	cache->ChunkSize = ERS_BLOCK_ENTRIES;
 	cache->Options = (options & ERS_CACHE_OPTIONS);
-	assert((options&ERS_OPT_MEMORY_LOCAL) == (cache->Options&ERS_OPT_MEMORY_LOCAL)); // FIXME: Remove later
+
 	if(memory_type == MEMORYTYPE_SHARED)
-		cache->lock = rwlock->create();
+		cache->mutex = mutex->create();
 
 	return cache;
 }
@@ -296,28 +293,21 @@ static ers_cache_t *ers_create_cache(unsigned int size, enum ERSOptions options)
  *
  * @writelock ers_collection_t::lock
  **/
-static ers_cache_t *ers_find_cache(ers_cache_t *cache_list, unsigned int size, enum ERSOptions Options)
-{
+static ers_cache_t *ers_find_cache(struct s_cache_list *cache_list, unsigned int size,
+	enum ERSOptions Options
+) {
 	ers_cache_t *cache;
 
-	for (cache = cache_list; cache; cache = cache->Next)
+	for(uint32_t i = 0; i < INDEX_MAP_LENGTH(*cache_list); i++) {
+		cache = INDEX_MAP_INDEX(*cache_list, i);
+		if(!cache)
+			continue;
 		if ( cache->ObjectSize == size && cache->Options == ( Options & ERS_CACHE_OPTIONS ) )
 			return cache;
+	}
 
 	cache = ers_create_cache(size, Options);
-
-	if (cache_list == NULL)
-	{
-		return cache;
-	}
-	else
-	{
-		cache->Next = cache_list;
-		cache->Next->Prev = cache;
-		cache_list = cache;
-		cache_list->Prev = NULL;
-	}
-
+	INDEX_MAP_ADD(*cache_list, cache, cache->pos);
 	return cache;
 }
 
@@ -328,8 +318,10 @@ static ers_cache_t *ers_find_cache(ers_cache_t *cache_list, unsigned int size, e
  * @param cache Cache to be freed.
  *
  * @writelock ers_collection_t::lock
+ * @mutex cache_mutex
+ * @remark The cache mutex is destroyed in this call
  **/
-static void ers_free_cache(ers_cache_t *cache_list, ers_cache_t *cache)
+static void ers_free_cache(struct s_cache_list *cache_list, ers_cache_t *cache)
 {
 	unsigned int i;
 
@@ -340,17 +332,13 @@ static void ers_free_cache(ers_cache_t *cache_list, ers_cache_t *cache)
 	for (i = 0; i < cache->Used; i++)
 		amFree(cache->Blocks[i], memory_type);
 
-	if (cache->Next)
-		cache->Next->Prev = cache->Prev;
-
-	if (cache->Prev)
-		cache->Prev->Next = cache->Next;
-	else
-		cache_list = cache->Next;
+	INDEX_MAP_REMOVE(*cache_list, cache->pos);
 
 	amFree(cache->Blocks, memory_type);
-	if(cache->lock)
-		rwlock->destroy(cache->lock);
+	if(cache->mutex) {
+		mutex->unlock(cache->mutex);
+		mutex->destroy(cache->mutex);
+	}
 
 	amFree(cache, memory_type);
 }
@@ -444,11 +432,15 @@ static int ers_obj_destroy(ERS *self)
 {
 	struct ers_instance_t *instance = (struct ers_instance_t *)self;
 	int leak_count = 0;
+	int cache_reference = 0;
 
 	if (instance == NULL) {
 		ShowError("ers_obj_destroy: NULL object, aborting entry freeing.\n");
 		return 0;
 	}
+
+	if(self->cache_mutex)
+		mutex->lock(self->cache_mutex);
 
 	if (instance->Count > 0) {
 		if (!(instance->Options & ERS_OPT_CLEAR)) {
@@ -459,7 +451,9 @@ static int ers_obj_destroy(ERS *self)
 	}
 
 	if (--instance->Cache->ReferenceCount <= 0)
-		ers_free_cache(self->collection->cache_list, instance->Cache);
+		ers_free_cache(&self->collection->cache_list, instance->Cache);
+	else if(self->cache_mutex)
+		mutex->unlock(self->cache_mutex);
 
 	if (instance->Next)
 		instance->Next->Prev = instance->Prev;
@@ -521,13 +515,13 @@ ERS *ers_new(struct ers_collection_t *collection, uint32 size, char *name,
 	instance->Name = ( options & ERS_OPT_FREE_NAME ) ? amStrdup(name, memory_type) : name;
 	instance->Options = options;
 
-	instance->Cache = ers_find_cache(collection->cache_list, size,instance->Options);
+	instance->Cache = ers_find_cache(&collection->cache_list, size,instance->Options);
 	instance->VTable.collection = collection;
 	instance->VTable.collection_lock = collection->lock;
-	instance->VTable.cache_lock = instance->Cache->lock;
-	rwlock->write_lock(instance->Cache->lock);
+	instance->VTable.cache_mutex = instance->Cache->mutex;
+	mutex->lock(instance->Cache->mutex);
 	instance->Cache->ReferenceCount++;
-	rwlock->write_unlock(instance->Cache->lock);
+	mutex->unlock(instance->Cache->mutex);
 
 	if (collection->instance_list == NULL) {
 		collection->instance_list = instance;
@@ -547,14 +541,17 @@ ERS *ers_new(struct ers_collection_t *collection, uint32 size, char *name,
  * Prints cache information report.
  *
  * @see ers_report
- * @readlock g_ers_list_lock
+ * @mutex g_ers_list_free_mutex when MEMORY_SHARED
  **/
-void ers_report_cache(struct ers_cache *cache_list)
+void ers_report_cache(struct s_cache_list *cache_list)
 {
 	struct ers_cache *cache;
 	unsigned int cache_c = 0, blocks_u = 0, blocks_a = 0, memory_b = 0, memory_t = 0;
-	for (cache = cache_list; cache; cache = cache->Next) {
-		rwlock->read_lock(cache->lock);
+	for(uint32_t i = 0; i < INDEX_MAP_LENGTH(*cache_list); i++) {
+		cache = INDEX_MAP_INDEX(*cache_list, i);
+		if(!cache)
+			continue;
+		mutex->lock(cache->mutex);
 		double memory_use, memory_allocated;
 		cache_c++;
 		ShowMessage(
@@ -579,7 +576,7 @@ void ers_report_cache(struct ers_cache *cache_list)
 		blocks_a += cache->UsedObjs + cache->Free;
 		memory_b += cache->UsedObjs * cache->ObjectSize;
 		memory_t += (cache->UsedObjs+cache->Free) * cache->ObjectSize;
-		rwlock->read_unlock(cache->lock);
+		mutex->unlock(cache->mutex);
 	}
 	ShowInfo("ers_report: '"CL_WHITE"%u"CL_NORMAL"' caches in use\n",cache_c);
 	ShowInfo("ers_report: '"CL_WHITE"%u"CL_NORMAL"' blocks in use, consuming "
@@ -592,7 +589,7 @@ void ers_report_cache(struct ers_cache *cache_list)
  * Prints instance information report.
  *
  * @see ers_report
- * @readlock g_ers_list_lock
+ * @mutex g_ers_list_free_mutex when MEMORY_SHARED
  **/
 #ifdef DEBUG
 void ers_report_instance(struct ers_instance_t *instance_list)
@@ -627,36 +624,41 @@ void ers_report_instance(struct ers_instance_t *instance_list)
 #endif
 
 /**
- * Print a report about the current state of the Entry Reusage System.
+ * Prints a report about the current state of the Entry Reusage System.
  * Shows information about the global system and each entry manager.
  * The number of entries are checked and a warning is shown if extra reusable
  * entries are found.
  * The extra entries are included in the count of reusable entries.
  *
- * @readlock g_ers_list_lock
  * @remarks This function will try to acquire the following read locks:
  *            - ers_collection_t::lock
  *            - cache_list::lock
+ * @remarks This function acquires g_ers_list_free_mutex
  **/
 void ers_report(void)
 {
-	struct ers_collection_t *ers_cur;
 	ShowMessage(CL_BOLD"[ERS Global Report]\n"CL_NORMAL);
-	for(ers_cur = g_ers_list; ers_cur; ers_cur = ers_cur->next) {
-		rwlock->read_lock(ers_cur->lock);
+
+	mutex->lock(g_ers_list_mutex);
+	for(uint32_t i = 0; i < INDEX_MAP_LENGTH(g_ers_list); i++) {
+		struct ers_collection_t *collection = INDEX_MAP_INDEX(g_ers_list, i);
+		if(!collection)
+			continue;
+		rwlock->read_lock(collection->lock);
 #ifdef DEBUG
-		ers_report_instance(ers_cur->instance_list);
+		ers_report_instance(collection->instance_list);
 #endif
-		ers_report_cache(ers_cur->cache_list);
-		rwlock->read_unlock(ers_cur->lock);
+		ers_report_cache(&collection->cache_list);
+		rwlock->read_unlock(collection->lock);
 	}
+	mutex->unlock(g_ers_list_mutex);
 }
 
 /**
  * Creates a new ERS collection
  *
  * @param memory_type Type of memory allocation
- * @writelock g_ers_list_lock
+ * @mutex g_ers_list_free_mutex when MEMORY_SHARED
  **/
 struct ers_collection_t *ers_collection_create(enum memory_type memory_type) {
 	struct ers_collection_t *ers_collection;
@@ -668,16 +670,19 @@ struct ers_collection_t *ers_collection_create(enum memory_type memory_type) {
 		return NULL;
 	}
 	ers_collection->type = memory_type;
+	INDEX_MAP_CREATE(ers_collection->cache_list, ERS_CACHE_LIST_FREE_INITIAL, memory_type);
 
 	// Add this collection to the correct list
-	struct ers_collection_t **list =
-		(memory_type == MEMORYTYPE_SHARED)?&g_ers_list:&l_ers_list;
-	if(*list) {
-		ers_collection->prev = NULL;
-		ers_collection->next = *list;
-		(*list)->prev = ers_collection;
+	if(memory_type == MEMORYTYPE_SHARED) {
+		mutex->lock(g_ers_list_mutex);
+		INDEX_MAP_ADD(g_ers_list, ers_collection, ers_collection->pos);
+		mutex->unlock(g_ers_list_mutex);
+		return ers_collection;
 	}
-	*list = ers_collection;
+	if(!INDEX_MAP_LENGTH(l_ers_list)) {
+		INDEX_MAP_CREATE(l_ers_list, ERS_LIST_FREE_INITIAL, MEMORYTYPE_LOCAL);
+	}
+	INDEX_MAP_ADD(l_ers_list, ers_collection, ers_collection->pos);
 	return ers_collection;
 }
 
@@ -695,40 +700,22 @@ void ers_collection_destroy(struct ers_collection_t *ers_cur) {
 	 * need to try to free any more caches.
 	 **/
 
-	struct ers_collection_t **list =
-		(ers_cur->type == MEMORYTYPE_SHARED)?&g_ers_list:&l_ers_list;
-	if(*list) {
-		if(ers_cur->next)
-			ers_cur->next->prev = ers_cur->prev;
-		if(ers_cur->prev)
-			ers_cur->prev->next = ers_cur->next;
-		else
-			*list = ers_cur->next;
+	if(ers_cur->type == MEMORYTYPE_SHARED) {
+		mutex->lock(g_ers_list_mutex);
+		INDEX_MAP_REMOVE(g_ers_list, ers_cur->pos);
+		mutex->unlock(g_ers_list_mutex);
+	} else {
+		INDEX_MAP_REMOVE(l_ers_list, ers_cur->pos);
 	}
 
 	if(ers_cur == ers_global)
 		ers_global = NULL;
+
+	INDEX_MAP_DESTROY(ers_cur->cache_list);
+
 	rwlock->write_unlock(ers_cur->lock);
 	rwlock->destroy(ers_cur->lock);
 	amFree(ers_cur, ers_cur->type);
-}
-
-/**
- * Returns collection lock
- *
- * @readlock g_ers_list_lock
- **/
-struct rwlock_data *ers_collection_lock(struct ers_collection_t *collection)
-{
-	return collection->lock;
-}
-
-/**
- * Returns g_ers_list_lock
- **/
-struct rwlock_data *ers_global_lock(void)
-{
-	return g_ers_list_lock;
 }
 
 /**
@@ -739,17 +726,23 @@ void ers_init(void)
 	if(ers_global)
 		return;
 
+	g_ers_list_mutex = mutex->create();
+	if(!g_ers_list_mutex) {
+		ShowFatalError("ers_init: Failed to setup global ERS collection list mutex!\n");
+		exit(EXIT_FAILURE);
+	}
+	INDEX_MAP_CREATE(g_ers_list, ERS_LIST_FREE_INITIAL, MEMORYTYPE_SHARED);
+
 	ers_global = ers_collection_create(MEMORYTYPE_SHARED);
 	if(!ers_global) {
 		ShowFatalError("ers_init: Failed to setup global ERS state!\n");
 		exit(EXIT_FAILURE);
 	}
-	g_ers_list_lock = rwlock->create();
-	if(!g_ers_list_lock) {
-		ShowFatalError("ers_init: Failed to setup global ERS lock!\n");
-		ers_collection_destroy(ers_global);
-		exit(EXIT_FAILURE);
-	}
+}
+
+struct rwlock_data *ers_collection_lock(struct ers_collection_t *collection)
+{
+	return collection->lock;
 }
 
 /**
@@ -761,14 +754,25 @@ void ers_init(void)
 void ers_final(enum memory_type memory_type)
 {
 	if(memory_type == MEMORYTYPE_SHARED) {
-		if(g_ers_list_lock)
-			rwlock->destroy(g_ers_list_lock);
-		while(g_ers_list)
-			ers_collection_destroy(g_ers_list);
-		g_ers_list_lock = NULL;
-	} else {
-		while(l_ers_list)
-			ers_collection_destroy(l_ers_list);
+		for(uint32_t i = 0; i < INDEX_MAP_LENGTH(g_ers_list); i++) {
+			if(!INDEX_MAP_INDEX(g_ers_list, i))
+				continue;
+			ers_collection_destroy(INDEX_MAP_INDEX(g_ers_list, i));
+		}
+		if(g_ers_list_mutex) {
+			mutex->destroy(g_ers_list_mutex);
+			g_ers_list_mutex = NULL;
+		}
+		return;
+	}
+
+	if(!INDEX_MAP_LENGTH(l_ers_list))
+		return;
+
+	for(uint32_t i = 0; i < INDEX_MAP_LENGTH(l_ers_list); i++) {
+		if(!INDEX_MAP_INDEX(l_ers_list, i))
+			continue;
+		ers_collection_destroy(INDEX_MAP_INDEX(l_ers_list, i));
 	}
 }
 

@@ -24,11 +24,13 @@
 #include "common/core.h"
 #include "common/thread.h"
 #include "common/rwlock.h"
+#include "common/mutex.h"
 #include "common/showmsg.h"
 #include "common/nullpo.h"
 #include "common/utils.h"
 #include "common/ers.h"
 #include "common/memmgr.h"
+#include "common/random.h"
 
 #include "test/test_entry.h"
 
@@ -40,6 +42,44 @@
 // Entry Reusage System unit testing
 //
 
+/**
+ * ERS worker thread
+ *
+ * Creates a new ERS instance and destroys.
+ * @param param Initialized ers_collection_t object
+ * @return Boolean thread success.
+ **/
+void *ers_unit_worker_instance_delete(void *param) {
+	ERS *instance[100];
+	struct ers_collection_t *collection = param;
+
+	struct rwlock_data *collection_lock = ers_collection_lock(collection);
+	TEST_ASSERT(collection_lock, "No collection lock!");
+	ShowInfo("chaos\n");
+	for(int i = 0; i < 100; i++) {
+		rwlock->write_lock(collection_lock);
+		instance[i] = ers_new(collection, 32, "ERS::Chaos", ERS_OPT_FREE_NAME);
+		rwlock->write_unlock(collection_lock);
+	}
+
+	struct s_alloc_temp {
+		int k;
+		void *data;
+	} alloc[1024];
+	for(int i = 0; i < 1024; i++) {
+		int j = rnd->value(0,99);
+		mutex->lock(instance[j]->cache_mutex);
+		alloc[i] = (struct s_alloc_temp){ j, ers_alloc(instance[j]) };
+		mutex->unlock(instance[j]->cache_mutex);
+	}
+
+	for(int i = 0; i < 100; i++) {
+		rwlock->write_lock(collection_lock);
+		instance[i]->destroy(instance[i]);
+		rwlock->write_unlock(collection_lock);
+	}
+	return true;
+}
 
 /**
  * ERS worker thread
@@ -51,30 +91,24 @@
 void *ers_unit_worker_instance_alloc(void *param) {
 	ERS *instance;
 	struct ers_collection_t *collection = param;
-	struct rwlock_data *ers_list_lock = ers_global_lock();
+
 	struct rwlock_data *collection_lock = ers_collection_lock(collection);
-	TEST_ASSERT(ers_list_lock, "No global lock found!");
 	TEST_ASSERT(collection_lock, "No collection lock!");
 
-	rwlock->read_lock(ers_list_lock);
 	rwlock->write_lock(collection_lock);
-	instance = ers_new(collection, 32, "ers_leak_detection", ERS_OPT_FREE_NAME);
+	instance = ers_new(collection, 32, "leak::ERS report", ERS_OPT_FREE_NAME);
 	TEST_ASSERT(instance, "Failed to setup new instance!");
 	rwlock->write_unlock(collection_lock);
 	thread->yield();
 
-	void *allocated_memory[10];
-	rwlock->read_lock(collection_lock);
-	for(int i = 0; i < sizeof(allocated_memory)/sizeof(*allocated_memory); i++) {
-		rwlock->write_lock(instance->cache_lock);
+	for(int i = 0; i < 2048; i++) {
+		mutex->lock(instance->cache_mutex);
 		thread->yield();
-		allocated_memory[i] = instance->alloc(instance);
-		TEST_ASSERT(allocated_memory[i], "Failed to allocate memory");
-		rwlock->write_unlock(instance->cache_lock);
+		void *data = instance->alloc(instance);
+		TEST_ASSERT(data, "Failed to allocate memory");
+		mutex->unlock(instance->cache_mutex);
 	}
-	rwlock->read_unlock(collection_lock);
 	thread->yield();
-	rwlock->read_unlock(ers_list_lock);
 	return (void*)true;
 }
 
@@ -87,9 +121,14 @@ bool ers_unit_report(void *not_used) {
 	TEST_ASSERT(collection, "Failed to setup collection");
 
 	struct thread_handle *threads[10] = {0};
+	struct thread_handle *threads2[10] = {0};
+
 	void *retval[10] = {NULL};
 	for(int i = 0; i < sizeof(threads)/sizeof(*threads); i++) {
 		threads[i] = thread->create_opt("ERS report", ers_unit_worker_instance_alloc,
+			collection,
+			1024, THREADPRIO_NORMAL);
+		threads2[i] = thread->create_opt("Chaos", ers_unit_worker_instance_delete,
 			collection,
 			1024, THREADPRIO_NORMAL);
 	}
@@ -100,6 +139,7 @@ bool ers_unit_report(void *not_used) {
 		if(!(bool)retval[i])
 			failure_count++;
 	}
+	thread->wait_multiple(threads2, sizeof(threads)/sizeof(*threads), retval);
 	ers_report();
 	ers_collection_destroy(collection);
 	return (failure_count == 0);
@@ -115,33 +155,31 @@ bool ers_unit_report(void *not_used) {
 void *ers_unit_worker_instance_creator(void *param) {
 	ERS *instance;
 	struct ers_collection_t *collection = param;
-	struct rwlock_data *ers_list_lock = ers_global_lock();
+
 	struct rwlock_data *collection_lock = ers_collection_lock(collection);
-	TEST_ASSERT(ers_list_lock, "No global lock found!");
 	TEST_ASSERT(collection_lock, "No collection lock!");
 
-	rwlock->read_lock(ers_list_lock);
 	rwlock->write_lock(collection_lock);
 	instance = ers_new(collection, 32, "ers_leak_detection", ERS_OPT_FREE_NAME);
 	TEST_ASSERT(instance, "Failed to setup new instance!");
 	rwlock->write_unlock(collection_lock);
 	thread->yield();
 
-	void *allocated_memory[10];
-	rwlock->read_lock(collection_lock);
+	void *allocated_memory[128];
+
 	for(int i = 0; i < sizeof(allocated_memory)/sizeof(*allocated_memory); i++) {
-		rwlock->write_lock(instance->cache_lock);
+		mutex->lock(instance->cache_mutex);
 		thread->yield();
 		allocated_memory[i] = instance->alloc(instance);
 		TEST_ASSERT(allocated_memory[i], "Failed to allocate memory");
-		rwlock->write_unlock(instance->cache_lock);
+		mutex->unlock(instance->cache_mutex);
 	}
 	for(int i = 0; i < sizeof(allocated_memory)/sizeof(*allocated_memory); i++) {
-		rwlock->write_lock(instance->cache_lock);
+		mutex->lock(instance->cache_mutex);
 		instance->free(instance, allocated_memory[i]);
-		rwlock->write_unlock(instance->cache_lock);
+		mutex->unlock(instance->cache_mutex);
 	}
-	rwlock->read_unlock(collection_lock);
+
 	thread->yield();
 
 	rwlock->write_lock(collection_lock);
@@ -149,7 +187,6 @@ void *ers_unit_worker_instance_creator(void *param) {
 	TEST_ASSERT(leak_count == 0, "Leaks found in instance");
 	rwlock->write_unlock(collection_lock);
 
-	rwlock->read_unlock(ers_list_lock);
 	return (void*)true;
 }
 
@@ -215,7 +252,7 @@ bool ers_unit_allocation(void *not_used) {
 	TEST_ASSERT(ers, "Failed to setup new instance!");
 
 	void *new_entry = ers->alloc(ers);
-	TEST_ASSERT(ers, "Failed to alloc memory for new entry");
+	TEST_ASSERT(new_entry, "Failed to alloc memory for new entry");
 	ers->free(ers, new_entry);
 
 	ers->destroy(ers);

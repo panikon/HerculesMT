@@ -97,6 +97,7 @@
 #include "common/showmsg.h"
 #include "common/strlib.h"
 #include "common/rwlock.h"
+#include "common/mutex.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -867,18 +868,16 @@ static void db_free_unlock(struct DBMap_impl *db)
 	if (!db->free_count)
 		return; // No operation
 
-	rwlock->read_lock(ers_global_lock());
 	rwlock->read_lock(db->nodes->collection_lock);
-	rwlock->write_lock(db->nodes->cache_lock);
+	mutex->lock(db->nodes->cache_mutex);
 	for (i = 0; i < db->free_count ; i++) {
 		db_rebalance_erase(db->free_list[i].node, db->free_list[i].root);
 		db_dup_key_free(db, db->free_list[i].node->key);
 		DB_COUNTSTAT(db_node_free);
 		ers_free(db->nodes, db->free_list[i].node);
 	}
-	rwlock->write_unlock(db->nodes->cache_lock);
+	mutex->unlock(db->nodes->cache_mutex);
 	rwlock->read_unlock(db->nodes->collection_lock);
-	rwlock->read_unlock(ers_global_lock());
 
 	db->free_count = 0;
 }
@@ -1526,15 +1525,13 @@ static void dbit_obj_destroy(struct DBIterator *self)
 	// unlock the database
 	db_free_unlock(it->db);
 	// free iterator
-	rwlock->read_lock(ers_global_lock());
 	rwlock->read_lock(db_iterator_ers->collection_lock);
 
-	rwlock->write_lock(db_iterator_ers->cache_lock);
+	mutex->lock(db_iterator_ers->cache_mutex);
 	ers_free(db_iterator_ers,self);
-	rwlock->write_unlock(db_iterator_ers->cache_lock);
+	mutex->unlock(db_iterator_ers->cache_mutex);
 
 	rwlock->read_unlock(db_iterator_ers->collection_lock);
-	rwlock->read_unlock(ers_global_lock());
 }
 
 /**
@@ -1553,15 +1550,13 @@ static struct DBIterator *db_obj_iterator(struct DBMap *self)
 
 	DB_COUNTSTAT(db_iterator);
 
-	rwlock->read_lock(ers_global_lock());
 	rwlock->read_lock(db_iterator_ers->collection_lock);
 
-	rwlock->write_lock(db_iterator_ers->cache_lock);
-	it = ers_alloc(db_iterator_ers, struct DBIterator_impl);
-	rwlock->write_unlock(db_iterator_ers->cache_lock);
+	mutex->lock(db_iterator_ers->cache_mutex);
+	it = ers_alloc(db_iterator_ers);
+	mutex->unlock(db_iterator_ers->cache_mutex);
 
 	rwlock->read_unlock(db_iterator_ers->collection_lock);
-	rwlock->read_unlock(ers_global_lock());
 
 	/* Interface of the iterator **/
 	it->vtable.first   = dbit_obj_first;
@@ -1812,13 +1807,11 @@ struct DBNode *db_obj_create(struct DBMap *self, unsigned int hash, int c, struc
 
 	DB_COUNTSTAT(db_node_alloc);
 
-	rwlock->read_lock(ers_global_lock());
 	rwlock->read_lock(db->nodes->collection_lock);
-	rwlock->write_lock(db->nodes->cache_lock);
-	node = ers_alloc(db->nodes, struct DBNode);
-	rwlock->write_unlock(db->nodes->cache_lock);
+	mutex->lock(db->nodes->cache_mutex);
+	node = ers_alloc(db->nodes);
+	mutex->unlock(db->nodes->cache_mutex);
 	rwlock->read_unlock(db->nodes->collection_lock);
-	rwlock->read_unlock(ers_global_lock());
 
 	node->left = NULL;
 	node->right = NULL;
@@ -2206,9 +2199,8 @@ static int db_obj_vclear(struct DBMap *self, DBApply func, va_list args)
 	db_free_lock(db);
 	db->cache = NULL;
 
-	rwlock->read_lock(ers_global_lock());
 	rwlock->read_lock(db->nodes->collection_lock);
-	rwlock->write_lock(db->nodes->cache_lock);
+	mutex->lock(db->nodes->cache_mutex);
 	for (i = 0; i < HASH_SIZE; i++) {
 		// Apply the func and delete in the order: left tree, right tree, current node
 		node = db->ht[i];
@@ -2248,9 +2240,8 @@ static int db_obj_vclear(struct DBMap *self, DBApply func, va_list args)
 		}
 		db->ht[i] = NULL;
 	}
-	rwlock->write_unlock(db->nodes->cache_lock);
+	mutex->unlock(db->nodes->cache_mutex);
 	rwlock->read_unlock(db->nodes->collection_lock);
-	rwlock->read_unlock(ers_global_lock());
 
 	db->free_count = 0;
 	db->item_count = 0;
@@ -2337,23 +2328,20 @@ static int db_obj_vdestroy(struct DBMap *self, DBApply func, va_list args)
 	db->free_list = NULL;
 	db->free_max = 0;
 
-	rwlock->read_lock(ers_global_lock());
 	struct rwlock_data *collection_lock = db->nodes->collection_lock;
 	rwlock->write_lock(collection_lock);
 	ers_destroy(db->nodes);
 	rwlock->write_unlock(collection_lock);
-	rwlock->read_unlock(ers_global_lock());
+
 	// When it's the last key db_free_unlock tries to lock
 	// ers_global_lock() and collection lock as well
 	db_free_unlock(db);
 
-	rwlock->read_lock(ers_global_lock());
 	rwlock->read_lock(db_alloc_ers->collection_lock);
-	rwlock->write_lock(db_alloc_ers->cache_lock);
+	mutex->lock(db_alloc_ers->cache_mutex);
 	ers_free(db_alloc_ers, db);
-	rwlock->write_unlock(db_alloc_ers->cache_lock);
+	mutex->unlock(db_alloc_ers->cache_mutex);
 	rwlock->read_unlock(db_alloc_ers->collection_lock);
-	rwlock->read_unlock(ers_global_lock());
 
 	return sum;
 }
@@ -2658,15 +2646,13 @@ static struct DBMap *db_alloc(const char *file, const char *func, int line, enum
 	}
 #endif /* DB_ENABLE_STATS */
 
-	rwlock->read_lock(ers_global_lock());
 	rwlock->read_lock(db_alloc_ers->collection_lock);
 
-	rwlock->write_lock(db_alloc_ers->cache_lock);
-	db = ers_alloc(db_alloc_ers, struct DBMap_impl);
-	rwlock->write_unlock(db_alloc_ers->cache_lock);
+	mutex->lock(db_alloc_ers->cache_mutex);
+	db = ers_alloc(db_alloc_ers);
+	mutex->unlock(db_alloc_ers->cache_mutex);
 
 	rwlock->read_unlock(db_alloc_ers->collection_lock);
-	rwlock->read_unlock(ers_global_lock());
 
 	options = DB->fix_options(type, options);
 	/* Interface of the database */
@@ -2699,12 +2685,10 @@ static struct DBMap *db_alloc(const char *file, const char *func, int line, enum
 	/* Other */
 	snprintf(ers_name, 50, "db_alloc:nodes:%s:%s:%d",func,file,line);
 
-	rwlock->read_lock(ers_global_lock());
 	rwlock->write_lock(ers_collection_lock(db_ers_collection));
 	db->nodes = ers_new(db_ers_collection, sizeof(struct DBNode),
 		ers_name,ERS_OPT_WAIT|ERS_OPT_FREE_NAME|ERS_OPT_CLEAN);
 	rwlock->write_unlock(ers_collection_lock(db_ers_collection));
-	rwlock->read_unlock(ers_global_lock());
 
 	db->cmp = DB->default_cmp(type);
 	db->hash = DB->default_hash(type);
@@ -2901,29 +2885,25 @@ static void *db_data2ptr(struct DBData *data)
  */
 static void db_init(void)
 {
-	struct rwlock_data *ers_list_lock = ers_global_lock();
 
-	rwlock->write_lock(ers_list_lock);
 	db_ers_collection = ers_collection_create(MEMORYTYPE_SHARED);
-	rwlock->write_unlock(ers_list_lock);
 	if(!db_ers_collection) {
 		ShowFatalError("db_init: Failed to setup ERS collection\n");
 		exit(EXIT_FAILURE);
 	}
-	rwlock->read_lock(ers_list_lock);
 	rwlock->write_lock(ers_collection_lock(db_ers_collection));
 
 	db_iterator_ers = ers_new(db_ers_collection, sizeof(struct DBIterator_impl),
 		"db.c::db_iterator_ers",ERS_OPT_CLEAN|ERS_OPT_FLEX_CHUNK);
 	db_alloc_ers = ers_new(db_ers_collection, sizeof(struct DBMap_impl),
 		"db.c::db_alloc_ers",ERS_OPT_CLEAN|ERS_OPT_FLEX_CHUNK);
-	// Don't need to get cache_lock because this is a new collection
+	// Don't need to get cache_mutex because this is a new collection
 	// and there's no one trying to access these caches
 	ers_chunk_size(db_alloc_ers, 50);
 	ers_chunk_size(db_iterator_ers, 10);
 
 	rwlock->write_unlock(ers_collection_lock(db_ers_collection));
-	rwlock->read_unlock(ers_list_lock);
+
 	DB_COUNTSTAT(db_init);
 }
 
@@ -3029,8 +3009,6 @@ static void db_final(void)
 			stats.db_init,            stats.db_final);
 #endif /* DB_ENABLE_STATS */
 
-	struct rwlock_data *ers_list_lock = ers_global_lock();
-	rwlock->write_lock(ers_list_lock);
 
 	assert(db_iterator_ers->collection_lock == db_alloc_ers->collection_lock);
 	struct rwlock_data *collection_lock = db_iterator_ers->collection_lock;
@@ -3040,7 +3018,6 @@ static void db_final(void)
 	rwlock->write_unlock(collection_lock);
 
 	ers_collection_destroy(db_ers_collection);
-	rwlock->write_unlock(ers_list_lock);
 }
 
 // Link DB System - jAthena
