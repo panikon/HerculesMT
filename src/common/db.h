@@ -2103,4 +2103,129 @@ HPShared struct db_interface *DB;
 #define QUEUE_INIT_CAPACITY_SHARED(_que, _n) QUEUE_INIT_CAPACITY(_que, _n)
 #define QUEUE_INIT_CAPACITY_LOCAL(_que, _n) QUEUE_INIT_CAPACITY_SUB(_que, _n, _LOCAL)
 
+
+/**
+ * Index map array
+ *
+ * Declares a pointer array and a free index bitmap
+ * Grows quadratically (always in multiples of 32)
+ **/
+
+
+/**
+ * Declares an anonymous index map
+ *
+ * @param _type Type of data to be contained.
+ **/
+#define INDEX_MAP_DECL(_type)            \
+	struct {                             \
+		_type **_data_;                  \
+		uint32_t *_free_index_;          \
+		uint32_t _free_index_length_;    \
+		enum memory_type _mt_;           \
+	}
+/**
+ * Declares an named index map struct
+ *
+ * @param _name Structure name.
+ * @param _type Type of data to be contained.
+ **/
+#define INDEX_MAP_STRUCT_DECL(_name, _type) \
+	struct _name {                          \
+		_type **_data_;                     \
+		uint32_t *_free_index_;             \
+		uint32_t _free_index_length_;       \
+		enum memory_type _mt_;              \
+	}
+
+/**
+ * Static initializer
+ **/
+#define INDEX_MAP_STATIC_INITIALIZER(_mem) {NULL, NULL, 0, (_mem)}
+
+/**
+ * Sets up a new index map.
+ *
+ * @param _im  Index map object
+ * @param _sz  Initial size (this is multiplied by 32 internally)
+ * @param _mem Memory allocation type
+ **/
+#define INDEX_MAP_CREATE(_im, _sz, _mem)                                           \
+	do {                                                                           \
+		(_im)._mt_ = (_mem);                                                       \
+		(_im)._data_ = amCalloc((_sz)*32,                                          \
+								sizeof(*(_im)._data_), (_im)._mt_);                \
+		(_im)._free_index_ = amMalloc(sizeof(*(_im)._free_index_)*(_sz),           \
+									(_im)._mt_);                                   \
+		(_im)._free_index_length_ = (_sz);                                         \
+		memset((_im)._free_index_, UINT32_MAX, sizeof(*(_im)._free_index_)*(_sz)); \
+	} while(false)
+		
+/**
+ * Destroys an index map.
+ *
+ * @param _im  Index map object
+ **/
+#define INDEX_MAP_DESTROY(_im)                   \
+	do {                                         \
+		amFree((_im)._data_, (_im)._mt_);        \
+		amFree((_im)._free_index_, (_im)._mt_);  \
+	} while(false)
+
+/**
+ * Removes entry from index map.
+ *
+ * @param _im  Index map object
+ * @param _pos Position of object in array
+ **/
+#define INDEX_MAP_REMOVE(_im, _pos)                     \
+	do {                                                \
+		(_im)._data_[(_pos)] = NULL;                    \
+		BIT_SET((_im)._free_index_[(_pos)/32], (_pos)); \
+	} while(false)
+
+/**
+ * Adds entry to index map, grows if necessary.
+ * Growth is always quadratic
+ *
+ * @param _im        Index map object
+ * @param _val       Pointer to data.
+ * @param _new_index [OUT] An uint32_t integer, this is set to last added index.
+ **/
+#define INDEX_MAP_ADD(_im, _val, _new_index)                                   \
+	do {                                                                       \
+		uint32_t _empty_index;                                                 \
+		_empty_index = find_first_set_array((_im)._free_index_,                \
+											(_im)._free_index_length_, true);  \
+		if(_empty_index == -1) {                                               \
+			/* Grow lists */                                                   \
+			uint32_t _new_length;                                              \
+			(_im)._free_index_length_++;                                       \
+			_new_length = (_im)._free_index_length_*32;                        \
+			amReallocz((_im)._data_,                                           \
+						_new_length*sizeof(*(_im)._data_), (_im)._mt_);        \
+			amRealloc((_im)._free_index_,                                      \
+						(_im)._free_index_length_*sizeof(*(_im)._free_index_), \
+						(_im)._mt_);                                           \
+			(_im)._free_index_[(_im)._free_index_length_-1] = UINT32_MAX;      \
+			BIT_CLEAR((_im)._free_index_[(_im)._free_index_length_-1], 31);    \
+		}                                                                      \
+		(_im)._data_[_empty_index] = (_val);                                   \
+		(_new_index) = _empty_index;                                           \
+	} while(false)
+
+/**
+ * Length of entry array
+ *
+ * @param _im  Index map object
+ **/
+#define INDEX_MAP_LENGTH(_im) ((_im)._free_index_length_*32)
+
+/**
+ * Return object
+ *
+ * @param _im  Index map object
+ **/
+#define INDEX_MAP_INDEX(_im, _idx) ((_im)._data_[(_idx)])
+
 #endif /* COMMON_DB_H */

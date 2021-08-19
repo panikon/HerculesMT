@@ -78,6 +78,15 @@ int apply_percentrate(int value, int rate, int maxrate);
 
 const char* timestamp2string(char* str, size_t size, time_t timestamp, const char* format);
 
+// target = target variable, b=bit number to act upon 0-n
+// @see https://stackoverflow.com/a/263738/
+#define BIT_SET(target,b) ((target) |= (1ULL<<(b)))
+#define BIT_CLEAR(target,b) ((target) &= ~(1ULL<<(b)))
+#define BIT_FLIP(target,b) ((target) ^= (1ULL<<(b)))
+#define BIT_CHECK(target,b) (!!((target) & (1ULL<<(b))))
+uint32_t find_first_set(uint32_t v);
+int32_t find_first_set_array(uint32_t *v, uint32_t length, bool clear_bit);
+
 //////////////////////////////////////////////////////////////////////////
 // byte word dword access [Shinomori]
 //////////////////////////////////////////////////////////////////////////

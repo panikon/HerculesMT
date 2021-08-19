@@ -747,6 +747,17 @@ static unsigned long timer_get_uptime(void)
 
 #ifdef TIMER_USE_THREAD
 
+static int server_tick = 0;
+
+/**
+ * Returns last tick of the timer thread
+ * @see do_timer
+ **/
+int timer_get_server_tick(void)
+{
+	return InterlockedExchangeAdd(&server_tick, 0);
+}
+
 /**
  * Timer worker thread
  **/
@@ -754,10 +765,12 @@ void *timer_thread(void *not_used)
 {
 	mutex->lock(timer_shutdown_mutex);
 	while(timer_run) {
+		int next_tick;
 		mutex->cond_wait(timer_shutdown_event, timer_shutdown_mutex, TIMER_MIN_INTERVAL);
 		mutex->lock(timer_perform_mutex);
-		timer->perform(timer->gettick_nocache());
+		next_tick = timer->perform(timer->gettick_nocache());
 		mutex->unlock(timer_perform_mutex);
+		InterlockedExchange(&server_tick, next_tick);
 	}
 	mutex->unlock(timer_shutdown_mutex);
 	return NULL;

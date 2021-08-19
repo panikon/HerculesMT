@@ -97,6 +97,9 @@ struct timer_interface {
 	int (*perform) (int64 tick);
 	void (*init) (void);
 	void (*final) (void);
+#ifdef TIMER_USE_THREAD
+	int (*get_server_tick) (void);
+#endif
 };
 
 #ifdef HERCULES_CORE

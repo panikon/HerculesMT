@@ -374,6 +374,45 @@ float GetFloat(const unsigned char *buf)
 	return *((float*)(void*)&val);
 }
 
+/**
+ * Finds the number of trailing zeros in 32-bit v alue
+ *
+ * @see http://graphics.stanford.edu/~seander/bithacks.html
+ * @author Sean Eron Anderson (public domain)
+ **/
+uint32_t find_first_set(uint32_t v) {
+	static const int MultiplyDeBruijnBitPosition[32] = 
+	{
+	  0, 1, 28, 2, 29, 14, 24, 3, 30, 22, 20, 15, 25, 17, 4, 8, 
+	  31, 27, 13, 23, 21, 19, 16, 7, 26, 12, 18, 6, 11, 5, 10, 9
+	};
+	return MultiplyDeBruijnBitPosition[((uint32_t)((v & -v) * 0x077CB531U)) >> 27];
+}
+
+/**
+ * Finds the position of the first set bit in an array considering that lower indices
+ * are the lowest significant bits.
+ *
+ * @param clear_bit Should the bit be cleared after being found?
+ * @return 0-indexed position of first bit
+ * @retval -1 not found
+ **/
+int32_t find_first_set_array(uint32_t *v, uint32_t length, bool clear_bit) {
+	uint32_t result = 0;
+	for(uint32_t i = 0; i < length; i++, result += 32) {
+		uint32_t found_bit = find_first_set(v[i]);
+		if(!found_bit && !BIT_CHECK(v[i],0))
+			continue;
+		result += found_bit;
+		if(clear_bit)
+			BIT_CLEAR(v[i], found_bit);
+		return result;
+	}
+	if(result == length*32)
+		result = -1;
+	return result;
+}
+
 /// calculates the value of A / B, in percent (rounded down)
 unsigned int get_percentage(const unsigned int A, const unsigned int B)
 {
