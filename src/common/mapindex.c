@@ -118,18 +118,19 @@ static int mapindex_addmap(int index, const char *name)
 		return 0;
 	}
 
-	if (strlen(map_name) >= MAP_NAME_LENGTH) {
+	size_t map_name_len = strlen(map_name);
+	if (map_name_len >= MAP_NAME_LENGTH) {
 		ShowError("(mapindex_add) Map name %s is too long. Maps are limited to %d characters.\n", map_name, MAP_NAME_LENGTH);
 		return 0;
 	}
 
 	if (mapindex_exists(index)) {
 		ShowWarning("(mapindex_add) Overriding index %d: map \"%s\" -> \"%s\"\n", index, mapindex->list[index].name, map_name);
-		strdb_remove(mapindex->db, mapindex->list[index].name);
+		strdb_remove(mapindex->db, mapindex->list[index].name, map_name_len);
 	}
 
 	safestrncpy(mapindex->list[index].name, map_name, MAP_NAME_LENGTH);
-	strdb_iput(mapindex->db, map_name, index);
+	strdb_iput(mapindex->db, map_name, map_name_len, index);
 
 	if (mapindex->num <= index)
 		mapindex->num = index+1;
@@ -144,7 +145,7 @@ static unsigned short mapindex_name2id(const char *name)
 
 	mapindex->getmapname(name, map_name);
 
-	if( (i = strdb_iget(mapindex->db, map_name)) )
+	if( (i = strdb_iget(mapindex->db, map_name, 0)) )
 		return i;
 
 	ShowDebug("mapindex_name2id: Map \"%s\" not found in index list!\n", map_name);
@@ -254,7 +255,7 @@ static int mapindex_init(void)
 
 static bool mapindex_check_default(void)
 {
-	if (!strdb_iget(mapindex->db, mapindex->default_map)) {
+	if (!strdb_iget(mapindex->db, mapindex->default_map, 0)) {
 		ShowError("mapindex_init: MAP_DEFAULT '%s' not found in cache! update mapindex.h MAP_DEFAULT var!!!\n", mapindex->default_map);
 		return false;
 	}
@@ -264,7 +265,7 @@ static bool mapindex_check_default(void)
 static void mapindex_removemap(int index)
 {
 	Assert_retv(index < MAX_MAPINDEX);
-	strdb_remove(mapindex->db, mapindex->list[index].name);
+	strdb_remove(mapindex->db, mapindex->list[index].name, 0);
 	mapindex->list[index].name[0] = '\0';
 }
 

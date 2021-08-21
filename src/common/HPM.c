@@ -1065,11 +1065,11 @@ static bool HPM_DataCheck(struct s_HPMDataCheck *src, unsigned int size, int ver
 		if (!(src[i].type&SERVER_TYPE))
 			continue;
 
-		if (!strdb_exists(datacheck_db, src[i].name)) {
+		if (!strdb_exists(datacheck_db, src[i].name, 0)) {
 			ShowError("HPMDataCheck:%s: '%s' was not found\n",name,src[i].name);
 			return false;
 		} else {
-			j = strdb_uiget(datacheck_db, src[i].name);/* not double lookup; exists sets cache to found data */
+			j = strdb_uiget(datacheck_db, src[i].name, 0);/* not double lookup; exists sets cache to found data */
 			if (src[i].size != datacheck_data[j].size) {
 				ShowWarning("HPMDataCheck:%s: '%s' size mismatch %u != %u\n",name,src[i].name,src[i].size,datacheck_data[j].size);
 				return false;
@@ -1093,7 +1093,7 @@ static void HPM_datacheck_init(const struct s_HPMDataCheck *src, unsigned int le
 	datacheck_db = strdb_alloc(DB_OPT_BASE,0);
 
 	for(i = 0; i < length; i++) {
-		strdb_uiput(datacheck_db, src[i].name, i);
+		strdb_uiput(datacheck_db, src[i].name, 0, i);
 	}
 }
 

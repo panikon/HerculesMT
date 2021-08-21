@@ -54,7 +54,7 @@
  *
  *  <B>How to add new database types:</B>
  *  1. Add the identifier of the new database type to the enum DBType
- *  2. If not already there, add the data type of the key to the union DBKey
+ *  2. If not already there, add the data type of the key to the union DBKey and struct DBKey_s
  *  3. If the key can be considered NULL, update the function db_is_key_null
  *  4. If the key can be duplicated, update the functions db_dup_key and
  *     db_dup_key_free
@@ -105,6 +105,7 @@
 #include "common/strlib.h"
 #include "common/rwlock.h"
 #include "common/mutex.h"
+#include "common/utils.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -172,7 +173,7 @@ struct DBNode {
 	struct DBNode *left;
 	struct DBNode *right;
 	// Node data
-	union DBKey key;
+	struct DBKey_s key;
 	struct DBData data;
 	// Other
 	enum DBNodeColor color;
@@ -370,9 +371,9 @@ static struct db_stats {
 #define DB_COUNTSTAT(token) do { if ((stats.token) != UINT32_MAX) ++(stats.token); } while(0)
 #define DB_GREATERTHAN_COUNT(v, token) do { if((v) > (stats.token)) DB_COUNTSTAT(token); } while(0)
 
-#define DB_COUNTSTAT_SWITCH(d, partial_token)                                \
+#define DB_COUNTSTAT_SWITCH(t, partial_token)                                \
 	do {                                                                     \
-		switch ((d)->type) {                                                 \
+		switch ((t)) {                                                       \
 			case DB_INT:     DB_COUNTSTAT(db_int_##partial_token);    break; \
 			case DB_UINT:    DB_COUNTSTAT(db_uint_##partial_token);   break; \
 			case DB_STRING:  DB_COUNTSTAT(db_string_##partial_token); break; \
@@ -381,9 +382,9 @@ static struct db_stats {
 			case DB_UINT64:  DB_COUNTSTAT(db_uint64_##partial_token); break; \
 		}                                                                    \
 	} while(false)
-#define DB_GREATERTHAN_SWITCH(d, v, partial_token)                                        \
+#define DB_GREATERTHAN_SWITCH(t, v, partial_token)                                        \
 	do {                                                                                  \
-		switch ((d)->type) {                                                              \
+		switch ((t)) {                                                                    \
 			case DB_INT:     DB_GREATERTHAN_COUNT((v), db_int_##partial_token);    break; \
 			case DB_UINT:    DB_GREATERTHAN_COUNT((v), db_uint_##partial_token);   break; \
 			case DB_STRING:  DB_GREATERTHAN_COUNT((v), db_string_##partial_token); break; \
@@ -688,29 +689,29 @@ static void db_rebalance_erase(struct DBNode *node, struct DBNode **root)
 }
 
 /**
- * Returns not 0 if the key is considered to be NULL.
+ * Returns true if the key is considered to be NULL.
  * @param type Type of database
  * @param key Key being tested
- * @return not 0 if considered NULL, 0 otherwise
+ * @return true if the key is considered to be NULL
  * @private
  * @see #db_obj_get()
  * @see #db_obj_put()
  * @see #db_obj_remove()
  */
-static int db_is_key_null(enum DBType type, union DBKey key)
+static bool db_is_key_null(enum DBType type, const struct DBKey_s *key)
 {
 	DB_COUNTSTAT(db_is_key_null);
 	switch (type) {
 		case DB_STRING:
 		case DB_ISTRING:
-			return (key.str == NULL);
+			return (key->u.str == NULL);
 
 		case DB_INT:
 		case DB_UINT:
 		case DB_INT64:
 		case DB_UINT64:
 		default: // Not a pointer
-			return 0;
+			return false;
 	}
 }
 
@@ -725,20 +726,19 @@ static int db_is_key_null(enum DBType type, union DBKey key)
  * @see #db_obj_put()
  * @see #db_dup_key_free()
  */
-static union DBKey db_dup_key(struct DBMap_impl *db, union DBKey key)
+static struct DBKey_s db_dup_key(struct DBMap_impl *db, const struct DBKey_s *key)
 {
 	DB_COUNTSTAT(db_dup_key);
+	struct DBKey_s new_key;
+
 	switch (db->type) {
 		case DB_STRING:
 		case DB_ISTRING:
 		{
-			size_t len = strnlen(key.str, db->maxlen);
-			char *str = aMalloc(len + 1);
-
-			memcpy(str, key.str, len);
-			str[len] = '\0';
-			key.mutstr = str;
-			return key;
+			new_key.len = key->len;
+			new_key.u.mutstr = aMalloc(key->len);
+			memcpy(new_key.u.mutstr, key->u.str, key->len);
+			return new_key;
 		}
 
 		case DB_INT:
@@ -746,7 +746,9 @@ static union DBKey db_dup_key(struct DBMap_impl *db, union DBKey key)
 		case DB_INT64:
 		case DB_UINT64:
 		default:
-			return key;
+			new_key.len = key->len;
+			new_key.u = key->u;
+			return new_key;
 	}
 }
 
@@ -757,13 +759,13 @@ static union DBKey db_dup_key(struct DBMap_impl *db, union DBKey key)
  * @private
  * @see #db_dup_key()
  */
-static void db_dup_key_free(struct DBMap_impl *db, union DBKey key)
+static void db_dup_key_free(struct DBMap_impl *db, struct DBKey_s *key)
 {
 	DB_COUNTSTAT(db_dup_key_free);
 	switch (db->type) {
 		case DB_STRING:
 		case DB_ISTRING:
-			aFree(key.mutstr);
+			aFree(key->u.mutstr);
 			return;
 
 		case DB_INT:
@@ -792,8 +794,6 @@ static void db_dup_key_free(struct DBMap_impl *db, union DBKey key)
  */
 static void db_free_add(struct DBMap_impl *db, struct DBNode *node, struct DBNode **root)
 {
-	union DBKey old_key;
-
 	DB_COUNTSTAT(db_free_add);
 	if (db->free_lock == (unsigned int)~0) {
 		ShowFatalError("db_free_add: free_lock overflow\n"
@@ -802,9 +802,10 @@ static void db_free_add(struct DBMap_impl *db, struct DBNode *node, struct DBNod
 		exit(EXIT_FAILURE);
 	}
 	if (!(db->options&DB_OPT_DUP_KEY)) { // Make sure we have a key until the node is freed
-		old_key = node->key;
-		node->key = db_dup_key(db, node->key);
-		db->release(old_key, node->data, DB_RELEASE_KEY);
+		struct DBKey_s old_key;
+		old_key = node->key; // shallow copy
+		node->key = db_dup_key(db, &node->key);
+		db->release(&old_key, node->data, DB_RELEASE_KEY);
 	}
 	if (db->free_count == db->free_max) { // No more space, expand free_list
 		db->free_max = (db->free_max<<2) +3; // = db->free_max*4 +3
@@ -848,7 +849,7 @@ static void db_free_remove(struct DBMap_impl *db, struct DBNode *node)
 		if (db->free_list[i].node == node) {
 			if (i < db->free_count -1) // copy the last item to where the removed one was
 				memcpy(&db->free_list[i], &db->free_list[db->free_count -1], sizeof(struct db_free));
-			db_dup_key_free(db, node->key);
+			db_dup_key_free(db, &node->key);
 			break;
 		}
 	}
@@ -913,7 +914,7 @@ static void db_free_unlock(struct DBMap_impl *db)
 	mutex->lock(db->nodes->cache_mutex);
 	for (i = 0; i < db->free_count ; i++) {
 		db_rebalance_erase(db->free_list[i].node, db->free_list[i].root);
-		db_dup_key_free(db, db->free_list[i].node->key);
+		db_dup_key_free(db, &db->free_list[i].node->key);
 		DB_COUNTSTAT(db_node_free);
 		ers_free(db->nodes, db->free_list[i].node);
 	}
@@ -949,21 +950,18 @@ static void db_free_unlock(struct DBMap_impl *db)
  * Default comparator for DB_INT databases.
  * Compares key1 to key2.
  * Return 0 if equal, negative if lower and positive if higher.
- * <code>maxlen</code> is ignored.
  * @param key1 Key to be compared
  * @param key2 Key being compared to
- * @param maxlen Maximum length of the key to hash
  * @return 0 if equal, negative if lower and positive if higher
  * @see enum DBType#DB_INT
  * @see #DBComparator
  * @see #db_default_cmp()
  */
-static int db_int_cmp(union DBKey key1, union DBKey key2, unsigned short maxlen)
+static int db_int_cmp(const struct DBKey_s *key1, const struct DBKey_s *key2)
 {
-	(void)maxlen;//not used
 	DB_COUNTSTAT(db_int_cmp);
-	if (key1.i < key2.i) return -1;
-	if (key1.i > key2.i) return 1;
+	if (key1->u.i < key2->u.i) return -1;
+	if (key1->u.i > key2->u.i) return 1;
 	return 0;
 }
 
@@ -971,21 +969,18 @@ static int db_int_cmp(union DBKey key1, union DBKey key2, unsigned short maxlen)
  * Default comparator for DB_UINT databases.
  * Compares key1 to key2.
  * Return 0 if equal, negative if lower and positive if higher.
- * <code>maxlen</code> is ignored.
  * @param key1 Key to be compared
  * @param key2 Key being compared to
- * @param maxlen Maximum length of the key to hash
  * @return 0 if equal, negative if lower and positive if higher
  * @see enum DBType#DB_UINT
  * @see #DBComparator
  * @see #db_default_cmp()
  */
-static int db_uint_cmp(union DBKey key1, union DBKey key2, unsigned short maxlen)
+static int db_uint_cmp(const struct DBKey_s *key1, const struct DBKey_s *key2)
 {
-	(void)maxlen;//not used
 	DB_COUNTSTAT(db_uint_cmp);
-	if (key1.ui < key2.ui) return -1;
-	if (key1.ui > key2.ui) return 1;
+	if (key1->u.ui < key2->u.ui) return -1;
+	if (key1->u.ui > key2->u.ui) return 1;
 	return 0;
 }
 
@@ -995,16 +990,17 @@ static int db_uint_cmp(union DBKey key1, union DBKey key2, unsigned short maxlen
  * Return 0 if equal, negative if lower and positive if higher.
  * @param key1 Key to be compared
  * @param key2 Key being compared to
- * @param maxlen Maximum length of the key to hash
  * @return 0 if equal, negative if lower and positive if higher
  * @see enum DBType#DB_STRING
  * @see #DBComparator
  * @see #db_default_cmp()
  */
-static int db_string_cmp(union DBKey key1, union DBKey key2, unsigned short maxlen)
+static int db_string_cmp(const struct DBKey_s *key1, const struct DBKey_s *key2)
 {
 	DB_COUNTSTAT(db_string_cmp);
-	return strncmp((const char *)key1.str, (const char *)key2.str, maxlen);
+	if(key1->len != key2->len)
+		return key1->len - key2->len;
+	return strncmp(key1->u.str, key2->u.str, key1->len); // Same length
 }
 
 /**
@@ -1013,37 +1009,35 @@ static int db_string_cmp(union DBKey key1, union DBKey key2, unsigned short maxl
  * Return 0 if equal, negative if lower and positive if higher.
  * @param key1 Key to be compared
  * @param key2 Key being compared to
- * @param maxlen Maximum length of the key to hash
  * @return 0 if equal, negative if lower and positive if higher
  * @see enum DBType#DB_ISTRING
  * @see #DBComparator
  * @see #db_default_cmp()
  */
-static int db_istring_cmp(union DBKey key1, union DBKey key2, unsigned short maxlen)
+static int db_istring_cmp(const struct DBKey_s *key1, const struct DBKey_s *key2)
 {
 	DB_COUNTSTAT(db_istring_cmp);
-	return strncasecmp((const char *)key1.str, (const char *)key2.str, maxlen);
+	if(key1->len != key2->len)
+		return key1->len - key2->len;
+	return strncasecmp(key1->u.str, key2->u.str, key1->len); // Same length
 }
 
 /**
  * Default comparator for DB_INT64 databases.
  * Compares key1 to key2.
  * Return 0 if equal, negative if lower and positive if higher.
- * <code>maxlen</code> is ignored.
  * @param key1 Key to be compared
  * @param key2 Key being compared to
- * @param maxlen Maximum length of the key to hash
  * @return 0 if equal, negative if lower and positive if higher
  * @see enum DBType#DB_INT64
  * @see #DBComparator
  * @see #db_default_cmp()
  */
-static int db_int64_cmp(union DBKey key1, union DBKey key2, unsigned short maxlen)
+static int db_int64_cmp(const struct DBKey_s *key1, const struct DBKey_s *key2)
 {
-	(void)maxlen;//not used
 	DB_COUNTSTAT(db_int64_cmp);
-	if (key1.i64 < key2.i64) return -1;
-	if (key1.i64 > key2.i64) return 1;
+	if (key1->u.i64 < key2->u.i64) return -1;
+	if (key1->u.i64 > key2->u.i64) return 1;
 	return 0;
 }
 
@@ -1051,21 +1045,18 @@ static int db_int64_cmp(union DBKey key1, union DBKey key2, unsigned short maxle
  * Default comparator for DB_UINT64 databases.
  * Compares key1 to key2.
  * Return 0 if equal, negative if lower and positive if higher.
- * <code>maxlen</code> is ignored.
  * @param key1 Key to be compared
  * @param key2 Key being compared to
- * @param maxlen Maximum length of the key to hash
  * @return 0 if equal, negative if lower and positive if higher
  * @see enum DBType#DB_UINT64
  * @see #DBComparator
  * @see #db_default_cmp()
  */
-static int db_uint64_cmp(union DBKey key1, union DBKey key2, unsigned short maxlen)
+static int db_uint64_cmp(const struct DBKey_s *key1, const struct DBKey_s *key2)
 {
-	(void)maxlen;//not used
 	DB_COUNTSTAT(db_uint64_cmp);
-	if (key1.ui64 < key2.ui64) return -1;
-	if (key1.ui64 > key2.ui64) return 1;
+	if (key1->u.ui64 < key2->u.ui64) return -1;
+	if (key1->u.ui64 > key2->u.ui64) return 1;
 	return 0;
 }
 
@@ -1073,51 +1064,44 @@ static int db_uint64_cmp(union DBKey key1, union DBKey key2, unsigned short maxl
 /**
  * Default hasher for DB_INT databases.
  * Returns the value of the key as an unsigned int.
- * <code>maxlen</code> is ignored.
  * @param key Key to be hashed
- * @param maxlen Maximum length of the key to hash
  * @return hash of the key
  * @see enum DBType#DB_INT
  * @see #DBHasher
  * @see #db_default_hash()
  */
-static uint64 db_int_hash(union DBKey key, unsigned short maxlen)
+static uint64 db_int_hash(const struct DBKey_s *key)
 {
-	(void)maxlen;//not used
 	DB_COUNTSTAT(db_int_hash);
-	return (uint64)key.i;
+	return key->u.i;
 }
 
 /**
  * Default hasher for DB_UINT databases.
  * Just returns the value of the key.
- * <code>maxlen</code> is ignored.
  * @param key Key to be hashed
- * @param maxlen Maximum length of the key to hash
  * @return hash of the key
  * @see enum DBType#DB_UINT
  * @see #DBHasher
  * @see #db_default_hash()
  */
-static uint64 db_uint_hash(union DBKey key, unsigned short maxlen)
+static uint64 db_uint_hash(const struct DBKey_s *key)
 {
-	(void)maxlen;//not used
 	DB_COUNTSTAT(db_uint_hash);
-	return (uint64)key.ui;
+	return key->u.ui;
 }
 
 /**
  * Default hasher for DB_STRING databases.
  * @param key Key to be hashed
- * @param maxlen Maximum length of the key to hash
  * @return hash of the key
  * @see enum DBType#DB_STRING
  * @see #DBHasher
  * @see #db_default_hash()
  */
-static uint64 db_string_hash(union DBKey key, unsigned short maxlen)
+static uint64 db_string_hash(const struct DBKey_s *key)
 {
-	const char *k = key.str;
+	const char *k = key->u.str;
 	unsigned int hash = 0;
 	unsigned short i;
 
@@ -1126,7 +1110,7 @@ static uint64 db_string_hash(union DBKey key, unsigned short maxlen)
 	for (i = 0; *k; ++i) {
 		hash = (hash*33 + ((unsigned char)*k))^(hash>>24);
 		k++;
-		if (i == maxlen)
+		if (i == key->len)
 			break;
 	}
 
@@ -1136,14 +1120,13 @@ static uint64 db_string_hash(union DBKey key, unsigned short maxlen)
 /**
  * Default hasher for DB_ISTRING databases.
  * @param key Key to be hashed
- * @param maxlen Maximum length of the key to hash
  * @return hash of the key
  * @see enum DBType#DB_ISTRING
  * @see #db_default_hash()
  */
-static uint64 db_istring_hash(union DBKey key, unsigned short maxlen)
+static uint64 db_istring_hash(const struct DBKey_s *key)
 {
-	const char *k = key.str;
+	const char *k = key->u.str;
 	unsigned int hash = 0;
 	unsigned short i;
 
@@ -1152,7 +1135,7 @@ static uint64 db_istring_hash(union DBKey key, unsigned short maxlen)
 	for (i = 0; *k; i++) {
 		hash = (hash*33 + ((unsigned char)TOLOWER(*k)))^(hash>>24);
 		k++;
-		if (i == maxlen)
+		if (i == key->len)
 			break;
 	}
 
@@ -1162,37 +1145,31 @@ static uint64 db_istring_hash(union DBKey key, unsigned short maxlen)
 /**
  * Default hasher for DB_INT64 databases.
  * Returns the value of the key as an unsigned int.
- * <code>maxlen</code> is ignored.
  * @param key Key to be hashed
- * @param maxlen Maximum length of the key to hash
  * @return hash of the key
  * @see enum DBType#DB_INT64
  * @see #DBHasher
  * @see #db_default_hash()
  */
-static uint64 db_int64_hash(union DBKey key, unsigned short maxlen)
+static uint64 db_int64_hash(const struct DBKey_s *key)
 {
-	(void)maxlen;//not used
 	DB_COUNTSTAT(db_int64_hash);
-	return (uint64)key.i64;
+	return key->u.i64;
 }
 
 /**
  * Default hasher for DB_UINT64 databases.
  * Just returns the value of the key.
- * <code>maxlen</code> is ignored.
  * @param key Key to be hashed
- * @param maxlen Maximum length of the key to hash
  * @return hash of the key
  * @see enum DBType#DB_UINT64
  * @see #DBHasher
  * @see #db_default_hash()
  */
-static uint64 db_uint64_hash(union DBKey key, unsigned short maxlen)
+static uint64 db_uint64_hash(const struct DBKey_s *key)
 {
-	(void)maxlen;//not used
 	DB_COUNTSTAT(db_uint64_hash);
-	return key.ui64;
+	return key->u.i64;
 }
 
 /**
@@ -1204,7 +1181,7 @@ static uint64 db_uint64_hash(union DBKey key, unsigned short maxlen)
  * @see #DBReleaser
  * @see #db_default_releaser()
  */
-static void db_release_nothing(union DBKey key, struct DBData data, enum DBReleaseOption which)
+static void db_release_nothing(struct DBKey_s *key, struct DBData data, enum DBReleaseOption which)
 {
 	(void)key;(void)data;(void)which;//not used
 	DB_COUNTSTAT(db_release_nothing);
@@ -1219,12 +1196,12 @@ static void db_release_nothing(union DBKey key, struct DBData data, enum DBRelea
  * @see #DBReleaser
  * @see #db_default_release()
  */
-static void db_release_key(union DBKey key, struct DBData data, enum DBReleaseOption which)
+static void db_release_key(struct DBKey_s *key, struct DBData data, enum DBReleaseOption which)
 {
 	(void)data;//not used
 	DB_COUNTSTAT(db_release_key);
 	if (which&DB_RELEASE_KEY)
-		aFree(key.mutstr); // FIXME: Ensure this is the right db type.
+		aFree(key->u.mutstr); // FIXME: Ensure this is the right db type.
 }
 
 /**
@@ -1238,7 +1215,7 @@ static void db_release_key(union DBKey key, struct DBData data, enum DBReleaseOp
  * @see #DBReleaser
  * @see #db_default_release()
  */
-static void db_release_data(union DBKey key, struct DBData data, enum DBReleaseOption which)
+static void db_release_data(struct DBKey_s *key, struct DBData data, enum DBReleaseOption which)
 {
 	(void)key;//not used
 	DB_COUNTSTAT(db_release_data);
@@ -1254,17 +1231,17 @@ static void db_release_data(union DBKey key, struct DBData data, enum DBReleaseO
  * @param data Data of the database entry
  * @param which What is being requested to be released
  * @protected
- * @see union DBKey
+ * @see struct DBKey_s
  * @see struct DBData
  * @see enum DBReleaseOption
  * @see #DBReleaser
  * @see #db_default_release()
  */
-static void db_release_both(union DBKey key, struct DBData data, enum DBReleaseOption which)
+static void db_release_both(struct DBKey_s *key, struct DBData data, enum DBReleaseOption which)
 {
 	DB_COUNTSTAT(db_release_both);
 	if (which&DB_RELEASE_KEY)
-		aFree(key.mutstr); // FIXME: Ensure this is the right db type.
+		aFree(key->u.mutstr); // FIXME: Ensure this is the right db type.
 	if (which&DB_RELEASE_DATA && data.type == DB_DATA_PTR) {
 		aFree(data.u.ptr);
 		data.u.ptr = NULL;
@@ -1315,7 +1292,7 @@ static void db_release_both(union DBKey key, struct DBData data, enum DBReleaseO
  * @protected
  * @see struct DBIterator#first()
  */
-static struct DBData *dbit_obj_first(struct DBIterator *self, union DBKey *out_key)
+static struct DBData *dbit_obj_first(struct DBIterator *self, struct DBKey_s *out_key)
 {
 	struct DBIterator_impl *it = (struct DBIterator_impl *)self;
 
@@ -1337,7 +1314,7 @@ static struct DBData *dbit_obj_first(struct DBIterator *self, union DBKey *out_k
  * @protected
  * @see struct DBIterator#last()
  */
-static struct DBData *dbit_obj_last(struct DBIterator *self, union DBKey *out_key)
+static struct DBData *dbit_obj_last(struct DBIterator *self, struct DBKey_s *out_key)
 {
 	struct DBIterator_impl *it = (struct DBIterator_impl *)self;
 
@@ -1359,7 +1336,7 @@ static struct DBData *dbit_obj_last(struct DBIterator *self, union DBKey *out_ke
  * @protected
  * @see struct DBIterator#next()
  */
-static struct DBData *dbit_obj_next(struct DBIterator *self, union DBKey *out_key)
+static struct DBData *dbit_obj_next(struct DBIterator *self, struct DBKey_s *out_key)
 {
 	struct DBIterator_impl *it = (struct DBIterator_impl *)self;
 	struct DBNode *node;
@@ -1416,7 +1393,7 @@ static struct DBData *dbit_obj_next(struct DBIterator *self, union DBKey *out_ke
 			{// found next entry
 				it->node = node;
 				if( out_key )
-					memcpy(out_key, &node->key, sizeof(union DBKey));
+					memcpy(out_key, &node->key, sizeof(*out_key));
 				return &node->data;
 			}
 		}
@@ -1435,7 +1412,7 @@ static struct DBData *dbit_obj_next(struct DBIterator *self, union DBKey *out_ke
  * @protected
  * @see struct DBIterator#prev()
  */
-static struct DBData *dbit_obj_prev(struct DBIterator *self, union DBKey *out_key)
+static struct DBData *dbit_obj_prev(struct DBIterator *self, struct DBKey_s *out_key)
 {
 	struct DBIterator_impl *it = (struct DBIterator_impl *)self;
 	struct DBNode *node;
@@ -1492,7 +1469,7 @@ static struct DBData *dbit_obj_prev(struct DBIterator *self, union DBKey *out_ke
 			{// found previous entry
 				it->node = node;
 				if( out_key )
-					memcpy(out_key, &node->key, sizeof(union DBKey));
+					memcpy(out_key, &node->key, sizeof(*out_key));
 				return &node->data;
 			}
 		}
@@ -1545,7 +1522,7 @@ static int dbit_obj_remove(struct DBIterator *self, struct DBData *out_data)
 		struct DBMap_impl *db = it->db;
 		if( db->cache == node )
 			db->cache = NULL;
-		db->release(node->key, node->data, DB_RELEASE_DATA);
+		db->release(&node->key, node->data, DB_RELEASE_DATA);
 		if( out_data )
 			memcpy(out_data, &node->data, sizeof(struct DBData));
 		retval = 1;
@@ -1641,7 +1618,7 @@ static bool db_set_hash(struct DBMap *self, DBHasher new_hash)
  * @protected
  * @see struct DBMap#exists()
  */
-static bool db_obj_exists(struct DBMap *self, union DBKey key)
+static bool db_obj_exists(struct DBMap *self, const struct DBKey_s key)
 {
 	struct DBMap_impl *db = (struct DBMap_impl *)self;
 	struct DBNode *node;
@@ -1649,11 +1626,11 @@ static bool db_obj_exists(struct DBMap *self, union DBKey key)
 
 	DB_COUNTSTAT(db_exists);
 	if (db == NULL) return false; // nullpo candidate
-	if (!(db->options&DB_OPT_ALLOW_NULL_KEY) && db_is_key_null(db->type, key)) {
+	if (!(db->options&DB_OPT_ALLOW_NULL_KEY) && db_is_key_null(db->type, &key)) {
 		return false; // nullpo candidate
 	}
 
-	if (db->cache && db->cmp(key, db->cache->key, db->maxlen) == 0) {
+	if (db->cache && db->cmp(&key, &db->cache->key) == 0) {
 #if defined(DEBUG)
 		if (db->cache->deleted) {
 			ShowDebug("db_exists: Cache contains a deleted node. Please report this!!!\n");
@@ -1664,9 +1641,9 @@ static bool db_obj_exists(struct DBMap *self, union DBKey key)
 	}
 
 	db_free_lock(db);
-	node = db->ht[db->hash(key, db->maxlen)%HASH_SIZE];
+	node = db->ht[db->hash(&key)%HASH_SIZE];
 	while (node) {
-		int c = db->cmp(key, node->key, db->maxlen);
+		int c = db->cmp(&key, &node->key);
 		if (c == 0) {
 			if (!(node->deleted)) {
 				db->cache = node;
@@ -1691,7 +1668,7 @@ static bool db_obj_exists(struct DBMap *self, union DBKey key)
  * @protected
  * @see struct DBMap#get()
  */
-static struct DBData *db_obj_get(struct DBMap *self, union DBKey key)
+static struct DBData *db_obj_get(struct DBMap *self, const struct DBKey_s key)
 {
 	struct DBMap_impl *db = (struct DBMap_impl *)self;
 	struct DBNode *node;
@@ -1699,12 +1676,12 @@ static struct DBData *db_obj_get(struct DBMap *self, union DBKey key)
 
 	DB_COUNTSTAT(db_get);
 	if (db == NULL) return NULL; // nullpo candidate
-	if (!(db->options&DB_OPT_ALLOW_NULL_KEY) && db_is_key_null(db->type, key)) {
+	if (!(db->options&DB_OPT_ALLOW_NULL_KEY) && db_is_key_null(db->type, &key)) {
 		ShowError("db_get: Attempted to retrieve non-allowed NULL key for db allocated at %s:%d\n",db->alloc_file, db->alloc_line);
 		return NULL; // nullpo candidate
 	}
 
-	if (db->cache && db->cmp(key, db->cache->key, db->maxlen) == 0) {
+	if (db->cache && db->cmp(&key, &db->cache->key) == 0) {
 #if defined(DEBUG)
 		if (db->cache->deleted) {
 			ShowDebug("db_get: Cache contains a deleted node. Please report this!!!\n");
@@ -1715,9 +1692,9 @@ static struct DBData *db_obj_get(struct DBMap *self, union DBKey key)
 	}
 
 	db_free_lock(db);
-	node = db->ht[db->hash(key, db->maxlen)%HASH_SIZE];
+	node = db->ht[db->hash(&key)%HASH_SIZE];
 	while (node) {
-		int c = db->cmp(key, node->key, db->maxlen);
+		int c = db->cmp(&key, &node->key);
 		if (c == 0) {
 			if (!(node->deleted)) {
 				data = &node->data;
@@ -1771,7 +1748,7 @@ static unsigned int db_obj_vgetall(struct DBMap *self, struct DBData **buf, unsi
 			if (!(node->deleted)) {
 				va_list argscopy;
 				va_copy(argscopy, args);
-				if (match(node->key, node->data, argscopy) == 0) {
+				if (match(&node->key, node->data, argscopy) == 0) {
 					if (buf && ret < max)
 						buf[ret] = &node->data;
 					ret++;
@@ -1903,7 +1880,7 @@ struct DBNode *db_obj_create(struct DBMap *self, unsigned int hash, int c, struc
  * @param key Key that identifies the data
  * @param data Data to be put in the database
  **/
-void db_obj_fill(struct DBMap *self, struct DBNode *node, union DBKey key, struct DBData data)
+void db_obj_fill(struct DBMap *self, struct DBNode *node, struct DBKey_s *key, struct DBData data)
 {
 	struct DBMap_impl *db = (struct DBMap_impl *)self;
 	if (db->options&DB_OPT_DUP_KEY) {
@@ -1911,7 +1888,7 @@ void db_obj_fill(struct DBMap *self, struct DBNode *node, union DBKey key, struc
 		if (db->options&DB_OPT_RELEASE_KEY)
 			db->release(key, node->data, DB_RELEASE_KEY);
 	} else {
-		node->key = key;
+		memcpy(&node->key, key, sizeof(*key));
 	}
 	node->data = data;
 }
@@ -1928,7 +1905,7 @@ void db_obj_fill(struct DBMap *self, struct DBNode *node, union DBKey key, struc
  * @protected
  * @see struct DBMap#vensure()
  */
-static struct DBData *db_obj_vensure(struct DBMap *self, union DBKey key, DBCreateData create, va_list args)
+static struct DBData *db_obj_vensure(struct DBMap *self, struct DBKey_s key, DBCreateData create, va_list args)
 {
 	struct DBMap_impl *db = (struct DBMap_impl *)self;
 	struct DBNode *node;
@@ -1943,19 +1920,19 @@ static struct DBData *db_obj_vensure(struct DBMap *self, union DBKey key, DBCrea
 		ShowError("db_ensure: Create function is NULL for db allocated at %s:%d\n",db->alloc_file, db->alloc_line);
 		return NULL; // nullpo candidate
 	}
-	if (!(db->options&DB_OPT_ALLOW_NULL_KEY) && db_is_key_null(db->type, key)) {
+	if (!(db->options&DB_OPT_ALLOW_NULL_KEY) && db_is_key_null(db->type, &key)) {
 		ShowError("db_ensure: Attempted to use non-allowed NULL key for db allocated at %s:%d\n",db->alloc_file, db->alloc_line);
 		return NULL; // nullpo candidate
 	}
 
-	if (db->cache && db->cmp(key, db->cache->key, db->maxlen) == 0)
+	if (db->cache && db->cmp(&key, &db->cache->key) == 0)
 		return &db->cache->data; // cache hit
 
 	db_free_lock(db);
-	hash = db->hash(key, db->maxlen)%HASH_SIZE;
+	hash = db->hash(&key)%HASH_SIZE;
 	node = db->ht[hash];
 	while (node) {
-		c = db->cmp(key, node->key, db->maxlen);
+		c = db->cmp(&key, &node->key);
 		if (c == 0) {
 			break;
 		}
@@ -1975,7 +1952,7 @@ static struct DBData *db_obj_vensure(struct DBMap *self, union DBKey key, DBCrea
 			return NULL;
 		}
 		va_copy(argscopy, args);
-		db_obj_fill(self, node, key, create(key, argscopy));
+		db_obj_fill(self, node, &key, create(&key, argscopy));
 		va_end(argscopy);
 	}
 	data = &node->data;
@@ -1999,7 +1976,7 @@ static struct DBData *db_obj_vensure(struct DBMap *self, union DBKey key, DBCrea
  * @see struct DBMap#vensure()
  * @see struct DBMap#ensure()
  */
-static struct DBData *db_obj_ensure(struct DBMap *self, union DBKey key, DBCreateData create, ...)
+static struct DBData *db_obj_ensure(struct DBMap *self, struct DBKey_s key, DBCreateData create, ...)
 {
 	va_list args;
 	struct DBData *ret = NULL;
@@ -2026,7 +2003,7 @@ static struct DBData *db_obj_ensure(struct DBMap *self, union DBKey key, DBCreat
  * @see #db_malloc_dbn(void)
  * @see struct DBMap#put()
  */
-static int db_obj_put(struct DBMap *self, union DBKey key, struct DBData data, struct DBData *out_data)
+static int db_obj_put(struct DBMap *self, struct DBKey_s key, struct DBData data, struct DBData *out_data)
 {
 	struct DBMap_impl *db = (struct DBMap_impl *)self;
 	struct DBNode *node;
@@ -2042,7 +2019,7 @@ static int db_obj_put(struct DBMap *self, union DBKey key, struct DBData data, s
 				db->alloc_file, db->alloc_line);
 		return 0; // nullpo candidate
 	}
-	if (!(db->options&DB_OPT_ALLOW_NULL_KEY) && db_is_key_null(db->type, key)) {
+	if (!(db->options&DB_OPT_ALLOW_NULL_KEY) && db_is_key_null(db->type, &key)) {
 		ShowError("db_put: Attempted to use non-allowed NULL key for db allocated at %s:%d\n",db->alloc_file, db->alloc_line);
 		return 0; // nullpo candidate
 	}
@@ -2050,24 +2027,37 @@ static int db_obj_put(struct DBMap *self, union DBKey key, struct DBData data, s
 		ShowError("db_put: Attempted to use non-allowed NULL data for db allocated at %s:%d\n",db->alloc_file, db->alloc_line);
 		return 0; // nullpo candidate
 	}
+	if ((db->type == DB_STRING || db->type == DB_ISTRING) && !key.len) {
+		ShowWarning("db_put: Attempted to store key (%s) with no length for "
+			"db allocated at %s:%d\n Calculating length.",
+			key.u.str, db->alloc_file, db->alloc_line);
+		size_t key_len = strlen(key.u.str);
+		key.len = (int16_t)cap_value(key_len, 0, INT16_MAX);
+	}
+	if (key.len > db->maxlen) {
+		ShowWarning("db_put: Attempted to store key with len (%d) greater than "
+			"maxlen (%d) for db allocated at %s:%d\n Truncating key.",
+			key.len, db->maxlen, db->alloc_file, db->alloc_line);
+		key.len = db->maxlen;
+	}
 
 	// search for an equal node
 	db_free_lock(db);
-	hash = db->hash(key, db->maxlen)%HASH_SIZE;
+	hash = db->hash(&key)%HASH_SIZE;
 #ifdef DB_ENABLE_STATS
 	if(db->ht[hash] && db->cmp(key, db->ht[hash]->key, db->maxlen)
 		&& !db->ht[hash]->deleted
 	)
-		DB_COUNTSTAT_SWITCH(db, collision);
+		DB_COUNTSTAT_SWITCH(db->type, collision);
 	int bucket_fill = 0;
 #endif
 	for (node = db->ht[hash]; node; ) {
-		c = db->cmp(key, node->key, db->maxlen);
+		c = db->cmp(&key, &node->key);
 		if (c == 0) { // equal entry, replace
 			if (node->deleted) {
 				db_free_remove(db, node);
 			} else {
-				db->release(node->key, node->data, DB_RELEASE_BOTH);
+				db->release(&node->key, node->data, DB_RELEASE_BOTH);
 				if (out_data)
 					memcpy(out_data, &node->data, sizeof(*out_data));
 				retval = 1;
@@ -2082,7 +2072,7 @@ static int db_obj_put(struct DBMap *self, union DBKey key, struct DBData data, s
 		}
 #ifdef DB_ENABLE_STATS
 		bucket_fill++;
-		DB_GREATERTHAN_SWITCH(db, bucket_fill, bucket_peak);
+		DB_GREATERTHAN_SWITCH(db->type, bucket_fill, bucket_peak);
 #endif
 	}
 	// allocate a new node if necessary
@@ -2094,7 +2084,7 @@ static int db_obj_put(struct DBMap *self, union DBKey key, struct DBData data, s
 			return 0;
 		}
 	}
-	db_obj_fill(self, node, key, data);
+	db_obj_fill(self, node, &key, data);
 	db->cache = node;
 	db_free_unlock(db);
 	return retval;
@@ -2112,7 +2102,7 @@ static int db_obj_put(struct DBMap *self, union DBKey key, struct DBData data, s
  * @see #db_free_add()
  * @see struct DBMap#remove()
  */
-static int db_obj_remove(struct DBMap *self, union DBKey key, struct DBData *out_data)
+static int db_obj_remove(struct DBMap *self, const struct DBKey_s key, struct DBData *out_data)
 {
 	struct DBMap_impl *db = (struct DBMap_impl *)self;
 	struct DBNode *node;
@@ -2127,20 +2117,20 @@ static int db_obj_remove(struct DBMap *self, union DBKey key, struct DBData *out
 				db->alloc_file, db->alloc_line);
 		return 0; // nullpo candidate
 	}
-	if (!(db->options&DB_OPT_ALLOW_NULL_KEY) && db_is_key_null(db->type, key)) {
+	if (!(db->options&DB_OPT_ALLOW_NULL_KEY) && db_is_key_null(db->type, &key)) {
 		ShowError("db_remove: Attempted to use non-allowed NULL key for db allocated at %s:%d\n",db->alloc_file, db->alloc_line);
 		return 0; // nullpo candidate
 	}
 
 	db_free_lock(db);
-	hash = db->hash(key, db->maxlen)%HASH_SIZE;
+	hash = db->hash(&key)%HASH_SIZE;
 	for(node = db->ht[hash]; node; ){
-		int c = db->cmp(key, node->key, db->maxlen);
+		int c = db->cmp(&key, &node->key);
 		if (c == 0) {
 			if (!(node->deleted)) {
 				if (db->cache == node)
 					db->cache = NULL;
-				db->release(node->key, node->data, DB_RELEASE_DATA);
+				db->release(&node->key, node->data, DB_RELEASE_DATA);
 				if (out_data)
 					memcpy(out_data, &node->data, sizeof(*out_data));
 				retval = 1;
@@ -2190,7 +2180,7 @@ static int db_obj_vforeach(struct DBMap *self, DBApply func, va_list args)
 			if (!(node->deleted)) {
 				va_list argscopy;
 				va_copy(argscopy, args);
-				sum += func(node->key, &node->data, argscopy);
+				sum += func(&node->key, &node->data, argscopy);
 				va_end(argscopy);
 			}
 			if (node->left) {
@@ -2285,16 +2275,16 @@ static int db_obj_vclear(struct DBMap *self, DBApply func, va_list args)
 				continue;
 			}
 			if (node->deleted) {
-				db_dup_key_free(db, node->key);
+				db_dup_key_free(db, &node->key);
 			} else {
 				if (func)
 				{
 					va_list argscopy;
 					va_copy(argscopy, args);
-					sum += func(node->key, &node->data, argscopy);
+					sum += func(&node->key, &node->data, argscopy);
 					va_end(argscopy);
 				}
-				db->release(node->key, node->data, DB_RELEASE_BOTH);
+				db->release(&node->key, node->data, DB_RELEASE_BOTH);
 				node->deleted = 1;
 			}
 			DB_COUNTSTAT(db_node_free);
@@ -2380,7 +2370,7 @@ static int db_obj_vdestroy(struct DBMap *self, DBApply func, va_list args)
 				"Database allocated at %s:%d\n",
 				db->free_lock, db->alloc_file, db->alloc_line);
 
-	DB_COUNTSTAT_SWITCH(db, destroy);
+	DB_COUNTSTAT_SWITCH(db->type, destroy);
 	db_free_lock(db);
 	db->global_lock = 1;
 	sum = self->vclear(self, func, args);
@@ -2473,8 +2463,7 @@ static enum DBType db_obj_type(struct DBMap *self)
 	enum DBType type;
 
 	DB_COUNTSTAT(db_type);
-	if (db == NULL)
-		return (enum DBType)-1; // nullpo candidate - TODO what should this return?
+	nullpo_retr(DB_ERROR, db);
 
 	db_free_lock(db);
 	type = db->type;
@@ -2497,7 +2486,7 @@ static enum DBOptions db_obj_options(struct DBMap *self)
 	enum DBOptions options;
 
 	DB_COUNTSTAT(db_options);
-	if (db == NULL) return DB_OPT_BASE; // nullpo candidate - TODO what should this return?
+	nullpo_retr(DB_OPT_BASE, db);
 
 	db_free_lock(db);
 	options = db->options;
@@ -2514,14 +2503,14 @@ static enum DBOptions db_obj_options(struct DBMap *self)
  *  db_default_release - Get the default releaser for a type of database with the specified options.
  *  db_custom_release  - Get a releaser that behaves a certain way.
  *  db_alloc           - Allocate a new database.
- *  db_i2key           - Manual cast from `int` to `union DBKey`.
- *  db_ui2key          - Manual cast from `unsigned int` to `union DBKey`.
- *  db_str2key         - Manual cast from `unsigned char *` to `union DBKey`.
- *  db_i642key         - Manual cast from `int64` to `union DBKey`.
- *  db_ui642key        - Manual cast from `uin64` to `union DBKey`.
- *  db_i2data          - Manual cast from `int` to `struct DBData`.
- *  db_ui2data         - Manual cast from `unsigned int` to `struct DBData`.
- *  db_ptr2data        - Manual cast from `void*` to `struct DBData`.
+ *  db_i2key           - Creates a new key from `int`.
+ *  db_ui2key          - Creates a new key from `unsigned int`.
+ *  db_str2key         - Creates a new key from `unsigned char *`.
+ *  db_i642key         - Creates a new key from `int64`.
+ *  db_ui642key        - Creates a new key from `uin64`.
+ *  db_i2data          - Creates a new key from `int` to `struct DBData`.
+ *  db_ui2data         - Creates a new key from `unsigned int` to `struct DBData`.
+ *  db_ptr2data        - Creates a new key from `void*` to `struct DBData`.
  *  db_data2i          - Gets `int` value from `struct DBData`.
  *  db_data2ui         - Gets `unsigned int` value from `struct DBData`.
  *  db_data2ptr        - Gets `void*` value from `struct DBData`.
@@ -2688,22 +2677,16 @@ static DBReleaser db_custom_release(enum DBReleaseOption which)
  * @see struct DBMap_impl
  * @see #db_fix_options()
  */
-static struct DBMap *db_alloc(const char *file, const char *func, int line, enum DBType type, enum DBOptions options, unsigned short maxlen)
-{
+static struct DBMap *db_alloc(const char *file, const char *func, int line,
+	enum DBType type, enum DBOptions options, unsigned short maxlen
+) {
 	struct DBMap_impl *db;
 	unsigned int i;
 	char ers_name[50];
 
 #ifdef DB_ENABLE_STATS
 	DB_COUNTSTAT(db_alloc);
-	switch (type) {
-		case DB_INT: DB_COUNTSTAT(db_int_alloc); break;
-		case DB_UINT: DB_COUNTSTAT(db_uint_alloc); break;
-		case DB_STRING: DB_COUNTSTAT(db_string_alloc); break;
-		case DB_ISTRING: DB_COUNTSTAT(db_istring_alloc); break;
-		case DB_INT64: DB_COUNTSTAT(db_int64_alloc); break;
-		case DB_UINT64: DB_COUNTSTAT(db_uint64_alloc); break;
-	}
+	DB_COUNTSTAT_SWITCH(type, alloc);
 #endif /* DB_ENABLE_STATS */
 
 	rwlock->read_lock(db_alloc_ers->collection_lock);
@@ -2770,77 +2753,86 @@ static struct DBMap *db_alloc(const char *file, const char *func, int line, enum
 }
 
 /**
- * Manual cast from 'int' to the union DBKey.
+ * Creates a new key from 'int'.
  * @param key Key to be casted
- * @return The key as a DBKey union
+ * @return The key as a DBKey struct
  * @public
  */
-static union DBKey db_i2key(int key)
+static struct DBKey_s db_i2key(int key)
 {
-	union DBKey ret;
+	struct DBKey_s ret;
 
 	DB_COUNTSTAT(db_i2key);
-	ret.i = key;
+	ret.u.i = key;
+	ret.len = sizeof(ret.u.i);
 	return ret;
 }
 
 /**
- * Manual cast from 'unsigned int' to the union DBKey.
+ * Creates a new key from 'unsigned int'.
  * @param key Key to be casted
- * @return The key as a DBKey union
+ * @return The key as a DBKey struct
  * @public
  */
-static union DBKey db_ui2key(unsigned int key)
+static struct DBKey_s db_ui2key(unsigned int key)
 {
-	union DBKey ret;
+	struct DBKey_s ret;
 
 	DB_COUNTSTAT(db_ui2key);
-	ret.ui = key;
+	ret.u.ui = key;
+	ret.len = sizeof(ret.u.ui);
 	return ret;
 }
 
 /**
- * Manual cast from 'const char *' to the union DBKey.
+ * Creates a new key from 'const char *'.
  * @param key Key to be casted
- * @return The key as a DBKey union
+ * @param len Key length, if 0 the length is calculated.
+ * @return The key as a DBKey struct
  * @public
  */
-static union DBKey db_str2key(const char *key)
+static struct DBKey_s db_str2key(const char *key, size_t len)
 {
-	union DBKey ret;
+	struct DBKey_s ret;
+	size_t key_len;
 
 	DB_COUNTSTAT(db_str2key);
-	ret.str = key;
+	ret.u.str = key;
+	key_len = (!len)?strlen(key):len;
+	ret.len = (int16_t)cap_value(key_len, 0, INT16_MAX);
+
 	return ret;
 }
 
 /**
- * Manual cast from 'int64' to the union DBKey.
+ * Creates a new key from 'int64'.
  * @param key Key to be casted
- * @return The key as a DBKey union
+ * @return The key as a DBKey struct
  * @public
  */
-static union DBKey db_i642key(int64 key)
+static struct DBKey_s db_i642key(int64 key)
 {
-	union DBKey ret;
+	struct DBKey_s ret;
 
 	DB_COUNTSTAT(db_i642key);
-	ret.i64 = key;
+	ret.u.i64 = key;
+	ret.len = sizeof(ret.u.i64);
 	return ret;
 }
 
 /**
- * Manual cast from 'uin64' to the union DBKey.
+ * Creates a new key from 'uin64'.
  * @param key Key to be casted
- * @return The key as a DBKey union
+ * @return The key as a DBKey struct
  * @public
  */
-static union DBKey db_ui642key(uint64 key)
+static struct DBKey_s db_ui642key(uint64 key)
 {
-	union DBKey ret;
+	struct DBKey_s ret;
 
 	DB_COUNTSTAT(db_ui642key);
-	ret.ui64 = key;
+	ret.u.ui64 = key;
+	ret.len = sizeof(ret.u.ui64);
 	return ret;
 }
 
