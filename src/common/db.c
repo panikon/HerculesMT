@@ -27,7 +27,14 @@
  *  (4) Protected functions used in the interface of the database
  *  (5) Public functions
  *
- *  The databases are structured as a hashtable of RED-BLACK trees.
+ *  The databases are hash tables with balanced trees (RED-BLACK) to handle
+ *  any collisions instead of chaining. With the latter the worst
+ *  case in search is <code>O(n)</code> while with the former it's
+ *  <code>O(lg(n))</code>.
+ *  With this approach the total number of buckets (<code>HASH_SIZE</code>),
+ *  can be smaller because collisions are not as damaging to the basic
+ *  properties of the table.
+ *
  *
  *  <B>Properties of the RED-BLACK trees being used:</B>
  *  1. The value of any node is greater than the value of its left child and
@@ -130,9 +137,10 @@ struct db_interface *DB;
 //#define DB_ENABLE_STATS
 
 /**
- * Size of the hashtable in the database.
+ * Size of the hashtable in the database (number of buckets).
  * @private
  * @see struct DBMap_impl#ht
+ * @remarks To minimize collisions this number should be a prime.
  */
 #define HASH_SIZE (256+27)
 
@@ -345,18 +353,51 @@ static struct db_stats {
 	uint32 db_data2ptr;
 	uint32 db_init;
 	uint32 db_final;
-} stats = {
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0
-};
+	// Collision stats
+	uint32 db_int_collision;
+	uint32 db_uint_collision;
+	uint32 db_string_collision;
+	uint32 db_istring_collision;
+	uint32 db_int64_collision;
+	uint32 db_uint64_collision;
+	uint32 db_int_bucket_peak; 
+	uint32 db_uint_bucket_peak;
+	uint32 db_string_bucket_peak;
+	uint32 db_istring_bucket_peak;
+	uint32 db_int64_bucket_peak;
+	uint32 db_uint64_bucket_peak;
+} stats = { 0 };
 #define DB_COUNTSTAT(token) do { if ((stats.token) != UINT32_MAX) ++(stats.token); } while(0)
+#define DB_GREATERTHAN_COUNT(v, token) do { if((v) > (stats.token)) DB_COUNTSTAT(token); } while(0)
+
+#define DB_COUNTSTAT_SWITCH(d, partial_token)                                \
+	do {                                                                     \
+		switch ((d)->type) {                                                 \
+			case DB_INT:     DB_COUNTSTAT(db_int_##partial_token);    break; \
+			case DB_UINT:    DB_COUNTSTAT(db_uint_##partial_token);   break; \
+			case DB_STRING:  DB_COUNTSTAT(db_string_##partial_token); break; \
+			case DB_ISTRING: DB_COUNTSTAT(db_istring_##partial_token);break; \
+			case DB_INT64:   DB_COUNTSTAT(db_int64_##partial_token);  break; \
+			case DB_UINT64:  DB_COUNTSTAT(db_uint64_##partial_token); break; \
+		}                                                                    \
+	} while(false)
+#define DB_GREATERTHAN_SWITCH(d, v, partial_token)                                        \
+	do {                                                                                  \
+		switch ((d)->type) {                                                              \
+			case DB_INT:     DB_GREATERTHAN_COUNT((v), db_int_##partial_token);    break; \
+			case DB_UINT:    DB_GREATERTHAN_COUNT((v), db_uint_##partial_token);   break; \
+			case DB_STRING:  DB_GREATERTHAN_COUNT((v), db_string_##partial_token); break; \
+			case DB_ISTRING: DB_GREATERTHAN_COUNT((v), db_istring_##partial_token);break; \
+			case DB_INT64:   DB_GREATERTHAN_COUNT((v), db_int64_##partial_token);  break; \
+			case DB_UINT64:  DB_GREATERTHAN_COUNT((v), db_uint64_##partial_token); break; \
+		}                                                                                 \
+	} while(false)
+
 #else /* !defined(DB_ENABLE_STATS) */
 #define DB_COUNTSTAT(token) (void)0
+#define DB_GREATERTHAN_COUNT(v, token) (void)0
+#define DB_COUNTSTAT_SWITCH(d, partial_token) (void)0
+#define DB_GREATERTHAN_SWITCH(d, v, partial_token) (void)0
 #endif /* !defined(DB_ENABLE_STATS) */
 
 /* [Ind/Hercules] */
@@ -1241,7 +1282,8 @@ static void db_release_both(union DBKey key, struct DBData data, enum DBReleaseO
  *  dbit_obj_remove  - Remove the current entry from the database.           *
  *  dbit_obj_destroy - Destroys the iterator, unlocking the database and     *
  *           freeing used memory.                                            *
- *  db_obj_iterator - Return a new database iterator.                         *
+ *  db_obj_iterator - Return a new database iterator.                        *
+ *  db_set_hash     - Sets a new hash function.                              *
  *  db_obj_exists   - Checks if an entry exists.                             *
  *  db_obj_get      - Get the data identified by the key.                    *
  *  db_obj_vgetall  - Get the data of the matched entries.                   *
@@ -1573,6 +1615,22 @@ static struct DBIterator *db_obj_iterator(struct DBMap *self)
 	/* Lock the database */
 	db_free_lock(db);
 	return &it->vtable;
+}
+
+/**
+ * Sets a new hashing function for provided table
+ * Fails if there are already any entries in the table.
+ * @return Success
+ **/
+static bool db_set_hash(struct DBMap *self, DBHasher new_hash)
+{
+	struct DBMap_impl *db = (struct DBMap_impl *)self;
+	if(db->item_count) {
+		// TODO: Rehashing
+		return false;
+	}
+	db->hash = new_hash;
+	return true;
 }
 
 /**
@@ -1996,6 +2054,13 @@ static int db_obj_put(struct DBMap *self, union DBKey key, struct DBData data, s
 	// search for an equal node
 	db_free_lock(db);
 	hash = db->hash(key, db->maxlen)%HASH_SIZE;
+#ifdef DB_ENABLE_STATS
+	if(db->ht[hash] && db->cmp(key, db->ht[hash]->key, db->maxlen)
+		&& !db->ht[hash]->deleted
+	)
+		DB_COUNTSTAT_SWITCH(db, collision);
+	int bucket_fill = 0;
+#endif
 	for (node = db->ht[hash]; node; ) {
 		c = db->cmp(key, node->key, db->maxlen);
 		if (c == 0) { // equal entry, replace
@@ -2015,6 +2080,10 @@ static int db_obj_put(struct DBMap *self, union DBKey key, struct DBData data, s
 		} else {
 			node = node->right;
 		}
+#ifdef DB_ENABLE_STATS
+		bucket_fill++;
+		DB_GREATERTHAN_SWITCH(db, bucket_fill, bucket_peak);
+#endif
 	}
 	// allocate a new node if necessary
 	if (node == NULL) {
@@ -2311,16 +2380,7 @@ static int db_obj_vdestroy(struct DBMap *self, DBApply func, va_list args)
 				"Database allocated at %s:%d\n",
 				db->free_lock, db->alloc_file, db->alloc_line);
 
-#ifdef DB_ENABLE_STATS
-	switch (db->type) {
-		case DB_INT: DB_COUNTSTAT(db_int_destroy); break;
-		case DB_UINT: DB_COUNTSTAT(db_uint_destroy); break;
-		case DB_STRING: DB_COUNTSTAT(db_string_destroy); break;
-		case DB_ISTRING: DB_COUNTSTAT(db_istring_destroy); break;
-		case DB_INT64: DB_COUNTSTAT(db_int64_destroy); break;
-		case DB_UINT64: DB_COUNTSTAT(db_uint64_destroy); break;
-	}
-#endif /* DB_ENABLE_STATS */
+	DB_COUNTSTAT_SWITCH(db, destroy);
 	db_free_lock(db);
 	db->global_lock = 1;
 	sum = self->vclear(self, func, args);
@@ -2674,6 +2734,7 @@ static struct DBMap *db_alloc(const char *file, const char *func, int line, enum
 	db->vtable.size     = db_obj_size;
 	db->vtable.type     = db_obj_type;
 	db->vtable.options  = db_obj_options;
+	db->vtable.set_hash = db_set_hash;
 	/* File and line of allocation */
 	db->alloc_file = file;
 	db->alloc_line = line;
@@ -2877,6 +2938,16 @@ static void *db_data2ptr(struct DBData *data)
 }
 
 /**
+ * Sets all stat data to zero
+ **/
+static void db_clear_stats(void)
+{
+#ifdef DB_ENABLE_STATS
+	memset(&stats, 0, sizeof(stats));
+#endif
+}
+
+/**
  * Initializes the database system.
  *
  * @remarks Acquires write g_ers_list_lock
@@ -2921,7 +2992,7 @@ static void db_final(void)
 	ShowInfo(CL_WHITE"Database nodes"CL_RESET":\n"
 			"allocated %u, freed %u\n",
 			stats.db_node_alloc, stats.db_node_free);
-	ShowInfo(CL_WHITE"Database types"CL_RESET":\n"
+	ShowMessage(CL_WHITE"Database types"CL_RESET":\n"
 			"DB_INT     : allocated %10u, destroyed %10u\n"
 			"DB_UINT    : allocated %10u, destroyed %10u\n"
 			"DB_STRING  : allocated %10u, destroyed %10u\n"
@@ -2934,7 +3005,22 @@ static void db_final(void)
 			stats.db_istring_alloc, stats.db_istring_destroy,
 			stats.db_int64_alloc,   stats.db_int64_destroy,
 			stats.db_uint64_alloc,  stats.db_uint64_destroy);
-	ShowInfo(CL_WHITE"Database function counters"CL_RESET":\n"
+	ShowMessage(CL_WHITE"Key collision counters"CL_RESET" (buckets: %ld):\n"
+			"DB_INT     : count %10u, peak capacity %10u\n"
+			"DB_UINT    : count %10u, peak capacity %10u\n"
+			"DB_STRING  : count %10u, peak capacity %10u\n"
+			"DB_ISTRING : count %10u, peak capacity %10u\n"
+			"DB_INT64   : count %10u, peak capacity %10u\n"
+			"DB_UINT64  : count %10u, peak capacity %10u\n",
+			HASH_SIZE,
+			stats.db_int_collision,     stats.db_int_bucket_peak,
+			stats.db_uint_collision,    stats.db_uint_bucket_peak,
+			stats.db_string_collision,  stats.db_string_bucket_peak,
+			stats.db_istring_collision, stats.db_istring_bucket_peak,
+			stats.db_int64_collision,   stats.db_int64_bucket_peak,
+			stats.db_uint64_collision,  stats.db_uint64_bucket_peak);
+
+	ShowMessage(CL_WHITE"Database function counters"CL_RESET":\n"
 			"db_rotate_left     %10u, db_rotate_right    %10u,\n"
 			"db_rebalance       %10u, db_rebalance_erase %10u,\n"
 			"db_is_key_null     %10u,\n"

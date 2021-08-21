@@ -622,6 +622,12 @@ struct DBMap {
 	 */
 	enum DBOptions (*options)(struct DBMap *self);
 
+	/**
+	 * Sets a new hashing function for provided table
+	 * Fails if there are already any entries in the table.
+	 * @return Success
+	 **/
+	bool (*set_hash)(struct DBMap *self, DBHasher new_hash);
 };
 
 // For easy access to the common functions.
@@ -938,6 +944,13 @@ void (*init) (void);
  * @see #db_init(void)
  */
 void (*final) (void);
+
+/**
+ * Sets all stat data to zero
+ *
+ * Only has effect when DB_ENABLE_STATS is active.
+ **/
+void (*clear_stats)(void);
 };
 
 // Link DB System - From jAthena
@@ -1250,7 +1263,7 @@ HPShared struct db_interface *DB;
 /**
  * Ensures that the array has the target number of empty positions.
  *
- * Increases the capacity in multiples of _step.
+ * Increases the capacity in counts of _step.
  *
  * @param _vec  Vector.
  * @param _n    Desired empty positions.
@@ -1268,7 +1281,7 @@ HPShared struct db_interface *DB;
 /**
  * Ensures that the array has the target number of empty positions.
  *
- * Increases the capacity in multiples of _step.
+ * Increases the capacity in counts of _step.
  * _SHARED Uses shared memory allocation
  * _LOCAL  Uses local memory allocation
  *
