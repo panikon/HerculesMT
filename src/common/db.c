@@ -117,7 +117,6 @@ struct db_interface *DB;
  *  (1) Private enums, structures, defines and global variables of the       *
  *      database system.                                                     *
  *  DB_ENABLE_STATS  - Define to enable database statistics.                 *
- *  HASH_SIZE        - Define with the size of the hashtable.                *
  *  enum DBNodeColor - Enumeration of colors of the nodes.                   *
  *  struct DBNode     - Structure of a node in RED-BLACK trees.              *
  *  struct db_free    - Structure that holds a deleted node to be freed.     *
@@ -136,14 +135,6 @@ struct db_interface *DB;
  * @see #db_final(void)
  */
 //#define DB_ENABLE_STATS
-
-/**
- * Size of the hashtable in the database (number of buckets).
- * @private
- * @see struct DBMap_impl#ht
- * @remarks To minimize collisions this number should be a prime.
- */
-#define HASH_SIZE (256+27)
 
 /**
  * The color of individual nodes.
@@ -205,17 +196,23 @@ struct db_free {
  * @param cmp Comparator of the database
  * @param hash Hasher of the database
  * @param release Releaser of the database
- * @param ht Hashtable of RED-BLACK trees
+ * @param ht Hashtable of RED-BLACK trees (bucket list)
  * @param type Type of the database
  * @param options Options of the database
  * @param item_count Number of items in the database
  * @param maxlen Maximum length of strings in DB_STRING and DB_ISTRING databases
  * @param global_lock Global lock of the database
+ * @param bucket_count Current size of ht
+ * @param load_factor The ratio of item_count and bucket_count that triggers a capacity increase
  * @private
  * @see #db_alloc()
  */
 struct DBMap_impl {
-	// Database interface
+	/**
+	 * Database interface
+	 * Must always be the first item of this struct, otherwise casts to struct DBIterator_impl
+	 * will fail, @see dbit_obj_first for an example on how this is being used.
+	 **/
 	struct DBMap vtable;
 	// File and line of allocation
 	const char *alloc_file;
@@ -225,17 +222,22 @@ struct DBMap_impl {
 	unsigned int free_count;
 	unsigned int free_max;
 	unsigned int free_lock;
-	// Other
+	// Hash table implementation
 	ERS *nodes;
+	struct DBNode **ht;
+	struct DBNode *cache;
+	float load_factor;
+	uint32 item_count;
+	uint32 bucket_count;
+	unsigned short maxlen;
+	// Private functions
 	DBComparator cmp;
 	DBHasher hash;
 	DBReleaser release;
-	struct DBNode *ht[HASH_SIZE];
-	struct DBNode *cache;
+	// Database flags
 	enum DBType type;
 	enum DBOptions options;
-	uint32 item_count;
-	unsigned short maxlen;
+
 	unsigned global_lock : 1;
 };
 
@@ -354,6 +356,7 @@ static struct db_stats {
 	uint32 db_data2ptr;
 	uint32 db_init;
 	uint32 db_final;
+	uint32 db_rehash;
 	// Collision stats
 	uint32 db_int_collision;
 	uint32 db_uint_collision;
@@ -944,6 +947,8 @@ static void db_free_unlock(struct DBMap_impl *db)
  *  db_release_key     - Releaser that only releases the key.                *
  *  db_release_data    - Releaser that only releases the data.               *
  *  db_release_both    - Releaser that releases key and data.                *
+ *  db_rehash_node     - Recursive iteration of node and reput data in db.   *
+ *  db_rehash          - Grows bucket list of provided database.             *
 \*****************************************************************************/
 
 /**
@@ -1248,6 +1253,72 @@ static void db_release_both(struct DBKey_s *key, struct DBData data, enum DBRele
 	}
 }
 
+
+/**
+ * Performs recursive iteration of a DBNode tree, adding all items into the
+ * provided database and then freeing the node.
+ *
+ * @param self Database.
+ * @param node Node.
+ * @readlock db->nodes->collection_lock
+ * @mutex db->nodes->cache_mutex
+ * @private
+ **/
+static void db_rehash_node(struct DBMap *self, struct DBNode *node)
+{
+	struct DBMap_impl *db = (struct DBMap_impl *)self;
+
+	self->put(self, node->key, node->data, NULL);
+	if(node->left)
+		db_rehash_node(self, node->left);
+	if(node->right)
+		db_rehash_node(self, node->right);
+	ers_free(db->nodes, node);
+}
+
+/**
+ * Reallocates <code>ht</code> with <code>new_count</code> entries and recalculates
+ * all hashes in order to populate the new memory.
+ * This operation is extremely expensive and should only be triggered after the
+ * <code>entry_count</code> superseeds the <code>load_factor</code> threshold.
+ * @param self      Database object.
+ * @param new_count New number of entries.
+ * @private
+ **/
+static bool db_rehash(struct DBMap *self, size_t new_count)
+{
+	struct DBMap_impl *db = (struct DBMap_impl *)self;
+	static bool done = false;
+
+	DB_COUNTSTAT(db_rehash);
+	// Save previous state
+	size_t previous_count = db->bucket_count;
+	struct DBNode **ht_old = db->ht;
+	enum DBOptions options = db->options;
+	// Reset state
+	db->ht = aCalloc(new_count, sizeof(*db->ht));
+	db->bucket_count = new_count;
+	db->item_count = 0;
+	db->cache = NULL;
+	// Don't try to copy keys (if DB_OPT_DUP_KEY is already set they were
+	// already duplicated)
+	db->options &= ~DB_OPT_DUP_KEY;
+
+	struct DBNode *node = NULL;
+	rwlock->read_lock(db->nodes->collection_lock);
+	mutex->lock(db->nodes->cache_mutex);
+	for(size_t i = 0; i < previous_count; i++) {
+		node = ht_old[i];
+		if(node)
+			db_rehash_node(self, node);
+	}
+	mutex->unlock(db->nodes->cache_mutex);
+	rwlock->read_unlock(db->nodes->collection_lock);
+
+	db->options = options;
+	aFree(ht_old);
+}
+
 /*****************************************************************************\
  *  (4) Section with protected functions used in the interface of the        *
  *  database and interface of the iterator.                                  *
@@ -1320,7 +1391,7 @@ static struct DBData *dbit_obj_last(struct DBIterator *self, struct DBKey_s *out
 
 	DB_COUNTSTAT(dbit_last);
 	// position after the last entry
-	it->ht_index = HASH_SIZE;
+	it->ht_index = it->db->bucket_count;
 	it->node = NULL;
 	// get previous entry
 	return self->prev(self, out_key);
@@ -1351,7 +1422,7 @@ static struct DBData *dbit_obj_next(struct DBIterator *self, struct DBKey_s *out
 	}
 	node = it->node;
 	memset(&fake, 0, sizeof(fake));
-	for( ; it->ht_index < HASH_SIZE; ++(it->ht_index) )
+	for( ; it->ht_index < it->db->bucket_count; ++(it->ht_index) )
 	{
 		// Iterate in the order: left tree, current node, right tree
 		if( node == NULL )
@@ -1420,9 +1491,9 @@ static struct DBData *dbit_obj_prev(struct DBIterator *self, struct DBKey_s *out
 	struct DBNode fake;
 
 	DB_COUNTSTAT(dbit_prev);
-	if( it->ht_index >= HASH_SIZE )
+	if( it->ht_index >= it->db->bucket_count )
 	{// get last node
-		it->ht_index = HASH_SIZE-1;
+		it->ht_index = it->db->bucket_count-1;
 		it->node = NULL;
 	}
 	node = it->node;
@@ -1596,14 +1667,14 @@ static struct DBIterator *db_obj_iterator(struct DBMap *self)
 
 /**
  * Sets a new hashing function for provided table
- * Fails if there are already any entries in the table.
- * @return Success
+ * @return False if there are already any entries in the table.
  **/
 static bool db_set_hash(struct DBMap *self, DBHasher new_hash)
 {
 	struct DBMap_impl *db = (struct DBMap_impl *)self;
 	if(db->item_count) {
-		// TODO: Rehashing
+		ShowWarning("db_set_hash: Attempted to change hashing function for db allocated at %s:%d\n",
+			db->alloc_file, db->alloc_line);
 		return false;
 	}
 	db->hash = new_hash;
@@ -1641,7 +1712,7 @@ static bool db_obj_exists(struct DBMap *self, const struct DBKey_s key)
 	}
 
 	db_free_lock(db);
-	node = db->ht[db->hash(&key)%HASH_SIZE];
+	node = db->ht[db->hash(&key)%db->bucket_count];
 	while (node) {
 		int c = db->cmp(&key, &node->key);
 		if (c == 0) {
@@ -1692,7 +1763,7 @@ static struct DBData *db_obj_get(struct DBMap *self, const struct DBKey_s key)
 	}
 
 	db_free_lock(db);
-	node = db->ht[db->hash(&key)%HASH_SIZE];
+	node = db->ht[db->hash(&key)%db->bucket_count];
 	while (node) {
 		int c = db->cmp(&key, &node->key);
 		if (c == 0) {
@@ -1740,7 +1811,7 @@ static unsigned int db_obj_vgetall(struct DBMap *self, struct DBData **buf, unsi
 	if (match == NULL) return 0; // nullpo candidate
 
 	db_free_lock(db);
-	for (i = 0; i < HASH_SIZE; i++) {
+	for (i = 0; i < db->bucket_count; i++) {
 		// Match in the order: current node, left tree, right tree
 		node = db->ht[i];
 		while (node) {
@@ -1891,6 +1962,10 @@ void db_obj_fill(struct DBMap *self, struct DBNode *node, struct DBKey_s *key, s
 		memcpy(&node->key, key, sizeof(*key));
 	}
 	node->data = data;
+	if(!(db->load_factor == 0.f || db->options&DB_OPT_DISABLE_GROWTH)) {
+		if((db->item_count/db->bucket_count) >= db->load_factor)
+			db_rehash(self, 2*db->bucket_count + 1);
+	}
 }
 
 /**
@@ -1929,7 +2004,7 @@ static struct DBData *db_obj_vensure(struct DBMap *self, struct DBKey_s key, DBC
 		return &db->cache->data; // cache hit
 
 	db_free_lock(db);
-	hash = db->hash(&key)%HASH_SIZE;
+	hash = db->hash(&key)%db->bucket_count;
 	node = db->ht[hash];
 	while (node) {
 		c = db->cmp(&key, &node->key);
@@ -2043,7 +2118,7 @@ static int db_obj_put(struct DBMap *self, struct DBKey_s key, struct DBData data
 
 	// search for an equal node
 	db_free_lock(db);
-	hash = db->hash(&key)%HASH_SIZE;
+	hash = db->hash(&key)%db->bucket_count;
 #ifdef DB_ENABLE_STATS
 	if(db->ht[hash] && db->cmp(key, db->ht[hash]->key, db->maxlen)
 		&& !db->ht[hash]->deleted
@@ -2123,7 +2198,7 @@ static int db_obj_remove(struct DBMap *self, const struct DBKey_s key, struct DB
 	}
 
 	db_free_lock(db);
-	hash = db->hash(&key)%HASH_SIZE;
+	hash = db->hash(&key)%db->bucket_count;
 	for(node = db->ht[hash]; node; ){
 		int c = db->cmp(&key, &node->key);
 		if (c == 0) {
@@ -2173,7 +2248,7 @@ static int db_obj_vforeach(struct DBMap *self, DBApply func, va_list args)
 	}
 
 	db_free_lock(db);
-	for (i = 0; i < HASH_SIZE; i++) {
+	for (i = 0; i < db->bucket_count; i++) {
 		// Apply func in the order: current node, left node, right node
 		node = db->ht[i];
 		while (node) {
@@ -2260,7 +2335,7 @@ static int db_obj_vclear(struct DBMap *self, DBApply func, va_list args)
 
 	rwlock->read_lock(db->nodes->collection_lock);
 	mutex->lock(db->nodes->cache_mutex);
-	for (i = 0; i < HASH_SIZE; i++) {
+	for (i = 0; i < db->bucket_count; i++) {
 		// Apply the func and delete in the order: left tree, right tree, current node
 		node = db->ht[i];
 		db->ht[i] = NULL;
@@ -2392,6 +2467,7 @@ static int db_obj_vdestroy(struct DBMap *self, DBApply func, va_list args)
 	ers_free(db_alloc_ers, db);
 	mutex->unlock(db_alloc_ers->cache_mutex);
 	rwlock->read_unlock(db_alloc_ers->collection_lock);
+	aFree(db->ht);
 
 	return sum;
 }
@@ -2671,14 +2747,20 @@ static DBReleaser db_custom_release(enum DBReleaseOption which)
  * @param type Type of database
  * @param options Options of the database
  * @param maxlen Maximum length of the string to be used as key in string
- *          databases. If 0, the maximum number of maxlen is used (64K).
+ *               databases. If 0, the maximum number of maxlen is used (64K).
+ * @param initial_capacity Initial number of buckets, historically this has been
+ *                         set to HASH_SIZE.
+ * @param load_factor The ratio of item_count and bucket_count that triggers a
+ *                    capacity increase. When DB_OPT_DISABLE_GROWTH is set this
+ *                    number is ignored. If 0 ignored.
  * @return The interface of the database
  * @public
  * @see struct DBMap_impl
  * @see #db_fix_options()
  */
 static struct DBMap *db_alloc(const char *file, const char *func, int line,
-	enum DBType type, enum DBOptions options, unsigned short maxlen
+	enum DBType type, enum DBOptions options, unsigned short maxlen,
+	uint32_t initial_capacity, float load_factor
 ) {
 	struct DBMap_impl *db;
 	unsigned int i;
@@ -2726,6 +2808,9 @@ static struct DBMap *db_alloc(const char *file, const char *func, int line,
 	db->free_count = 0;
 	db->free_max = 0;
 	db->free_lock = 0;
+	/* Table implementation */
+	db->load_factor = load_factor;
+	db->bucket_count = initial_capacity;
 	/* Other */
 	snprintf(ers_name, 50, "db_alloc:nodes:%s:%s:%d",func,file,line);
 
@@ -2737,8 +2822,8 @@ static struct DBMap *db_alloc(const char *file, const char *func, int line,
 	db->cmp = DB->default_cmp(type);
 	db->hash = DB->default_hash(type);
 	db->release = DB->default_release(type, options);
-	for (i = 0; i < HASH_SIZE; i++)
-		db->ht[i] = NULL;
+	db->ht = aCalloc(initial_capacity, sizeof(*db->ht));
+
 	db->cache = NULL;
 	db->type = type;
 	db->options = options;
@@ -2997,14 +3082,13 @@ static void db_final(void)
 			stats.db_istring_alloc, stats.db_istring_destroy,
 			stats.db_int64_alloc,   stats.db_int64_destroy,
 			stats.db_uint64_alloc,  stats.db_uint64_destroy);
-	ShowMessage(CL_WHITE"Key collision counters"CL_RESET" (buckets: %ld):\n"
+	ShowMessage(CL_WHITE"Key collision counters"CL_RESET":\n"
 			"DB_INT     : count %10u, peak capacity %10u\n"
 			"DB_UINT    : count %10u, peak capacity %10u\n"
 			"DB_STRING  : count %10u, peak capacity %10u\n"
 			"DB_ISTRING : count %10u, peak capacity %10u\n"
 			"DB_INT64   : count %10u, peak capacity %10u\n"
 			"DB_UINT64  : count %10u, peak capacity %10u\n",
-			HASH_SIZE,
 			stats.db_int_collision,     stats.db_int_bucket_peak,
 			stats.db_uint_collision,    stats.db_uint_bucket_peak,
 			stats.db_string_collision,  stats.db_string_bucket_peak,
@@ -3015,7 +3099,7 @@ static void db_final(void)
 	ShowMessage(CL_WHITE"Database function counters"CL_RESET":\n"
 			"db_rotate_left     %10u, db_rotate_right    %10u,\n"
 			"db_rebalance       %10u, db_rebalance_erase %10u,\n"
-			"db_is_key_null     %10u,\n"
+			"db_is_key_null     %10u, db_rehash          %10u,\n"
 			"db_dup_key         %10u, db_dup_key_free    %10u,\n"
 			"db_free_add        %10u, db_free_remove     %10u,\n"
 			"db_free_lock       %10u, db_free_unlock     %10u,\n"
@@ -3051,7 +3135,7 @@ static void db_final(void)
 			"db_init            %10u, db_final           %10u\n",
 			stats.db_rotate_left,     stats.db_rotate_right,
 			stats.db_rebalance,       stats.db_rebalance_erase,
-			stats.db_is_key_null,
+			stats.db_is_key_null,     stats.db_rehash,
 			stats.db_dup_key,         stats.db_dup_key_free,
 			stats.db_free_add,        stats.db_free_remove,
 			stats.db_free_lock,       stats.db_free_unlock,

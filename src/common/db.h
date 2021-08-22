@@ -65,6 +65,8 @@
 
 /*****************************************************************************
  *  (1) Section with public typedefs, enums, unions, structures and defines. *
+ *  HASH_SIZE            - Initial bucket count used by db alloc and destroy.*
+ *  LOAD_FACTOR          - Default load factor.                              *
  *  enum DBReleaseOption - Enumeration of release options.                   *
  *  enum DBType          - Enumeration of database types.                    *
  *  enum DBOptions       - Bitfield enumeration of database options.         *
@@ -80,6 +82,21 @@
  *  struct DBIterator    - Database iterator.                                *
  *  struct DBMap         - Database interface.                               *
  *****************************************************************************/
+
+/**
+ * Size of the hashtable in the database (number of buckets).
+ * @see struct DBMap_impl#ht
+ * @remarks To minimize collisions this number should be a prime.
+ */
+#define HASH_SIZE (256+27)
+
+/**
+ * Default load factor.
+ * The ratio of item_count and bucket_count that triggers a capacity increase.
+ * @see struct DBMap_impl#ht
+ * @see db_alloc
+ **/
+#define LOAD_FACTOR (0.75f)
 
 /**
  * Bitfield with what should be released by the releaser function (if the
@@ -142,6 +159,7 @@ enum DBType {
  * @param DB_OPT_RELEASE_BOTH Releases both key and data.
  * @param DB_OPT_ALLOW_NULL_KEY Allow NULL keys in the database.
  * @param DB_OPT_ALLOW_NULL_DATA Allow NULL data in the database.
+ * @param DB_OPT_DISABLE_GROWTH Disables increase of buckets with changes in loading factor
  * @public
  * @see #db_fix_options()
  * @see #db_default_release()
@@ -155,6 +173,7 @@ enum DBOptions {
 	DB_OPT_RELEASE_BOTH    = DB_OPT_RELEASE_KEY|DB_OPT_RELEASE_DATA,
 	DB_OPT_ALLOW_NULL_KEY  = 0x08,
 	DB_OPT_ALLOW_NULL_DATA = 0x10,
+	DB_OPT_DISABLE_GROWTH  = 0x20,
 };
 
 /**
@@ -206,6 +225,7 @@ struct DBKey_s {
  * @see struct DBData
  */
 enum DBDataType {
+	DB_DATA_NOT_INIT,
 	DB_DATA_INT,
 	DB_DATA_UINT,
 	DB_DATA_PTR,
@@ -723,12 +743,12 @@ struct DBMap {
 #define ui64db_ensure(db,k,f) ( DB->data2ptr((db)->ensure((db),DB->ui642key(k),(f))) )
 
 // Database creation and destruction macros
-#define idb_alloc(opt)            DB->alloc(__FILE__,__func__,__LINE__,DB_INT,(opt),sizeof(int))
-#define uidb_alloc(opt)           DB->alloc(__FILE__,__func__,__LINE__,DB_UINT,(opt),sizeof(unsigned int))
-#define strdb_alloc(opt,maxlen)   DB->alloc(__FILE__,__func__,__LINE__,DB_STRING,(opt),(maxlen))
-#define stridb_alloc(opt,maxlen)  DB->alloc(__FILE__,__func__,__LINE__,DB_ISTRING,(opt),(maxlen))
-#define i64db_alloc(opt)          DB->alloc(__FILE__,__func__,__LINE__,DB_INT64,(opt),sizeof(int64))
-#define ui64db_alloc(opt)         DB->alloc(__FILE__,__func__,__LINE__,DB_UINT64,(opt),sizeof(uint64))
+#define idb_alloc(opt)            DB->alloc(__FILE__,__func__,__LINE__,DB_INT,(opt),sizeof(int), HASH_SIZE, LOAD_FACTOR)
+#define uidb_alloc(opt)           DB->alloc(__FILE__,__func__,__LINE__,DB_UINT,(opt),sizeof(unsigned int), HASH_SIZE, LOAD_FACTOR)
+#define strdb_alloc(opt,maxlen)   DB->alloc(__FILE__,__func__,__LINE__,DB_STRING,(opt),(maxlen), HASH_SIZE, LOAD_FACTOR)
+#define stridb_alloc(opt,maxlen)  DB->alloc(__FILE__,__func__,__LINE__,DB_ISTRING,(opt),(maxlen), HASH_SIZE, LOAD_FACTOR)
+#define i64db_alloc(opt)          DB->alloc(__FILE__,__func__,__LINE__,DB_INT64,(opt),sizeof(int64), HASH_SIZE, LOAD_FACTOR)
+#define ui64db_alloc(opt)         DB->alloc(__FILE__,__func__,__LINE__,DB_UINT64,(opt),sizeof(uint64), HASH_SIZE, LOAD_FACTOR)
 #define db_destroy(db)            ( (db)->destroy((db),NULL) )
 // Other macros
 #define db_clear(db)        ( (db)->clear((db),NULL) )
@@ -846,6 +866,11 @@ DBReleaser (*custom_release)  (enum DBReleaseOption which);
  * @param options Options of the database
  * @param maxlen Maximum length of the string to be used as key in string
  *          databases. If 0, the maximum number of maxlen is used (64K).
+ * @param initial_capacity Initial number of buckets, historically this has been
+ *                         set to HASH_SIZE.
+ * @param load_factor The ratio of item_count and bucket_count that triggers a
+ *                    capacity increase. When DB_OPT_DISABLE_GROWTH is set this
+ *                    number is ignored. If 0 ignored.
  * @return The interface of the database
  * @public
  * @see enum DBType
@@ -855,7 +880,7 @@ DBReleaser (*custom_release)  (enum DBReleaseOption which);
  * @see #db_default_release()
  * @see #db_fix_options()
  */
-struct DBMap *(*alloc) (const char *file, const char *func, int line, enum DBType type, enum DBOptions options, unsigned short maxlen);
+struct DBMap *(*alloc) (const char *file, const char *func, int line, enum DBType type, enum DBOptions options, unsigned short maxlen, uint32_t initial_capacity, float load_factor);
 
 /**
  * Manual cast from 'int' to the union DBKey.
