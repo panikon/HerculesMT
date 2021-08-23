@@ -116,12 +116,13 @@ struct db_interface *DB;
 /*****************************************************************************
  *  (1) Private enums, structures, defines and global variables of the       *
  *      database system.                                                     *
- *  DB_ENABLE_STATS  - Define to enable database statistics.                 *
- *  enum DBNodeColor - Enumeration of colors of the nodes.                   *
- *  struct DBNode     - Structure of a node in RED-BLACK trees.              *
- *  struct db_free    - Structure that holds a deleted node to be freed.     *
- *  struct DBMap_impl - Structure of the database.                           *
- *  stats             - Statistics about the database system.                *
+ *  DB_ENABLE_STATS     - Define to enable database statistics.              *
+ *  DB_USE_HASH_MURMUR2 - Define to enable murmur hash.                      *
+ *  enum DBNodeColor    - Enumeration of colors of the nodes.                *
+ *  struct DBNode       - Structure of a node in RED-BLACK trees.            *
+ *  struct db_free      - Structure that holds a deleted node to be freed.   *
+ *  struct DBMap_impl   - Structure of the database.                         *
+ *  stats               - Statistics about the database system.              *
  *****************************************************************************/
 
 /**
@@ -135,6 +136,18 @@ struct db_interface *DB;
  * @see #db_final(void)
  */
 //#define DB_ENABLE_STATS
+
+/**
+ * When defined changes the default hashing function for DB_STRING and DB_ISTRING
+ * databases from athena_hash to murmur2_hash.
+ * There are performance and collision differences, usually murmur2 outperforms
+ * the default function. Even if this is set it's still possible to fine-tune each
+ * database by calling set_hash and changing other parameters such as load factor
+ * and the initial bucket size.
+ * @see db_default_hash
+ * @see test_db
+ **/
+#define DB_USE_HASH_MURMUR2
 
 /**
  * The color of individual nodes.
@@ -927,29 +940,34 @@ static void db_free_unlock(struct DBMap_impl *db)
 	db->free_count = 0;
 }
 
-/*****************************************************************************\
- *  (3) Section of protected functions used internally.                      *
- *  NOTE: the protected functions used in the database interface are in the  *
- *           next section.                                                   *
- *  db_int_cmp         - Default comparator for DB_INT databases.            *
- *  db_uint_cmp        - Default comparator for DB_UINT databases.           *
- *  db_string_cmp      - Default comparator for DB_STRING databases.         *
- *  db_istring_cmp     - Default comparator for DB_ISTRING databases.        *
- *  db_int64_cmp       - Default comparator for DB_INT64 databases.          *
- *  db_uint64_cmp      - Default comparator for DB_UINT64 databases.         *
- *  db_int_hash        - Default hasher for DB_INT databases.                *
- *  db_uint_hash       - Default hasher for DB_UINT databases.               *
- *  db_string_hash     - Default hasher for DB_STRING databases.             *
- *  db_istring_hash    - Default hasher for DB_ISTRING databases.            *
- *  db_int64_hash      - Default hasher for DB_INT64 databases.              *
- *  db_uint64_hash     - Default hasher for DB_UINT64 databases.             *
- *  db_release_nothing - Releaser that releases nothing.                     *
- *  db_release_key     - Releaser that only releases the key.                *
- *  db_release_data    - Releaser that only releases the data.               *
- *  db_release_both    - Releaser that releases key and data.                *
- *  db_rehash_node     - Recursive iteration of node and reput data in db.   *
- *  db_rehash          - Grows bucket list of provided database.             *
-\*****************************************************************************/
+/******************************************************************************\
+ *  (3) Section of protected functions used internally.                        *
+ *  NOTE: the protected functions used in the database interface are in the    *
+ *           next section.                                                     *
+ *  db_int_cmp              - Default comparator for DB_INT databases.         *
+ *  db_uint_cmp             - Default comparator for DB_UINT databases.        *
+ *  db_string_cmp           - Default comparator for DB_STRING databases.      *
+ *  db_istring_cmp          - Default comparator for DB_ISTRING databases.     *
+ *  db_int64_cmp            - Default comparator for DB_INT64 databases.       *
+ *  db_uint64_cmp           - Default comparator for DB_UINT64 databases.      *
+ *  db_int_hash             - Default hasher for DB_INT databases.             *
+ *  db_uint_hash            - Default hasher for DB_UINT databases.            *
+ *  db_hash_murmur2         - Murmur2 32 hash function (not DBHasher).         *
+ *  db_string_hash_murmur2  - Murmur2 32 hasher for DB_STRING databases.       *
+ *  db_istring_hash_murmur2 - Murmur2 32 hasher for DB_ISTRING databases.      *
+ *  db_string_hash_athena   - Athena hasher for DB_STRING databases.           *
+ *  db_istring_hash_athena  - Athena hasher for DB_ISTRING databases.          *
+ *  db_string_hash          - Default hasher for DB_STRING databases.          *
+ *  db_istring_hash         - Default hasher for DB_ISTRING databases.         *
+ *  db_int64_hash           - Default hasher for DB_INT64 databases.           *
+ *  db_uint64_hash          - Default hasher for DB_UINT64 databases.          *
+ *  db_release_nothing      - Releaser that releases nothing.                  *
+ *  db_release_key          - Releaser that only releases the key.             *
+ *  db_release_data         - Releaser that only releases the data.            *
+ *  db_release_both         - Releaser that releases key and data.             *
+ *  db_rehash_node          - Recursive iteration of node and reput data in db.*
+ *  db_rehash               - Grows bucket list of provided database.          *
+\*******************************************************************************/
 
 /**
  * Default comparator for DB_INT databases.
@@ -1097,14 +1115,106 @@ static uint64 db_uint_hash(const struct DBKey_s *key)
 }
 
 /**
- * Default hasher for DB_STRING databases.
+ * MurmurHash2
+ * Character hashing function.
+ * @param key Key to be hashed
+ * @param len Key length
+ * @return hash of the key
+ * @see #DBHasher
+ * @see #db_default_hash()
+ * @author Austin Appleby (public domain)
+ * @see github.com/aappleby/smhasher
+ * @remarks This function is called by DBHasher functions and otherwise shouldn't
+ * be called directly, this is the reason that it doesn't use a "standard"
+ * DBHasher signature (see db_istring_hash_murmur2)
+ **/
+uint64 db_hash_murmur2(const char *key, int16_t len)
+{
+	DB_COUNTSTAT(db_string_hash);
+	// 'm' and 'r' are mixing constants generated offline.
+	// They're not really 'magic', they just happen to work well.
+	const uint32_t m = 0x5bd1e995;
+	const int r = 24;
+
+	// Initialize the hash to a 'random' value
+	uint32_t h = 1234 ^ len;
+	int16_t maxlen = len;
+
+	// Mix 4 bytes at a time into the hash
+	const unsigned char * data = key;
+
+	while(maxlen >= 4) {
+		uint32_t k = *(uint32_t*)data;
+
+		k *= m;
+		k ^= k >> r;
+		k *= m;
+
+		h *= m;
+		h ^= k;
+
+		data += 4;
+		maxlen -= 4;
+	}
+
+	// Handle the last few bytes of the input array
+	switch(maxlen) {
+		case 3: h ^= data[2] << 16;
+		case 2: h ^= data[1] << 8;
+		case 1: h ^= data[0];
+			h *= m;
+	}
+
+	// Do a few final mixes of the hash to ensure the last few
+	// bytes are well-incorporated.
+	h ^= h >> 13;
+	h *= m;
+	h ^= h >> 15;
+
+	return h;
+}
+
+/**
+ * MurmurHash2
+ * String hashing function for DB_STRING databases
+ * @param key Key to be hashed
+ * @return hash of the key
+ * @see enum DBType#DB_STRING
+ * @see #DBHasher
+ * @see #db_default_hash()
+ **/
+uint64 db_string_hash_murmur2(const struct DBKey_s *key) {
+	return db_hash_murmur2(key->u.str, key->len);
+}
+
+/**
+ * MurmurHash2
+ * String hashing function for DB_ISTRING databases
+ * @param key Key to be hashed
+ * @return hash of the key
+ * @see enum DBType#DB_STRING
+ * @see #DBHasher
+ * @see #db_default_hash()
+ **/
+uint64 db_istring_hash_murmur2(const struct DBKey_s *key)
+{
+	CREATE_BUFFER(k, char, key->len);
+	for( ; *k; ++k)
+		*k = TOLOWER(*k);
+	uint64_t hash = db_hash_murmur2(k, key->len);
+	DELETE_BUFFER(k);
+	return hash;
+}
+
+/**
+ * Athena hash implementation for DB_STRING databases.
  * @param key Key to be hashed
  * @return hash of the key
  * @see enum DBType#DB_STRING
  * @see #DBHasher
  * @see #db_default_hash()
  */
-static uint64 db_string_hash(const struct DBKey_s *key)
+static uint64 db_string_hash_athena(const struct DBKey_s *key)
 {
 	const char *k = key->u.str;
 	unsigned int hash = 0;
@@ -1123,13 +1233,13 @@ static uint64 db_string_hash(const struct DBKey_s *key)
 }
 
 /**
- * Default hasher for DB_ISTRING databases.
+ * Athena hash implementation for DB_ISTRING databases.
  * @param key Key to be hashed
  * @return hash of the key
  * @see enum DBType#DB_ISTRING
  * @see #db_default_hash()
  */
-static uint64 db_istring_hash(const struct DBKey_s *key)
+static uint64 db_istring_hash_athena(const struct DBKey_s *key)
 {
 	const char *k = key->u.str;
 	unsigned int hash = 0;
@@ -1317,6 +1427,7 @@ static bool db_rehash(struct DBMap *self, size_t new_count)
 
 	db->options = options;
 	aFree(ht_old);
+	return true;
 }
 
 /*****************************************************************************\
@@ -2120,7 +2231,7 @@ static int db_obj_put(struct DBMap *self, struct DBKey_s key, struct DBData data
 	db_free_lock(db);
 	hash = db->hash(&key)%db->bucket_count;
 #ifdef DB_ENABLE_STATS
-	if(db->ht[hash] && db->cmp(key, db->ht[hash]->key, db->maxlen)
+	if(db->ht[hash] && db->cmp(&key, &db->ht[hash]->key)
 		&& !db->ht[hash]->deleted
 	)
 		DB_COUNTSTAT_SWITCH(db->type, collision);
@@ -2670,8 +2781,13 @@ static DBHasher db_default_hash(enum DBType type)
 	switch (type) {
 		case DB_INT:     return &db_int_hash;
 		case DB_UINT:    return &db_uint_hash;
-		case DB_STRING:  return &db_string_hash;
-		case DB_ISTRING: return &db_istring_hash;
+#ifdef DB_USE_HASH_MURMUR2
+		case DB_STRING:  return &db_string_hash_murmur2;
+		case DB_ISTRING: return &db_istring_hash_murmur2;
+#else
+		case DB_STRING:  return &db_string_hash_athena;
+		case DB_ISTRING: return &db_istring_hash_athena;
+#endif
 		case DB_INT64:   return &db_int64_hash;
 		case DB_UINT64:  return &db_uint64_hash;
 		default:
@@ -2763,7 +2879,6 @@ static struct DBMap *db_alloc(const char *file, const char *func, int line,
 	uint32_t initial_capacity, float load_factor
 ) {
 	struct DBMap_impl *db;
-	unsigned int i;
 	char ers_name[50];
 
 #ifdef DB_ENABLE_STATS
