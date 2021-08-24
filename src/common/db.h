@@ -20,9 +20,10 @@
  */
 
 /*****************************************************************************\
- *  This file is separated in two sections:                                  *
+ *  This file is separated in three sections:                                *
  *  (1) public typedefs, enums, unions, structures and defines               *
  *  (2) public functions                                                     *
+ *  (3) helper macros                                                        *
  *                                                                           *
  *  <B>Notes on the release system:</B>                                      *
  *  Whenever an entry is removed from the database both the key and the      *
@@ -35,7 +36,6 @@
  *                                                                           *
  *  TODO:                                                                    *
  *  - create a custom database allocator                                     *
- *  - see what functions need or should be added to the database interface   *
  *                                                                           *
  *  HISTORY:                                                                 *
  *    2013/08/25 - Added int64/uint64 support for keys                       *
@@ -1021,9 +1021,24 @@ void db_defaults(void);
 
 HPShared struct db_interface *DB;
 
-/**
- * Array Helper macros
- */
+
+/*****************************************************************************
+ *  (3) Section with help macros.                                            *
+ *    a. Array Helper Macros.                                                *
+ *    b. Vector library.                                                     *
+ *    c. Binary heap library.                                                *
+ *    d. Queue (FIFO).                                                       *
+ *    e. Index map array.                                                    *
+ *****************************************************************************/
+
+
+/*****************************************************************************
+ *  (3a) Array Helper Macros.                                                *
+ *  ARR_FIND      - Finds an entry in an array.                              *
+ *  ARR_MOVE      - Moves an entry of the array.                             *
+ *  ARR_MOVERIGHT - Moves an entry of the array to the right.                *
+ *  ARR_MOVELEFT  - Moves an entry of the array to the left.                 *
+ *****************************************************************************/
 
 /**
  * Finds an entry in an array.
@@ -1114,6 +1129,40 @@ HPShared struct db_interface *DB;
 		memmove((_arr)+(_to)+1, (_arr)+(_to), ((_from)-(_to))*sizeof(_type)); \
 		memmove((_arr)+(_to), &_backup_, sizeof(_type)); \
 	} while(false)
+
+
+/******************************************************************************\
+ *  (3b) Vector library (dynamic array).                                       *
+ *  VECTOR_DECL               - Declares an anonymous vector struct.           *
+ *  VECTOR_STRUCT_DECL        - Declares a named vector struct.                *
+ *  VECTOR_STATIC_INITIALIZER - Vector static initializer.                     *
+ *  VECTOR_VAR                - Declares and initializes an anonymous variable.*
+ *  VECTOR_STRUCT_VAR         - Declares and initializes a named variable.     *
+ *  VECTOR_INIT               - Initializes a vector.                          *
+ *  VECTOR_DATA               - Returns the internal array of values.          *
+ *  VECTOR_LENGTH             - Returns the length of the vector.              *
+ *  VECTOR_CAPACITY           - Returns the capacity of the vector.            *
+ *  VECTOR_INDEX              - Returns the value at the target index.         *
+ *  VECTOR_FIRST              - Returns the first value of the vector.         *
+ *  VECTOR_LAST               - Returns the last value of the vector.          *
+ *  VECTOR_RESIZE_*           - Resizes the vector.                            *
+ *  VECTOR_ENSURE_*           - Ensures that there are enough empty positions. *
+ *  VECTOR_INSERTZEROED       - Inserts a zeroed value in the target index.    *
+ *  VECTOR_INSERT             - Assigns value to target index.                 *
+ *  VECTOR_INSERTCOPY         - Copies value to target index.                  *
+ *  VECTOR_INSERTARRAY        - Inserts the values of the array.               *
+ *  VECTOR_PUSHZEROED         - Appends a zeroed value.                        *
+ *  VECTOR_PUSH               - Appends a value.                               *
+ *  VECTOR_PUSHCOPY           - Copies a value to the end of the vector.       *
+ *  VECTOR_PUSHARRAY          - Appends the values of the array.               *
+ *  VECTOR_POPN               - Pops the last N values and returns the last.   *
+ *  VECTOR_ERASE              - Removes the target index from the vector.      *
+ *  VECTOR_ERASEN             - Removes N values from the target index.        *
+ *  VECTOR_TRUNCATE           - Removes all values from the vector.            *
+ *  VECTOR_CLEAR_*            - Clears the vector, freeing allocated data.     *
+ *  VECTOR_PUSHCOPY_ENSURE_*  - VECTOR_ENSURE + VECTOR_PUSHCOPY.               *
+ *  VECTOR_INIT_CAPACITY_*    - Initializes a vector with provided capacity.   *
+ *******************************************************************************/
 
 /**
  * Vector library based on defines (dynamic array).
@@ -1580,6 +1629,32 @@ HPShared struct db_interface *DB;
 #define VECTOR_INIT_CAPACITY_SHARED(_vec, _n) VECTOR_INIT_CAPACITY_SUB(_vec, _n, _SHARED)
 #define VECTOR_INIT_CAPACITY_LOCAL(_vec, _n) VECTOR_INIT_CAPACITY_SUB(_vec, _n, _LOCAL)
 
+
+/******************************************************************************\
+ *  (3c) Binary heap library.                                                 *
+ * BHEAP_DECL        - Declares an anonymous binary heap struct.              *
+ * BHEAP_STRUCT_DECL - Declares a named binary heap struct.                   *
+ * BHEAP_VAR         - Declares and initializes an anonymous variable.        *
+ * BHEAP_STRUCT_VAR  - Declares and initializes a named variable. .           *
+ * BHEAP_INIT        - Initializes a heap.                                    *
+ * BHEAP_DATA        - Returns the internal array of values.                  *
+ * BHEAP_LENGTH      - Returns the length of the heap.                        *
+ * BHEAP_CAPACITY    - Returns the capacity of the heap.                      *
+ * BHEAP_ENSURE      - Ensures that the heap has the required empty positions.*
+ * BHEAP_PEEK        - Returns the top value of the heap.                     *
+ * BHEAP_PUSH        - Inserts a value in the heap.                           *
+ * BHEAP_PUSH2       - Variant of BHEAP_PUSH used by A* implementation.       *
+ * BHEAP_POP         - Removes the top value of the heap.                     *
+ * BHEAP_POP2        - Variant of BHEAP_POP used by A* implementation.        *
+ * BHEAP_POPINDEX    - Removes the target value of the heap.                  *
+ * BHEAP_SIFTDOWN    - Follow path up towards the root, swapping nodes.       *
+ * BHEAP_SIFTUP      - Repeatedly swap the smaller child with parent.         *
+ * BHEAP_UPDATE      - Restores a heap.                                       *
+ * BHEAP_CLEAR       - Clears the binary heap, freeing allocated data.        *
+ * BHEAP_MINTOPCMP   - Generic comparator for a min-heap.                     *
+ * BHEAP_MAXTOPCMP   - Generic comparator for a max-heap.                     *
+ ******************************************************************************/
+
 /**
  * Binary heap library based on defines.
  *
@@ -1663,7 +1738,7 @@ HPShared struct db_interface *DB;
 /**
  * Ensures that the heap has the target number of empty positions.
  *
- * Increases the capacity in multiples of _step.
+ * Increases the capacity in counts of _step.
  *
  * @param _heap Binary heap.
  * @param _n    Required empty positions.
@@ -1917,6 +1992,31 @@ HPShared struct db_interface *DB;
 #define BHEAP_MAXTOPCMP(v1, v2) \
 	( (v1) == (v2) ? 0 : (v1) > (v2) ? -1 : 1 )
 
+
+/******************************************************************************\
+ *  (3d) Queue (FIFO) library.                                                *
+ * QUEUE_DECL               - Declares an anonymous queue struct.             *
+ * QUEUE_STRUCT_DECL        - Declares a named queue struct.                  *
+ * QUEUE_STATIC_INITIALIZER - Queue static initializer.                       *
+ * QUEUE_VAR                - Declares and initializes an anonymous variable. *
+ * QUEUE_STRUCT_VAR         - Declares and initializes a named variable.      *
+ * QUEUE_VECTOR             - Returns pointer of vector data.                 *
+ * QUEUE_CAPACITY           - Returns current queue capacity.                 *
+ * QUEUE_LENGTH             - Returns number of active elements of a queue.   *
+ * QUEUE_INDEX              - Returns the value at the target index.          *
+ * QUEUE_BACK               - Returns the back of the queue.                  *
+ * QUEUE_FRONT              - Returns the front of the queue (older value).   *
+ * QUEUE_DYNAMIC_INITIALIZER- Queue dynamic initializer.                      *
+ * QUEUE_DEQUEUE            - Dequeues a value (from the front).              *
+ * QUEUE_GROW               - Grows queue.                                    *
+ * QUEUE_INSERT_EQUAL       - Inserts value into queue, assignment.           *
+ * QUEUE_INSERT_COPY        - Inserts value into queue, memory copy.          *
+ * QUEUE_ENQUEUE_*          - Enqueues a value, grows queue if necessary.     *
+ * QUEUE_TRUNCATE           - Removes all values from queue.                  *
+ * QUEUE_CLEAR_*            - Clears the queue, freeing allocated data.       *
+ * QUEUE_INIT_CAPACITY_*    - Initializes queue with provided capacity.       *
+ ******************************************************************************/
+
 /**
  * Queue (FIFO) library based on macros.
  *
@@ -1981,7 +2081,7 @@ HPShared struct db_interface *DB;
 	struct _name _var = QUEUE_STATIC_INITIALIZER
 
 /**
- * Returns pointer of vector data
+ * Returns pointer of vector data.
  *
  * @param _que Queue.
  * @return Pointer of vector data.
@@ -1989,7 +2089,7 @@ HPShared struct db_interface *DB;
 #define QUEUE_VECTOR(_que)      ((_que)._data_)
 
 /**
- * Returns current queue capacity
+ * Returns current queue capacity.
  *
  * @param _que Queue.
  * @return Current queue capacity
@@ -1997,7 +2097,7 @@ HPShared struct db_interface *DB;
 #define QUEUE_CAPACITY(_que)    VECTOR_CAPACITY(QUEUE_VECTOR(_que))
 
 /**
- * Returns number of active elements of a queue
+ * Returns number of active elements of a queue.
  *
  * @param _que Queue.
  * @return Current queue length
@@ -2014,7 +2114,7 @@ HPShared struct db_interface *DB;
 #define QUEUE_INDEX(_que, _idx) (VECTOR_INDEX(QUEUE_VECTOR(_que), _idx))
 
 /**
- * Returns the back of the queue (last inserted value)
+ * Returns the back of the queue (last inserted value).
  *
  * @param _que Queue.
  * @return Value.
@@ -2022,7 +2122,7 @@ HPShared struct db_interface *DB;
 #define QUEUE_BACK(_que)        (QUEUE_INDEX((_que), (_que)._back_))
 
 /**
- * Returns the front of the queue (older value)
+ * Returns the front of the queue (older value).
  *
  * @param _que Queue.
  * @return Value.
@@ -2053,7 +2153,7 @@ HPShared struct db_interface *DB;
 	} while(false)
 
 /**
- * Grows queue
+ * Grows queue.
  *
  * @param _que Queue
  * @param _step Growth factor
@@ -2145,7 +2245,7 @@ HPShared struct db_interface *DB;
 #define QUEUE_CLEAR_LOCAL(_que) QUEUE_CLEAR_SUB(_que, _LOCAL)
 
 /**
- * Initializes queue with provided capacity
+ * Initializes queue with provided capacity.
  *
  * @param _que Queue
  * @param _n Number of elements
@@ -2161,6 +2261,19 @@ HPShared struct db_interface *DB;
 #define QUEUE_INIT_CAPACITY_LOCAL(_que, _n) QUEUE_INIT_CAPACITY_SUB(_que, _n, _LOCAL)
 
 
+/******************************************************************************\
+ *  (3e) Index map array.                                                     *
+ * INDEX_MAP_DECL                - Declares an anonymous index map.           *
+ * INDEX_MAP_STRUCT_DECL         - Declares an named index map struct         *
+ * INDEX_MAP_STATIC_INITIALIZER  - Static initializer.                        *
+ * INDEX_MAP_CREATE              - Sets up a new index map.                   *
+ * INDEX_MAP_DESTROY             - Destroys an index map.                     *
+ * INDEX_MAP_REMOVE              - Removes entry from index map.              *
+ * INDEX_MAP_ADD                 - Adds entry, grows map if necessary.        *
+ * INDEX_MAP_LENGTH              - Length of entry array.                     *
+ * INDEX_MAP_INDEX               - Returns object.                            *
+ ******************************************************************************/
+
 /**
  * Index map array
  *
@@ -2168,9 +2281,8 @@ HPShared struct db_interface *DB;
  * Grows quadratically (always in multiples of 32)
  **/
 
-
 /**
- * Declares an anonymous index map
+ * Declares an anonymous index map.
  *
  * @param _type Type of data to be contained.
  **/
@@ -2182,7 +2294,7 @@ HPShared struct db_interface *DB;
 		enum memory_type _mt_;           \
 	}
 /**
- * Declares an named index map struct
+ * Declares an named index map struct.
  *
  * @param _name Structure name.
  * @param _type Type of data to be contained.
@@ -2196,7 +2308,7 @@ HPShared struct db_interface *DB;
 	}
 
 /**
- * Static initializer
+ * Static initializer.
  **/
 #define INDEX_MAP_STATIC_INITIALIZER(_mem) {NULL, NULL, 0, (_mem)}
 
@@ -2272,14 +2384,14 @@ HPShared struct db_interface *DB;
 	} while(false)
 
 /**
- * Length of entry array
+ * Length of entry array.
  *
  * @param _im  Index map object
  **/
 #define INDEX_MAP_LENGTH(_im) ((_im)._free_index_length_*32)
 
 /**
- * Return object
+ * Returns object.
  *
  * @param _im  Index map object
  **/

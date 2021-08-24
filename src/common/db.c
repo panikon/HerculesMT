@@ -63,15 +63,21 @@
  *  7. If the new database type requires or does not support some options,
  *     update the function db_fix_options
  *
+ *  <B>About multi-threading:</B>
+ *  Currently the database system supports multi-threaded applications, all global
+ *  database states are protected automatically by mutexes. The responsability of
+ *  ensuring the synchronization policy of a new database is of the one that
+ *  allocated it.
+ *
  *  TODO:
  *  - create test cases to test the database system thoroughly
- *  - finish this header describing the database system
  *  - create custom database allocator
- *  - make the system thread friendly
  *  - change the structure of the database to T-Trees
  *  - create a db that organizes itself by splaying
  *
  *  HISTORY:
+ *    2021/08    - Multi-thread support + new hash functions [Panikon/Hercules]
+ *               - Dynamic bucket count with rehashing and load factor
  *    2013/08/25 - Added int64/uint64 support for keys [Ind/Hercules]
  *    2013/04/27 - Added ERS to speed up iterator memory allocation [Ind/Hercules]
  *    2012/03/09 - Added enum for data types (int, uint, void*)
@@ -116,26 +122,39 @@ struct db_interface *DB;
 /*****************************************************************************
  *  (1) Private enums, structures, defines and global variables of the       *
  *      database system.                                                     *
- *  DB_ENABLE_STATS     - Define to enable database statistics.              *
- *  DB_USE_HASH_MURMUR2 - Define to enable murmur hash.                      *
- *  enum DBNodeColor    - Enumeration of colors of the nodes.                *
- *  struct DBNode       - Structure of a node in RED-BLACK trees.            *
- *  struct db_free      - Structure that holds a deleted node to be freed.   *
- *  struct DBMap_impl   - Structure of the database.                         *
- *  stats               - Statistics about the database system.              *
+ *  DB_ENABLE_STATS         - Define to enable database statistics.          *
+ *  DB_ENABLE_PRIVATE_STATS - Define to enable private database statistics.  *
+ *  DB_USE_HASH_MURMUR2     - Define to enable murmur hash.                  *
+ *  enum DBNodeColor        - Enumeration of colors of the nodes.            *
+ *  struct DBNode           - Structure of a node in RED-BLACK trees.        *
+ *  struct db_free          - Structure that holds a deleted node to be freed*
+ *  struct DBMap_impl       - Structure of the database.                     *
+ *  stats                   - Statistics about the database system.          *
  *****************************************************************************/
 
 /**
  * If defined statistics about database nodes, database creating/destruction
  * and function usage are kept and displayed when finalizing the database
  * system.
- * WARNING: This adds overhead to every database operation (not sure how much).
+ * WARNING: When defined everytime an operation is performed the global stat
+ * table is updated. If there are no threads the overhead cost isn't prohibitive
+ * but with multi-threading there could be data races.
  * @private
  * @see #DBStats
  * @see #stats
  * @see #db_final(void)
  */
 //#define DB_ENABLE_STATS
+
+/**
+ * If defined statistics about database collision / bucket peak / rehash
+ * count are saved internally in each database.
+ * @private
+ * @see #DBStats
+ * @see #stats
+ * @see #db_final(void)
+ */
+//#define DB_ENABLE_PRIVATE_STATS
 
 /**
  * When defined changes the default hashing function for DB_STRING and DB_ISTRING
@@ -252,7 +271,24 @@ struct DBMap_impl {
 	enum DBOptions options;
 
 	unsigned global_lock : 1;
+#ifdef DB_ENABLE_PRIVATE_STATS
+	struct s_private_stats {
+		uint32_t collision;
+		uint32_t bucket_peak;
+		uint32_t rehash;
+	} stats;
+#endif
 };
+
+#ifdef DB_ENABLE_PRIVATE_STATS
+#define DB_COUNTSTAT_PRIVATE(db,token)        \
+	do {                                      \
+		if (((db)->stats.token) != UINT32_MAX)\
+			++((db)->stats.token);           \
+	} while(0)
+#else
+#define DB_COUNTSTAT_PRIVATE(db, token) (void)0
+#endif
 
 /**
  * Complete iterator structure.
@@ -274,6 +310,11 @@ struct DBIterator_impl {
 };
 
 #if defined(DB_ENABLE_STATS)
+/**
+ * DB stats mutex
+ **/
+static struct mutex_data *db_stats_mutex = NULL;
+
 /**
  * Structure with what is counted when the database statistics are enabled.
  * @private
@@ -384,8 +425,20 @@ static struct db_stats {
 	uint32 db_int64_bucket_peak;
 	uint32 db_uint64_bucket_peak;
 } stats = { 0 };
-#define DB_COUNTSTAT(token) do { if ((stats.token) != UINT32_MAX) ++(stats.token); } while(0)
-#define DB_GREATERTHAN_COUNT(v, token) do { if((v) > (stats.token)) DB_COUNTSTAT(token); } while(0)
+#define DB_COUNTSTAT(token)                 \
+	do {                                    \
+		mutex->lock(db_stats_mutex);        \
+		if ((stats.token) != UINT32_MAX)    \
+			++(stats.token);                \
+		mutex->unlock(db_stats_mutex);      \
+	} while(0)
+#define DB_GREATERTHAN_COUNT(v, token)                         \
+	do {                                                       \
+		mutex->lock(db_stats_mutex);                           \
+		if((v) > (stats.token) && (stats.token) != UINT32_MAX) \
+			++(stats.token);                                   \
+		mutex->unlock(db_stats_mutex);                         \
+	} while(0)
 
 #define DB_COUNTSTAT_SWITCH(t, partial_token)                                \
 	do {                                                                     \
@@ -1401,6 +1454,7 @@ static bool db_rehash(struct DBMap *self, size_t new_count)
 	static bool done = false;
 
 	DB_COUNTSTAT(db_rehash);
+	DB_COUNTSTAT_PRIVATE(db, rehash);
 	// Save previous state
 	size_t previous_count = db->bucket_count;
 	struct DBNode **ht_old = db->ht;
@@ -2230,11 +2284,13 @@ static int db_obj_put(struct DBMap *self, struct DBKey_s key, struct DBData data
 	// search for an equal node
 	db_free_lock(db);
 	hash = db->hash(&key)%db->bucket_count;
-#ifdef DB_ENABLE_STATS
+#if defined(DB_ENABLE_STATS) || defined(DB_ENABLE_PRIVATE_STATS)
 	if(db->ht[hash] && db->cmp(&key, &db->ht[hash]->key)
 		&& !db->ht[hash]->deleted
-	)
+	) {
 		DB_COUNTSTAT_SWITCH(db->type, collision);
+		DB_COUNTSTAT_PRIVATE(db, collision);
+	}
 	int bucket_fill = 0;
 #endif
 	for (node = db->ht[hash]; node; ) {
@@ -2256,9 +2312,11 @@ static int db_obj_put(struct DBMap *self, struct DBKey_s key, struct DBData data
 		} else {
 			node = node->right;
 		}
-#ifdef DB_ENABLE_STATS
+#if defined(DB_ENABLE_STATS) || defined(DB_ENABLE_PRIVATE_STATS)
 		bucket_fill++;
 		DB_GREATERTHAN_SWITCH(db->type, bucket_fill, bucket_peak);
+		if(bucket_fill > db->stats.bucket_peak)
+			db->stats.bucket_peak = bucket_fill;
 #endif
 	}
 	// allocate a new node if necessary
@@ -3148,7 +3206,13 @@ static void db_clear_stats(void)
  */
 static void db_init(void)
 {
-
+#ifdef DB_ENABLE_STATS
+	db_stats_mutex = mutex->create();
+	if(!db_stats_mutex) {
+		ShowFatalError("db_init: Failed to setup stats mutex\n");
+		exit(EXIT_FAILURE);
+	}
+#endif
 	db_ers_collection = ers_collection_create(MEMORYTYPE_SHARED);
 	if(!db_ers_collection) {
 		ShowFatalError("db_init: Failed to setup ERS collection\n");
@@ -3181,6 +3245,8 @@ static void db_final(void)
 {
 #ifdef DB_ENABLE_STATS
 	DB_COUNTSTAT(db_final);
+	mutex->destroy(db_stats_mutex);
+	db_stats_mutex = NULL;
 	ShowInfo(CL_WHITE"Database nodes"CL_RESET":\n"
 			"allocated %u, freed %u\n",
 			stats.db_node_alloc, stats.db_node_free);
