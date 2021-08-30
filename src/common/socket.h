@@ -37,49 +37,74 @@
 struct hplugin_data_store;
 struct config_setting_t;
 
+// Quickhack (FIXME: REMOVE LATER)
+//#define SOCKET_EPOLL
+#define SOCKET_IOCP
+
 #define FIFOSIZE_SERVERLINK 256*1024
+
+/**
+ * Data passed to the default_action_parse after IO_RECV dequeual
+ * @see set_default_parse_action
+ * @see socket_operation_process
+ **/
+struct s_receive_action_data {
+	struct socket_data *session;
+	uint8_t *rdata;
+	size_t max_rdata, rdata_size, rdata_pos;
+	bool validate; // flag.validate
+	// Last received buffer (the same data as rdata)
+	struct s_iocp_buffer_data *read_buffer;
+};
+
+/**
+ * Send action
+ * All send operations queued in an action thread are of this object.
+ **/
+struct s_send_action_data {
+	struct socket_data *session;
+	uint32_t session_id;
+	bool is_server, validate;
+
+	uint8 *wdata;
+	size_t max_wdata, wdata_size, last_head_size;
+	/**
+	 * Position of the buffer in write_buffer that's currently in use
+	 **/
+	int write_buffer_pos;
+	struct s_iocp_buffer_data *write_buffer;
+};
 
 // socket I/O macros
 #define RFIFOHEAD(fd)
-#define WFIFOHEAD(fd, size) sockt->wfifohead(fd, size)
+#define WFIFOHEAD(s, size, get_mutex) socket_io->wfifohead(s, size, get_mutex)
 
-#define RFIFOP(fd,pos) ((const void *)(sockt->session[fd]->rdata + sockt->session[fd]->rdata_pos + (pos)))
-#define WFIFOP(fd,pos) ((void *)(sockt->session[fd]->wdata + sockt->session[fd]->wdata_size + (pos)))
+#define RFIFOP(a, pos) ((const void *)((a)->rdata + (a)->rdata_pos + (pos)))
+#define WFIFOP(s, pos) (socket_io->wfifop((s),(pos)))
 
-#define RFIFOB(fd,pos) (*(const uint8*)RFIFOP((fd),(pos)))
-#define WFIFOB(fd,pos) (*(uint8*)WFIFOP((fd),(pos)))
-#define RFIFOW(fd,pos) (*(const uint16*)RFIFOP((fd),(pos)))
-#define WFIFOW(fd,pos) (*(uint16*)WFIFOP((fd),(pos)))
-#define RFIFOL(fd,pos) (*(const uint32*)RFIFOP((fd),(pos)))
-#define WFIFOL(fd,pos) (*(uint32*)WFIFOP((fd),(pos)))
-#define RFIFOQ(fd,pos) (*(const uint64*)RFIFOP((fd),(pos)))
-#define WFIFOQ(fd,pos) (*(uint64*)WFIFOP((fd),(pos)))
-#define RFIFOSPACE(fd) (sockt->session[fd]->max_rdata - sockt->session[fd]->rdata_size)
-#define WFIFOSPACE(fd) (sockt->session[fd]->max_wdata - sockt->session[fd]->wdata_size)
+#define RFIFOB(a, pos) (*(const uint8*)RFIFOP((a),(pos)))
+#define WFIFOB(s, pos) (*(uint8*)WFIFOP((s),(pos)))
+#define RFIFOW(a, pos) (*(const uint16*)RFIFOP((a),(pos)))
+#define WFIFOW(s, pos) (*(uint16*)WFIFOP((s),(pos)))
+#define RFIFOL(a, pos) (*(const uint32*)RFIFOP((a),(pos)))
+#define WFIFOL(s, pos) (*(uint32*)WFIFOP((s),(pos)))
+#define RFIFOQ(a, pos) (*(const uint64*)RFIFOP((a),(pos)))
+#define WFIFOQ(s, pos) (*(uint64*)WFIFOP((s),(pos)))
 
-#define RFIFOREST(fd)  (sockt->session[fd]->flag.eof ? 0 : sockt->session[fd]->rdata_size - sockt->session[fd]->rdata_pos)
-#define RFIFOFLUSH(fd) \
-	do { \
-		if(sockt->session[fd]->rdata_size == sockt->session[fd]->rdata_pos){ \
-			sockt->session[fd]->rdata_size = sockt->session[fd]->rdata_pos = 0; \
-		} else { \
-			sockt->session[fd]->rdata_size -= sockt->session[fd]->rdata_pos; \
-			memmove(sockt->session[fd]->rdata, sockt->session[fd]->rdata+sockt->session[fd]->rdata_pos, sockt->session[fd]->rdata_size); \
-			sockt->session[fd]->rdata_pos = 0; \
-		} \
-	} while(0)
+#define RFIFOREST(a)  (socket_io->rfiforest(a))
+#define RFIFOFLUSH(a) (socket_io->rfifoflush(a))
 
-#define WFIFOSET(fd, len)  (sockt->wfifoset(fd, len, true))
-#define WFIFOSET2(fd, len)  (sockt->wfifoset(fd, len, false))
-#define RFIFOSKIP(fd, len) (sockt->rfifoskip(fd, len))
+#define WFIFOSET(s, len)  (socket_io->wfifoset(s, len, true))
+#define WFIFOSET2(s, len)  (socket_io->wfifoset(s, len, false))
+#define RFIFOSKIP(a, len) (socket_io->rfifoskip(a, len))
 
 /* [Ind/Hercules] */
-#define RFIFO2PTR(fd) ((const void *)(sockt->session[fd]->rdata + sockt->session[fd]->rdata_pos))
-#define RP2PTR(fd) RFIFO2PTR(fd)
+#define RFIFO2PTR(a) RFIFOP((a),0)
+#define RP2PTR(a) RFIFO2PTR(a)
 
 /* [Hemagx/Hercules] */
-#define WFIFO2PTR(fd) ((void *)(sockt->session[fd]->wdata + sockt->session[fd]->wdata_size))
-#define WP2PTR(fd) WFIFO2PTR(fd)
+#define WFIFO2PTR(s) WFIFOP((s),0)
+#define WP2PTR(s) WFIFO2PTR(s)
 
 // buffer I/O macros
 static inline const void *RBUFP_(const void *p, int pos) __attribute__((const, unused));
@@ -109,10 +134,70 @@ static inline void *WBUFP_(void *p, int pos)
 #define TOL(n) ((uint32)((n)&UINT32_MAX))
 
 
+#ifdef SOCKET_IOCP
+
+/**
+ * Possible buffer status in queue
+ **/
+enum e_queue_type {
+	QT_OUTSIDE = 0,     //< Not in queue
+	QT_WAITING_DEQUEUE, //< After being posted
+	QT_WAITING_QUEUE    //< Waiting to be posted
+};
+
+/**
+ * Buffer operations
+ **/
+enum e_buffer_operation {
+	IO_NONE = 0,
+	IO_RECV,
+	IO_SEND,
+};
+
+/**
+ * Buffer data
+ *
+ * Used to maintain a buffer valid until the corresponding packet is dequeued
+ * From WSASend documentation:
+ * "The lpOverlapped parameter must be valid for the duration of the overlapped operation.
+ *  If multiple I/O operations are simultaneously outstanding, each must reference a separate
+ *  WSAOVERLAPPED structure."
+ * "For a Winsock application, once the WSASend function is called, the system owns these
+ *  buffers and the application may not access them. This array must remain valid for the
+ *  duration of the send operation."
+ **/
+struct s_iocp_buffer_data {
+	/**
+	 * Overlapped structure of the operation
+	 *
+	 * Must always be the first member of this struct when IOCP is active
+	 * @see https://blogs.msdn.microsoft.com/oldnewthing/20101217-00/?p=11983/
+	 **/
+	OVERLAPPED overlapped;
+	/**
+	 * WSA buffer array
+	 *
+	 * For receive operations wsa_buffer.len is the total allocated length of
+	 * wsa_buffer.buf, while in send operations is the number of bytes to be sent.
+	 * On receive operations only one of the buffers is used, because we know the
+	 * maximum possible receive packet len, for send we use the number of buffers
+	 * required to send all the data in one system call.
+	 * wsa_buffer.buf is allocated via ers_alloc in multiples of FIFO_SIZE
+	 **/
+	WSABUF *wsa_buffer;
+	int buffer_count; // Count of WSABUF (0 indexed)
+
+	enum e_queue_type status;
+	enum e_buffer_operation operation;
+};
+
+#endif
+
 // Struct declaration
 typedef int (*RecvFunc)(int fd);
 typedef int (*SendFunc)(int fd);
 typedef int (*ParseFunc)(int fd);
+typedef void (*ActionParseFunc)(struct s_receive_action_data *act); 
 
 struct socket_data {
 	struct {
@@ -120,23 +205,101 @@ struct socket_data {
 		unsigned char server : 1;
 		unsigned char ping : 2;
 		unsigned char validate : 1;
+#ifdef SOCKET_IOCP
+		// Socket marked for deletion later, there are still remaining operations.
+		unsigned char wait_removal : 1;
+		// Set if EOF was queued by session_disconnect
+		unsigned char post_eof : 1;
+#endif
 	} flag;
 
 	uint32 client_addr; // remote client address
+
+#ifdef SOCKET_IOCP
+	/**
+	 * Queue that this session is attached to
+	 * -1 No queue attached
+	 **/
+	int32_t action_queue_id;
+	/**
+	 * Identifier in session_db
+	 **/
+	uint32_t id;
+	SOCKET socket;
+	/**
+	 * MUTEX lock of I/O operations performed by this session
+	 * session_data is not protected by this mutex.
+	 **/
+	struct mutex_data *mutex;
+
+	/**
+	 * Buffers available for filling
+	 *
+	 * More than one s_iocp_buffer_data is required because every time
+	 * an operation is queued we lose the management rights of the data
+	 * to the kernel until "dequeual".
+	 **/
+	VECTOR_DECL(struct s_iocp_buffer_data*) iocp_available_buffer;
+
+	/**
+	 * Number of remaining completion packets to be dequeued
+	 *  When a packet is expected to be dequeued this counter should be increased
+	 *  and when it's dequeued it should be decreased
+	 * It is only safe to free the the session while there are
+	 * no operations remaining.
+	 * @see socket_iocp_post_send
+	 * @see socket_iocp_post_recv
+	 **/
+	int operations_remaining;
+
+	/**
+	 * Write reference counter
+	 * The number of send operations that are to be performed in any of the
+	 * action threads. After sending this is decreased.
+	 * It is only safe to free the the session while there are
+	 * no operations remaining.
+	 * @see wfifoflush_act
+	 * @see wfifohead
+	 **/
+	int writes_remaining;
+
+	/**
+	 * session_data usage counter
+	 * Increased when an action thread receives a receive action.
+	 * It is only safe to free the the session while there are
+	 * no operations remaining.
+	 * @see action_receive
+	 **/
+	int session_counter;
+
+	ActionParseFunc parse;
+#else
 
 	uint8 *rdata, *wdata;
 	size_t max_rdata, max_wdata;
 	size_t rdata_size, wdata_size;
 	size_t rdata_pos;
 	uint32 last_head_size;
+#endif // Not SOCKET_IOCP
 	time_t rdata_tick; // time of last recv (for detecting timeouts); zero when timeout is disabled
 	time_t wdata_tick; // time of last send (for detecting timeouts);
 
+#ifndef SOCKET_IOCP
 	RecvFunc func_recv;
 	SendFunc func_send;
 	ParseFunc func_parse;
+#endif
 
-	void* session_data; // stores application-specific data related to the session
+	/**
+	 * Stores application-specific data related to the session
+	 *
+	 * Upon usage the session_counter is incremented, the session->mutex doesn't
+	 * protect this data structure.
+	 * This is done this way so we can minimize the number of blocks that I/O
+	 * workers have because of sessions, when an Action Worker is handling this
+	 * session_data it can use another lock if desired.
+	 **/
+	void* session_data;
 	struct hplugin_data_store *hdata; ///< HPM Plugin Data Store.
 };
 
@@ -171,9 +334,9 @@ VECTOR_STRUCT_DECL(s_subnet_vector, struct s_subnet);
 #define SUBNET_MATCH(ip1, ip2, mask) (APPLY_MASK((ip1), (mask)) == APPLY_MASK((ip2), (mask)))
 
 /**
- * Socket.c interface, mostly for reading however.
+ * Common socket functions interface (socket.c)
  **/
-struct socket_interface {
+struct socket_io_interface {
 	int fd_max;
 	/* */
 	time_t stall_time;
@@ -185,60 +348,66 @@ struct socket_interface {
 	int naddr_;   // # of ip addresses
 	bool validate;
 
-	struct socket_data **session;
-
 	struct s_subnet_vector lan_subnets; ///< LAN subnets.
 	struct s_subnet_vector trusted_ips; ///< Trusted IP ranges
 	struct s_subnet_vector allowed_ips; ///< Allowed server IP ranges
+
+	void (*rfifoflush)(struct s_receive_action_data *act);
+	void (*rfifoskip)(struct s_receive_action_data *act, size_t len);
+	size_t (*rfiforest)(const struct s_receive_action_data *act);
+	bool (*wfifoset)(struct socket_data *session, size_t len, bool validate);
+	void *(*wfifop)(struct socket_data *session, int pos);
+	void (*wfifohead)(struct socket_data *session, size_t len, bool get_mutex);
+	void (*wfifoflush)(struct socket_data *session);
 
 	/* */
 	void (*init) (void);
 	void (*final) (void);
 	/* */
 	int (*perform) (int next);
-	/* [Ind/Hercules] - socket_datasync */
-	void (*datasync) (int fd, bool send);
+
 	/* */
-	int (*make_listen_bind) (uint32 ip, uint16 port);
-	int (*make_connection) (uint32 ip, uint16 port, struct hSockOpt *opt);
-	int (*realloc_fifo) (int fd, unsigned int rfifo_size, unsigned int wfifo_size);
-	int (*realloc_writefifo) (int fd, size_t addition);
-	int (*wfifoset) (int fd, size_t len, bool validate);
-	void (*wfifohead) (int fd, size_t len);
-	int (*rfifoskip) (int fd, size_t len);
+	bool (*make_listen_bind) (uint32 ip, uint16 port);
+	struct socket_data *(*make_connection) (uint32 ip, uint16 port, struct hSockOpt *opt);
 	void (*close) (int fd);
-	void (*validateWfifo) (int fd, size_t len);
+
 	/* */
-	bool (*session_is_valid) (int fd);
-	bool (*session_is_active) (int fd);
-	/* */
-	void (*flush) (int fd);
+	void (*flush) (struct socket_data *session);
 	void (*flush_fifos) (void);
-	int (*connect_client) (int listen_fd);
-	void (*set_nonblocking) (int fd, unsigned long yes);
-	void (*set_defaultparse) (ParseFunc defaultparse);
-	/* hostname/ip conversion functions */
-	uint32 (*host2ip) (const char* hostname);
-	const char * (*ip2str) (uint32 ip, char *ip_str);
-	uint32 (*str2ip) (const char* ip_str);
-	/* */
-	uint16 (*ntows) (uint16 netshort);
-	/* */
-	int (*getips) (uint32* ips, int max);
+
+	void (*set_defaultparse) (ActionParseFunc defaultparse);
+
+
 	/* */
 	void (*eof) (int fd);
 
 	uint32 (*lan_subnet_check) (uint32 ip, struct s_subnet *info);
 	bool (*allowed_ip_check) (uint32 ip);
 	bool (*trusted_ip_check) (uint32 ip);
-	int (*net_config_read_sub) (struct config_setting_t *t, struct s_subnet_vector *list, const char *filename, const char *groupname);
 	void (*net_config_read) (const char *filename);
+
+	/* hostname/ip conversion functions */
+	uint32 (*host2ip) (const char* hostname);
+	const char * (*ip2str) (uint32 ip, char *ip_str);
+	uint32 (*str2ip) (const char* ip_str);
+	/* */
+	uint16 (*ntows) (uint16 netshort);
+
+	/* [Ind/Hercules] - socket_datasync */
+	void (*datasync) (struct s_receive_action_data *act, bool send);
+
+	bool (*session_marked_removal) (struct socket_data *session);
+	bool (*session_mark_removal) (struct socket_data *session);
+	void (*session_disconnect) (struct socket_data *session);
+	void (*session_disconnect_guard) (struct socket_data *session);
+	struct socket_data *(*session_from_id) (int32_t id);
+	void (*session_update_parse) (struct socket_data *session, ActionParseFunc parse);
 };
 
 #ifdef HERCULES_CORE
-void socket_defaults(void);
+void socket_io_defaults(void);
 #endif // HERCULES_CORE
 
-HPShared struct socket_interface *sockt;
+HPShared struct socket_io_interface *socket_io;
 
 #endif /* COMMON_SOCKET_H */
