@@ -33,6 +33,8 @@
 #include "common/thread.h"
 #include "common/rwlock.h"
 #include "common/mutex.h"
+#include "common/action.h"
+#include "common/socket.h"
 #endif
 
 #ifdef WIN32
@@ -377,16 +379,20 @@ static int acquire_timer(void)
 /**
  * Starts a new timer.
  *
- * @param tick     Starting tick.
- * @param id       General purpose storage.
- * @param data     General purpose storage.
- * @param interval Timer interval
- * @param type     Timer flag (@see timer flags)
+ * @param tick      Starting tick.
+ * @param id        General purpose storage.
+ * @param data      General purpose storage.
+ * @param interval  Timer interval
+ * @param type      Timer flag (@see timer flags)
+ * @param target    Target thread (@see enum timer_target)
+ * @param target_id Target id (session or action id depending on target)
  * @return Timer id
  * @retval INVALID_TIMER in failure
  * @mutex timer_perform_mutex
  **/
-static int timer_add_sub(int64 tick, TimerFunc func, int id, intptr_t data, int interval, unsigned char type)
+static int timer_add_sub(int64 tick, TimerFunc func, int id,
+	intptr_t data, int interval, unsigned char type, unsigned char target,
+	int32_t target_id)
 {
 	int tid;
 	nullpo_retr(INVALID_TIMER, func);
@@ -412,12 +418,14 @@ static int timer_add_sub(int64 tick, TimerFunc func, int id, intptr_t data, int 
 			search_timer_func_list(timer_data[tid].func));
 		Assert_retr(INVALID_TIMER, 0);
 	}
-	timer_data[tid].tick     = tick;
-	timer_data[tid].func     = func;
-	timer_data[tid].id       = id;
-	timer_data[tid].data     = data;
-	timer_data[tid].type     = type;
-	timer_data[tid].interval = interval;
+	timer_data[tid].tick          = tick;
+	timer_data[tid].func          = func;
+	timer_data[tid].id            = id;
+	timer_data[tid].data          = data;
+	timer_data[tid].type          = type;
+	timer_data[tid].interval      = interval;
+	timer_data[tid].timer_target  = target;
+	timer_data[tid].target_id     = target_id;
 	push_timer_heap(tid);
 
 	return tid;
@@ -435,7 +443,7 @@ static int timer_add_sub(int64 tick, TimerFunc func, int id, intptr_t data, int 
  **/
 static int timer_add(int64 tick, TimerFunc func, int id, intptr_t data)
 {
-	return timer->add_sub(tick, func, id, data, 1000, TIMER_ONCE_AUTODEL);
+	return timer->add_sub(tick, func, id, data, 1000, TIMER_ONCE_AUTODEL, TIMER_THREAD, 0);
 }
 
 /**
@@ -452,7 +460,7 @@ static int timer_add(int64 tick, TimerFunc func, int id, intptr_t data)
  **/
 static int timer_add_interval(int64 tick, TimerFunc func, int id, intptr_t data, int interval)
 {
-	return timer->add_sub(tick, func, id, data, interval, TIMER_INTERVAL);
+	return timer->add_sub(tick, func, id, data, interval, TIMER_INTERVAL, TIMER_THREAD, 0);
 }
 
 /**
@@ -679,6 +687,28 @@ static struct mutex_data *timer_get_mutex(void)
 #endif
 }
 
+struct s_timer_action_data {
+	int tid;
+	struct TimerData data;
+};
+
+/**
+ * Point of entry of Timer action in action workers
+ * @see do_timer
+ **/
+static void action_timer(void *data)
+{
+	struct s_timer_action_data *act = data;
+	if(!act->data.func) {
+		ShowDebug("action_timer: Dequeued timer without associated function\n");
+		return;
+	}
+	act->data.func(timer, act->tid,
+		timer->get_server_tick(),
+		act->data.id, act->data.data);
+	aFree(act);
+}
+
 /**
  * Executes all expired timers.
  *
@@ -702,6 +732,39 @@ static int do_timer(int64 tick)
 		BHEAP_POP(timer_heap, DIFFTICK_MINTOPCMP, swap);
 		timer_data[tid].type |= TIMER_REMOVE_HEAP;
 
+#ifdef TIMER_USE_THREAD
+		if(timer_data[tid].func) {
+			struct s_action_queue *target_queue = NULL;
+			switch(timer_data[tid].timer_target) {
+				case TIMER_THREAD:
+					if( diff < -1000 )
+						// timer was delayed for more than 1 second, use current tick instead
+						timer_data[tid].func(tm, tid, tick, timer_data[tid].id, timer_data[tid].data);
+					else
+						timer_data[tid].func(tm, tid, timer_data[tid].tick, timer_data[tid].id,
+							timer_data[tid].data);
+					break;
+				case TIMER_SESSION:
+				{
+					struct socket_data *session = socket_io->session_from_id(timer_data[tid].target_id);
+					if(session) // Otherwise session was already removed
+						target_queue = action->queue_get(session);
+				}
+				case TIMER_ACTION:
+					target_queue = action->queue_get_id(timer_data[tid].target_id);
+			}
+			if(target_queue) {
+				/**
+				 * We can't guarantee that this timer id will still be valid when
+				 * the action is processed by the action worker.
+				 **/
+				struct s_timer_action_data *timer_action = aMalloc(sizeof(*timer_action));
+				memcpy(&timer_action->data, &timer_data[tid], sizeof(timer_data[tid]));
+				timer_action->tid = tid;
+				action->enqueue(target_queue, action_timer, timer_action);
+			}
+		}
+#else
 		if( timer_data[tid].func ) {
 			if( diff < -1000 )
 				// timer was delayed for more than 1 second, use current tick instead
@@ -709,7 +772,7 @@ static int do_timer(int64 tick)
 			else
 				timer_data[tid].func(tm, tid, timer_data[tid].tick, timer_data[tid].id, timer_data[tid].data);
 		}
-
+#endif
 		// in the case the function didn't change anything...
 		if( timer_data[tid].type & TIMER_REMOVE_HEAP ) {
 			timer_data[tid].type &= ~TIMER_REMOVE_HEAP;

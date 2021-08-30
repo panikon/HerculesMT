@@ -43,6 +43,12 @@ enum {
 	TIMER_REMOVE_HEAP = 0x10,
 };
 
+enum timer_target {
+	TIMER_THREAD,  //< Execute timer from timer thread
+	TIMER_SESSION, //< Enqueue timer to the action worker of the session
+	TIMER_ACTION,  //< Enqueue timer in provided action worker
+};
+
 /**
  * Timer entry function
  *
@@ -61,6 +67,9 @@ struct TimerData {
 	TimerFunc func;
 	unsigned char type;
 	int interval;
+
+	unsigned char timer_target;
+	int32_t target_id;
 
 	// general-purpose storage
 	int id;
@@ -81,7 +90,8 @@ struct timer_interface {
 
 	int (*add) (int64 tick, TimerFunc func, int id, intptr_t data);
 	int (*add_interval) (int64 tick, TimerFunc func, int id, intptr_t data, int interval);
-	int (*add_sub) (int64 tick, TimerFunc func, int id, intptr_t data, int interval, unsigned char type);
+	int (*add_sub) (int64 tick, TimerFunc func, int id, intptr_t data,
+		int interval, unsigned char type, unsigned char target, int32_t target_id);
 	const struct TimerData (*get) (int tid);
 	int (*delete) (int tid, TimerFunc func);
 

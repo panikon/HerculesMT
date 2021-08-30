@@ -47,6 +47,7 @@
 #include "common/thread.h"
 #include "common/timer.h"
 #include "common/utils.h"
+#include "common/action.h"
 
 #ifndef _WIN32
 #	include <unistd.h>
@@ -263,11 +264,12 @@ static void core_defaults(void)
 	sql_defaults();
 	timer_defaults();
 	db_defaults();
-	socket_defaults();
+	socket_io_defaults();
 	packets_defaults();
 	rnd_defaults();
 	md5_defaults();
 	thread_defaults();
+	action_defaults();
 }
 
 /**
@@ -530,7 +532,8 @@ int main(int argc, char **argv)
 
 	HPM->init();
 
-	sockt->init();
+	action->queue_init();
+	socket_io->init();
 
 	packets->init();
 
@@ -551,7 +554,9 @@ int main(int argc, char **argv)
 	HPM->final();
 	timer->final();
 	packets->final();
-	sockt->final();
+	socket_io->final();
+	action->queue_final();
+
 	DB->final();
 	ers_final(MEMORYTYPE_SHARED);
 	rnd->final();

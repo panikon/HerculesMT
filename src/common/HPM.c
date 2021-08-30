@@ -160,8 +160,9 @@ static struct hplugin *hplugin_create(void)
 	return plugin;
 }
 
-static bool hplugins_addpacket(unsigned short cmd, unsigned short length, void (*receive) (int fd), unsigned int point, unsigned int pluginID)
-{
+static bool hplugins_addpacket(unsigned short cmd, unsigned short length,
+	void (*receive) (struct s_receive_action_data *act), unsigned int point, unsigned int pluginID
+) {
 	struct HPluginPacket *packet;
 	int i;
 
@@ -747,14 +748,15 @@ static CPCMD(plugins)
 /**
  * Parses a packet through the registered plugin.
  *
- * @param fd The connection fd.
+ * @param act Action data to be parsed.
  * @param point The packet hooking point.
  * @retval 0 unknown packet
  * @retval 1 OK
  * @retval 2 incomplete packet
  */
-static unsigned char hplugins_parse_packets(int fd, int packet_id, enum HPluginPacketHookingPoints point)
-{
+static unsigned char hplugins_parse_packets(struct s_receive_action_data *act, int packet_id,
+	enum HPluginPacketHookingPoints point
+) {
 	struct HPluginPacket *packet = NULL;
 	int i;
 	int16 length;
@@ -767,13 +769,13 @@ static unsigned char hplugins_parse_packets(int fd, int packet_id, enum HPluginP
 	packet = &VECTOR_INDEX(HPM->packets[point], i);
 	length = packet->len;
 	if (length == -1)
-		length = RFIFOW(fd, 2);
+		length = RFIFOW(act, 2);
 
-	if (length > (int)RFIFOREST(fd))
+	if (length > (int)RFIFOREST(act))
 		return 2;
 
-	packet->receive(fd);
-	RFIFOSKIP(fd, length);
+	packet->receive(act);
+	RFIFOSKIP(act, length);
 	return 1;
 }
 
