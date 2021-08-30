@@ -2407,23 +2407,48 @@ static void char_ping_login_server(int fd)
 	WFIFOSET(fd,2);
 }
 
+/**
+ * AC_CHARSERVERCONNECT_ACK_STATUS
+ * Result of connection request
+ * @see enum ac_charserverconnect_ack_status
+ **/
 static int char_parse_fromlogin_connection_state(int fd)
 {
 	switch (RFIFOB(fd,2)) {
-	case 0:
+	case CCA_ACCEPTED:
 		ShowStatus("Connected to login-server (connection #%d).\n", fd);
 		loginif->on_ready();
 		break;
-	case 1: // Invalid username/password
+	case CCA_INVALID_CREDENTIAL: // Invalid username/password
 		ShowError("Can not connect to login-server.\n");
 		ShowError("The server communication passwords (default s1/p1) are probably invalid.\n");
 		ShowError("Also, please make sure your login db has the correct communication username/passwords and the gender of the account is S.\n");
 		ShowError("The communication passwords are set in /conf/map/map-server.conf and /conf/char/char-server.conf\n");
 		sockt->eof(fd);
 		return 1;
-	case 2: // IP not allowed
+	case CCA_IP_NOT_ALLOWED: // IP not allowed
 		ShowError("Can not connect to login-server.\n");
 		ShowError("Please make sure your IP is allowed in conf/network.conf\n");
+		sockt->eof(fd);
+		return 1;
+	case CCA_INVALID_ACC_ID: // Account id out of range
+		ShowError("Can not connect to login-server.\n");
+		ShowError("Character-server has an account id out of valid range.\n");
+		sockt->eof(fd);
+		return 1;
+	case CCA_INVALID_SEX: // Invalid sex for server credential
+		ShowError("Can not connect to login-server.\n");
+		ShowError("Character-server has an account with an invalid sex type.\n");
+		sockt->eof(fd);
+		return 1;
+	case CCA_INVALID_NOT_READY: // Login-server is not ready
+		ShowError("Can not connect to login-server.\n");
+		ShowError("Login-server is not yet ready for a new connection.\n");
+		sockt->eof(fd);
+		return 1;
+	case CCA_ALREADY_CONNECTED: // Someone already used these credentials
+		ShowError("Can not connect to login-server.\n");
+		ShowError("Our credentials were already used in this server!\n");
 		sockt->eof(fd);
 		return 1;
 	default:
@@ -5465,6 +5490,10 @@ static int char_send_accounts_tologin(int tid, int64 tick, int id, intptr_t data
 	return 0;
 }
 
+/**
+ * Checks if login-server is connected, if not tries to connect and authenticate
+ * @see loginif->connect_to_server
+ **/
 static int char_check_connect_login_server(int tid, int64 tick, int id, intptr_t data)
 {
 	if (chr->login_fd > 0 && sockt->session[chr->login_fd] != NULL)

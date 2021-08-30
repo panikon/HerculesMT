@@ -73,17 +73,95 @@ struct login_session_data {
 	uint8 client_hash[16];
 	int has_client_hash;
 
-	int fd;
-
 	time_t expiration_time;
+
+	struct socket_data *session;
 };
 
-struct mmo_char_server {
+/**
+ * AC_REFUSE_LOGIN error code list
+ * @see struct HEADER_AC_REFUSE_LOGIN / _R2 / R3
+ * @see lclif_send_auth_failed
+ * @see login_auth_failed
+ * @see login_mmo_auth
+ **/
+enum accept_login_errorcode {
+	/**
+	 * These codes should hold the negative value of the equivalent code in
+	 * notify_ban_error_code (PACKET_SC_NOTIFY_BAN)
+	 **/
+	ALE_BRUTE_FORCE = -109,				// Brute force attempt (NBE_BRUTE_FORCE)
+	ALE_DUPLICATE_ID = -2,				// Already logged in   (NBE_DUPLICATE_ID)
 
+	ALE_OK = -1,						// Authentication successful
+	// Valid error codes for AC_REFUSE_LOGIN
+	ALE_UNREGISTERED = 0,				// "Unregistered account"
+	ALE_INCORRECT_PASS = 1,				// "Incorrect password"
+	ALE_EXPIRED_ID = 2,					// "This ID is expired"
+	ALE_REJECTED = 3,					// "Rejected from Server"
+	ALE_LOGIN_UNAVAILABLE,				// "Login is currently unavailable"
+	ALE_INVALID_VERSION,				// Invalid client version
+	ALE_PROHIBITED,						// "Your are Prohibited to log in until %s"
+	ALE_JAMMED,							// "Server is jammed due to overpopulation"
+	ALE_SAKRAY,							// "You cannot access sakray with this user account"
+	MSI_REFUSE_BAN_BY_DBA,				// "MSI_REFUSE_BAN_BY_DBA (9)"
+	MSI_REFUSE_EMAIL_NOT_CONFIRMED,		// "MSI_REFUSE_EMAIL_NOT_CONFIRMED (10)"
+	MSI_REFUSE_BAN_BY_GM,				// "MSI_REFUSE_BAN_BY_GM (11)"
+	MSI_REFUSE_TEMP_BAN_FOR_DBWORK,		// "MSI_REFUSE_TEMP_BAN_FOR_DBWORK (12)"
+	MSI_REFUSE_SELF_LOCK,				// "MSI_SELF_LOCK (13)"
+	MSI_REFUSE_NOT_PERMITTED_GROUP,		// "MSI_REFUSE_NOT_PERMITTED_GROUP (14)"
+	MSI_REFUSE_WAIT_FOR_SAKRAY_ACTIVE,	// "MSI_REFUSE_WAIT_FOR_SAKRAY_ACTIVE (15)"
+	ALE_NO_WINDOW,						// Doesn't display anything (no window either)
+	ALE_BAN_HACK,						// "This account has been used for illegal program or hacking program. Block time: %s"
+	ALE_TAMPERED_CLIENT,				// "The possibility of exposure to illegal program, PC virus infection
+										// or Hacking Tool has been detected. Please execute licensed client. Our team is
+										// trying to make a best environment for Ro players. (18)"
+	/**
+	 * One-Time Password Security (OTP)
+	 * Probably the client will send PACKET_CA_OTP_AUTH_REQ and then an OTP will be generated to
+	 * username and then sent via some other service
+	 * When OTP is not available ALE_NO_OTP should be the answer
+	 * When the typed OTP is incorrect ALE_FAILED_OTP should be the answer and not ALE_INCORRED_PASS
+	 **/
+	ALE_NO_OTP,							// "There is no OTP information, contact administrator (19)"
+	ALE_FAILED_OTP,						// "fail to recognizing OTP (20)"
+	// 21 - 98 ALE_REJECTED
+	ALE_ID_REMOVED = 99,				// "This ID has been removed" - closes client window
+	ALE_LOGIN_INFO_REMAINS,				// "Login information remains at %s"
+	ALE_HACKING_INVESTIGATION,			// "Account has been locked for a hacking investigation. Please contact the GM Team for more information"
+	ALE_BUG_INVESTIGATION,				// "This account has been temporarily prohibited from login due to a bug-related investigation"
+	ALE_DELETING_CHAR,					// "Login is temporarily unavailable while this character is being deleted"
+	ALE_DELETING_SPOUSE,				// "Login is temporarily unavailable while your spouse character is being deleted"
+	ALE_UNSAFE_COM_KEY,					// "This account has not confirmed by connecting to the safe communication key. Please connect
+										// to the key first, and then login into the game"
+	ALE_MOBILE_AUTHENTICATION,			// "Mobile Authentication"
+	ALE_107,							// Rejected
+	ALE_CANNOT_CONNECT_FREE_SERVER,		// "An user of this server cannot connect to free server"
+	ALE_EXPIRED_PASS,					// "Your password has expired. Please log in again"
+	ALE_NO_MSG,							// "NO MSG" - closes client window
+	// 111 - 239 ALE_REJECTED
+	ALE_OPEN_SITE = 240,				// Prompt asking something in korean, if OK opens ragnarok.co.kr
+	// ... 255 with same message as ALE_REJECTED
+	// 256 starts repeating the messages, i.e 256 = ALE_UNREGISTERED
+	ALE_LAST = 255
+};
+
+/**
+ * Character server information
+ *
+ * This information is used in order to keep track of all authenticated
+ * char-servers and to send the data via (lclif_send_server_list) to
+ * the clients.
+ * @see lclif_send_server_list
+ * @see s_login_dbs::server
+ * @see PACKET_AC_ACCEPT_LOGIN
+ **/
+struct mmo_char_server {
 	char name[20];
-	int fd;
+	struct socket_data *session;
 	uint32 ip;
 	uint16 port;
+
 	uint16 users; ///< user count on this server
 	uint16 type;  ///< 0=normal, 1=maintenance, 2=over 18, 3=paying, 4=P2P (@see e_char_server_type in mmo.h)
 	uint16 new_;  ///< should display as 'new'?
@@ -170,10 +248,10 @@ struct s_login_dbs {
 struct login_interface {
 	struct DBMap *auth_db;
 	struct DBMap *online_db;
-	int fd;
 	struct Login_Config *config;
 	struct AccountDB* accounts;
 	struct s_login_dbs *dbs;
+	struct ers_collection_t *ers_collection;
 
 	int (*mmo_auth) (struct login_session_data* sd, bool isServer);
 	int (*mmo_auth_new) (const char* userid, const char* pass, const char sex, const char* last_ip);

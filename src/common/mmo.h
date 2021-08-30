@@ -1301,6 +1301,21 @@ enum hz_char_ask_name_answer {
 };
 
 /**
+ * Values to be used in AC_CHARSERVERCONNECT_ACK
+ * @see char_parse_fromlogin_connection_state
+ * @see login_char_server_connection_status
+ */
+enum ac_charserverconnect_ack_status {
+	CCA_ACCEPTED          = 0, // Accepted connection
+	CCA_INVALID_CREDENTIAL= 1, // Invalid user/pass pair
+	CCA_IP_NOT_ALLOWED    = 2, // IP not allowed
+	CCA_INVALID_ACC_ID    = 3, // Account id out of valid range
+	CCA_INVALID_SEX       = 4, // Invalid sex for a server account
+	CCA_INVALID_NOT_READY = 5, // Login-server is not ready to accept a char-server
+	CCA_ALREADY_CONNECTED = 6, // This character-server is already connected
+};
+
+/**
  * Quest Info Types
  */
 enum questinfo_type {

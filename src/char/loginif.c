@@ -171,6 +171,11 @@ static void loginif_send_users_count(int users)
 	WFIFOSET(chr->login_fd,6);
 }
 
+/**
+ * Asks for authentication to login-server
+ *
+ * CA_CHARSERVERCONNECT
+ **/
 static void loginif_connect_to_server(void)
 {
 	Assert_retv(chr->login_fd != -1);

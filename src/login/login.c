@@ -32,6 +32,7 @@
 #include "common/cbasetypes.h"
 #include "common/conf.h"
 #include "common/core.h"
+#include "common/ers.h"
 #include "common/db.h"
 #include "common/memmgr.h"
 #include "common/md5calc.h"
@@ -44,6 +45,9 @@
 #include "common/sysinfo.h"
 #include "common/timer.h"
 #include "common/utils.h"
+#include "common/action.h"
+
+#include "common/mutex.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -995,10 +999,13 @@ static int login_parse_fromchar(int fd)
 }
 
 
-//-------------------------------------
-// Make new account
-//-------------------------------------
-static int login_mmo_auth_new(const char *userid, const char *pass, const char sex, const char *last_ip)
+/**
+ * Creates a new account
+ *
+ * @return Code to be used in login_auth_failed
+ * @see login_mmo_auth
+ **/
+static enum accept_login_errorcode login_mmo_auth_new(const char *userid, const char *pass, const char sex, const char *last_ip)
 {
 	static int num_regs = 0; // registration counter
 	static int64 new_reg_tick = 0;
@@ -1013,20 +1020,22 @@ static int login_mmo_auth_new(const char *userid, const char *pass, const char s
 		new_reg_tick = timer->gettick();
 	if (DIFF_TICK(tick, new_reg_tick) < 0 && num_regs >= login->config->allowed_regs) {
 		ShowNotice("Account registration denied (registration limit exceeded)\n");
-		return 3;
+		return ALE_REJECTED;
 	}
 
 	if (login->config->new_acc_length_limit && (strlen(userid) < 4 || strlen(pass) < 4))
-		return 1;
+		return ALE_INCORRECT_PASS;
 
 	// check for invalid inputs
 	if( sex != 'M' && sex != 'F' )
-		return 0; // 0 = Unregistered ID
+		return ALE_UNREGISTERED;
 
 	// check if the account doesn't exist already
 	if( accounts->load_str(accounts, &acc, userid) ) {
-		ShowNotice("Attempt of creation of an already existing account (account: %s_%c, pass: %s, received pass: %s)\n", userid, sex, acc.pass, pass);
-		return 1; // 1 = Incorrect Password
+		ShowNotice("Attempt of creation of an already existing account "
+			"(account: %s_%c, pass: %s, received pass: %s)\n",
+			userid, sex, acc.pass, pass);
+		return ALE_INCORRECT_PASS;
 	}
 
 	memset(&acc, '\0', sizeof(acc));
@@ -1044,7 +1053,7 @@ static int login_mmo_auth_new(const char *userid, const char *pass, const char s
 	acc.char_slots = 0;
 
 	if( !accounts->create(accounts, &acc) )
-		return 0;
+		return ALE_UNREGISTERED; // Failed to create an account
 
 	ShowNotice("Account creation (account %s, id: %d, pass: %s, sex: %c)\n", acc.userid, acc.account_id, acc.pass, acc.sex);
 
@@ -1054,15 +1063,20 @@ static int login_mmo_auth_new(const char *userid, const char *pass, const char s
 	}
 	++num_regs;
 
-	return -1;
+	return ALE_OK;
 }
 
-static int login_check_client_version(struct login_session_data *sd)
+/**
+ * Checks if the version of the client is to be accepted by the server
+ *
+ * @return True client can connect
+ **/
+static bool login_check_client_version(struct login_session_data *sd)
 {
 	// if check flags enabled skip version check with flags pattern present in version field
 	if (!login->config->check_client_flags || (sd->version & 0x80000000) == 0) {
 		if (login->config->check_client_version && sd->version != login->config->client_version_to_connect)
-			return 5;
+			return false;
 	}
 
 	// check flags only if enabled and if client flags set to known value
@@ -1071,18 +1085,22 @@ static int login_check_client_version(struct login_session_data *sd)
 		if (emulatorFlags != sd->version) {
 			if (login->config->report_client_flags_error)
 				ShowNotice("Wrong client flags detected (account: %s, received flags: 0x%x)\n", sd->userid, sd->version);
-			return 5;
+			return false;
 		}
 	}
 
-	return -1;
+	return true;
 }
 
-//-----------------------------------------------------
-// Check/authentication of a connection
-//-----------------------------------------------------
-// TODO: Map result values to an enum (or at least document them)
-static int login_mmo_auth(struct login_session_data *sd, bool isServer)
+
+/**
+ * Authenticates a new connection and fills session data with relevant information.
+ *
+ * @param sd       Session data to be filled
+ * @param isServer Connection from a character-server
+ * @return Code to be used in login_auth_failed
+ **/
+static enum accept_login_errorcode login_mmo_auth(struct login_session_data *sd, bool isServer)
 {
 	struct mmo_account acc;
 	size_t len;
@@ -1105,18 +1123,15 @@ static int login_mmo_auth(struct login_session_data *sd, bool isServer)
 			sprintf(ip_dnsbl, "%s.%s", r_ip, trim(dnsbl_server));
 			if (sockt->host2ip(ip_dnsbl)) {
 				ShowInfo("DNSBL: (%s) Blacklisted. User Kicked.\n", r_ip);
-				return 3;
+				return ALE_REJECTED;
 			}
 		}
 
 	}
 
-	if (!isServer) {
-		//Client Version check
-		const int versionError = login->check_client_version(sd);
-		if (versionError != -1)
-			return versionError;
-	}
+	//Client Version check
+	if(!isServer && !login->check_client_version(sd))
+		return ALE_INVALID_VERSION;
 
 	len = strnlen(sd->userid, NAME_LENGTH);
 
@@ -1133,35 +1148,36 @@ static int login_mmo_auth(struct login_session_data *sd, bool isServer)
 			sd->userid[len] = '\0';
 
 			result = login->mmo_auth_new(sd->userid, sd->passwd, TOUPPER(sd->userid[len+1]), ip);
-			if( result != -1 )
+			if(result != ALE_OK)
 				return result;// Failed to make account. [Skotlex].
 		}
 	}
 
 	if( len <= 0 ) { /** a empty password is fine, a userid is not. **/
 		ShowNotice("Empty userid (received pass: '%s', ip: %s)\n", sd->passwd, ip);
-		return 0; // 0 = Unregistered ID
+		return ALE_UNREGISTERED;
 	}
 
 	if( !accounts->load_str(accounts, &acc, sd->userid) ) {
 		ShowNotice("Unknown account (account: %s, received pass: %s, ip: %s)\n", sd->userid, sd->passwd, ip);
-		return 0; // 0 = Unregistered ID
+		return ALE_UNREGISTERED;
 	}
 
 	if( !login->check_password(sd->md5key, sd->passwdenc, sd->passwd, acc.pass) ) {
 		ShowNotice("Invalid password (account: '%s', pass: '%s', received pass: '%s', ip: %s)\n", sd->userid, acc.pass, sd->passwd, ip);
-		return 1; // 1 = Incorrect Password
+		return ALE_INCORRECT_PASS;
 	}
 
 	if( acc.unban_time != 0 && acc.unban_time > time(NULL) ) {
 		char tmpstr[24];
 		timestamp2string(tmpstr, sizeof(tmpstr), acc.unban_time, login->config->date_format);
 		ShowNotice("Connection refused (account: %s, pass: %s, banned until %s, ip: %s)\n", sd->userid, sd->passwd, tmpstr, ip);
-		return 6; // 6 = Your are Prohibited to log in until %s
+		return ALE_PROHIBITED; // Your are Prohibited to log in until %s
 	}
 
 	if( acc.state != 0 ) {
-		ShowNotice("Connection refused (account: %s, pass: %s, state: %u, ip: %s)\n", sd->userid, sd->passwd, acc.state, ip);
+		ShowNotice("Connection refused (account: %s, pass: %s, state: %u, ip: %s)\n",
+			sd->userid, sd->passwd, acc.state, ip);
 		return acc.state - 1;
 	}
 
@@ -1186,7 +1202,7 @@ static int login_mmo_auth(struct login_session_data *sd, bool isServer)
 
 			if( !sd->has_client_hash ) {
 				ShowNotice("Client didn't send client hash (account: %s, pass: %s, ip: %s)\n", sd->userid, sd->passwd, ip);
-				return 5;
+				return ALE_INVALID_VERSION;
 			}
 
 			for( i = 0; i < 16; i++ )
@@ -1194,7 +1210,7 @@ static int login_mmo_auth(struct login_session_data *sd, bool isServer)
 			smd5[32] = '\0';
 
 			ShowNotice("Invalid client hash (account: %s, pass: %s, sent md5: %s, ip: %s)\n", sd->userid, sd->passwd, smd5, ip);
-			return 5;
+			return ALE_TAMPERED_CLIENT;
 		}
 	}
 
@@ -1220,7 +1236,7 @@ static int login_mmo_auth(struct login_session_data *sd, bool isServer)
 	if( sd->sex != 'S' && sd->account_id < START_ACCOUNT_NUM )
 		ShowWarning("Account %s has account id %d! Account IDs must be over %d to work properly!\n", sd->userid, sd->account_id, START_ACCOUNT_NUM);
 
-	return -1; // account OK
+	return ALE_OK;
 }
 
 static void login_kick(struct login_session_data *sd)
@@ -1317,6 +1333,9 @@ static void login_auth_ok(struct login_session_data *sd)
 	}
 }
 
+/**
+ * Logs failed attempt to login and then sends packet via lclif->auth_failed
+ **/
 static void login_auth_failed(struct login_session_data *sd, int result)
 {
 	int fd;
@@ -1328,6 +1347,7 @@ static void login_auth_failed(struct login_session_data *sd, int result)
 	ip = sockt->session[fd]->client_addr;
 	if (login->config->log_login) {
 		const char* error;
+		// @see enum accept_login_errorcode
 		switch( result ) {
 		case   0: error = "Unregistered ID."; break; // 0 = Unregistered ID
 		case   1: error = "Incorrect Password."; break; // 1 = Incorrect Password
@@ -1354,7 +1374,7 @@ static void login_auth_failed(struct login_session_data *sd, int result)
 		default : error = "Unknown Error."; break;
 		}
 
-		loginlog->log(ip, sd->userid, result, error); // FIXME: result can be 100, conflicting with the value 100 we use for successful login...
+		loginlog->log(ip, sd->userid, result, error);
 	}
 
 	if (result == 1 && login->config->dynamic_pass_failure_ban && !sockt->trusted_ip_check(ip))
@@ -1371,7 +1391,7 @@ static void login_auth_failed(struct login_session_data *sd, int result)
 static bool login_client_login(int fd, struct login_session_data *sd) __attribute__((nonnull (2)));
 static bool login_client_login(int fd, struct login_session_data *sd)
 {
-	int result;
+	enum accept_login_errorcode result;
 	char ip[16];
 	uint32 ipl = sockt->session[fd]->client_addr;
 	sockt->ip2str(ipl, ip);
@@ -1379,12 +1399,12 @@ static bool login_client_login(int fd, struct login_session_data *sd)
 	ShowStatus("Request for connection %sof %s (ip: %s).\n", sd->passwdenc == PASSWORDENC ? " (passwdenc mode)" : "", sd->userid, ip);
 
 	if (sd->passwdenc != PWENC_NONE && login->config->use_md5_passwds) {
-		login->auth_failed(sd, 3); // send "rejected from server"
+		login->auth_failed(sd, ALE_REJECTED);
 		return true;
 	}
 
 	result = login->mmo_auth(sd, false);
-	if( result == -1 )
+	if(result == ALE_OK)
 		login->auth_ok(sd);
 	else
 		login->auth_failed(sd, result);
@@ -1428,6 +1448,11 @@ static void login_client_login_mobile_otp_request(int fd, struct login_session_d
 #endif
 }
 
+/**
+ * PACKET_AC_CHARSERVERCONNECT_ACK
+ * Acknowledgment of connect-to-loginserver request
+ * @see enum ac_charserverconnect_ack_status
+ **/
 static void login_char_server_connection_status(int fd, struct login_session_data* sd, uint8 status) __attribute__((nonnull (2)));
 static void login_char_server_connection_status(int fd, struct login_session_data* sd, uint8 status)
 {
@@ -1437,9 +1462,17 @@ static void login_char_server_connection_status(int fd, struct login_session_dat
 	WFIFOSET2(fd, 3);
 }
 
-// CA_CHARSERVERCONNECT
-static void login_parse_request_connection(int fd, struct login_session_data* sd, const char *const ip, uint32 ipl) __attribute__((nonnull (2, 3)));
-static void login_parse_request_connection(int fd, struct login_session_data* sd, const char *const ip, uint32 ipl)
+/**
+ * Processes information from a connection request from a character-server
+ * The character server attempts connection via socket_io->connect and then sends
+ * this packet in order to authenticate with us.
+ *
+ * @see lclif_parse_CA_CHARSERVERCONNECT
+ * @see struct PACKET_CA_CHARSERVERCONNECT
+ * @see enum ac_charserverconnect_ack_status
+ **/
+static void login_parse_request_connection(struct s_receive_action_data *act, struct login_session_data* sd, const char *const ip, uint32 ipl) __attribute__((nonnull (2, 3)));
+static void login_parse_request_connection(struct s_receive_action_data *act, struct login_session_data* sd, const char *const ip, uint32 ipl)
 {
 	char server_name[20];
 	char message[256];
@@ -1449,54 +1482,81 @@ static void login_parse_request_connection(int fd, struct login_session_data* sd
 	uint16 new_;
 	int result;
 
-	safestrncpy(sd->userid, RFIFOP(fd,2), NAME_LENGTH);
-	safestrncpy(sd->passwd, RFIFOP(fd,26), NAME_LENGTH);
-	if (login->config->use_md5_passwds)
+	safestrncpy(sd->userid, RFIFOP(act,2), NAME_LENGTH);
+	safestrncpy(sd->passwd, RFIFOP(act,26), NAME_LENGTH);
+	if(login->config->use_md5_passwds)
 		md5->string(sd->passwd, sd->passwd);
 	sd->passwdenc = PWENC_NONE;
 	sd->version = login->config->client_version_to_connect; // hack to skip version check
-	server_ip = ntohl(RFIFOL(fd,54));
-	server_port = ntohs(RFIFOW(fd,58));
-	safestrncpy(server_name, RFIFOP(fd,60), 20);
-	type = RFIFOW(fd,82);
-	new_ = RFIFOW(fd,84);
+	server_ip = ntohl(RFIFOL(act,54));
+	server_port = ntohs(RFIFOW(act,58));
+	safestrncpy(server_name, RFIFOP(act,60), 20);
+	type = RFIFOW(act,82);
+	new_ = RFIFOW(act,84);
 
-	ShowInfo("Connection request of the char-server '%s' @ %u.%u.%u.%u:%u (account: '%s', pass: '%s', ip: '%s')\n", server_name, CONVIP(server_ip), server_port, sd->userid, sd->passwd, ip);
+	ShowInfo("Connection request of the char-server '%s' @ %u.%u.%u.%u:%u "
+		"(account: '%s', pass: '%s', ip: '%s')\n",
+		server_name, CONVIP(server_ip), server_port, sd->userid, sd->passwd, ip);
 	sprintf(message, "charserver - %s@%u.%u.%u.%u:%u", server_name, CONVIP(server_ip), server_port);
-	loginlog->log(sockt->session[fd]->client_addr, sd->userid, 100, message);
+	loginlog->log(act->session->client_addr, sd->userid, 100, message);
+
+	if(!socket_io->allowed_ip_check(ipl)) {
+		ShowNotice("Connection of the char-server '%s' REFUSED "
+			"(IP not allowed).\n", server_name);
+		login->char_server_connection_status(act, sd, CCA_IP_NOT_ALLOWED);
+		return;
+	}
+	if(core->runflag != LOGINSERVER_ST_RUNNING) {
+		ShowNotice("Connection of the char-server '%s' REFUSED "
+			"(Login-server is not runnning).\n", server_name);
+		login->char_server_connection_status(act, sd, CCA_INVALID_NOT_READY);
+		return;
+	}
 
 	result = login->mmo_auth(sd, true);
 
-	if (!sockt->allowed_ip_check(ipl)) {
-		ShowNotice("Connection of the char-server '%s' REFUSED (IP not allowed).\n", server_name);
-		login->char_server_connection_status(fd, sd, 2);
-	} else if (core->runflag == LOGINSERVER_ST_RUNNING &&
-		result == -1 &&
-		sd->sex == 'S' &&
-		sd->account_id >= 0 &&
-		sd->account_id < ARRAYLENGTH(login->dbs->server) &&
-		!sockt->session_is_valid(login->dbs->server[sd->account_id].fd))
-	{
-		ShowStatus("Connection of the char-server '%s' accepted.\n", server_name);
-		safestrncpy(login->dbs->server[sd->account_id].name, server_name, sizeof(login->dbs->server[sd->account_id].name));
-		login->dbs->server[sd->account_id].fd = fd;
-		login->dbs->server[sd->account_id].ip = server_ip;
-		login->dbs->server[sd->account_id].port = server_port;
-		login->dbs->server[sd->account_id].users = 0;
-		login->dbs->server[sd->account_id].type = type;
-		login->dbs->server[sd->account_id].new_ = new_;
-
-		sockt->session[fd]->func_parse = login->parse_fromchar;
-		sockt->session[fd]->flag.server = 1;
-		sockt->session[fd]->flag.validate = 0;
-		sockt->realloc_fifo(fd, FIFOSIZE_SERVERLINK, FIFOSIZE_SERVERLINK);
-
-		// send connection success
-		login->char_server_connection_status(fd, sd, 0);
-	} else {
-		ShowNotice("Connection of the char-server '%s' REFUSED.\n", server_name);
-		login->char_server_connection_status(fd, sd, 1);
+	if(result != ALE_OK) {
+		ShowNotice("Connection of the char-server '%s' REFUSED "
+			"(Invalid credentials).\n", server_name);
+		login->char_server_connection_status(act, sd, CCA_INVALID_CREDENTIAL);
+		return;
 	}
+	if(sd->sex != 'S') {
+		ShowNotice("Connection of the char-server '%s' REFUSED "
+			"(Invalid sex).\n", server_name);
+		login->char_server_connection_status(act, sd, CCA_INVALID_SEX);
+		return;
+	}
+	if(sd->account_id >= 0 && sd->account_id < ARRAYLENGTH(login->dbs->server)) {
+		ShowNotice("Connection of the char-server '%s' REFUSED "
+			"(Invalid account id).\n", server_name);
+		login->char_server_connection_status(act, sd, CCA_INVALID_ACC_ID);
+		return;
+	}
+	if(login->dbs->server[sd->account_id].session) {
+		ShowNotice("Connection of the char-server '%s' REFUSED "
+			"(This char account is already connected!).\n", server_name);
+		login->char_server_connection_status(act, sd, CCA_ALREADY_CONNECTED);
+		return;
+	}
+
+	ShowStatus("Connection of the char-server '%s' accepted.\n", server_name);
+	safestrncpy(login->dbs->server[sd->account_id].name, server_name, sizeof(login->dbs->server[sd->account_id].name));
+	login->dbs->server[sd->account_id].session = act->session;
+	login->dbs->server[sd->account_id].ip = server_ip;
+	login->dbs->server[sd->account_id].port = server_port;
+	login->dbs->server[sd->account_id].users = 0;
+	login->dbs->server[sd->account_id].type = type;
+	login->dbs->server[sd->account_id].new_ = new_;
+
+	mutex->lock(act->session->mutex);
+	socket_io->session_update_parse(act->session, login->parse_fromchar);
+	act->session->flag.server = 1;
+	act->session->flag.validate = 0;
+	mutex->unlock(act->session->mutex);
+
+	// send connection success
+	login->char_server_connection_status(act, sd, CCA_ACCEPTED);
 }
 
 static void login_config_set_defaults(void)
@@ -2079,6 +2139,8 @@ static void do_shutdown_login(void)
 		sockt->flush_fifos();
 		core->runflag = CORE_ST_STOP;
 	}
+	ers_collection_destroy(login->ers_collection);
+	// action->queue_final destroys all queues
 }
 
 /**
@@ -2135,6 +2197,10 @@ int do_init(int argc, char **argv)
 {
 	int i;
 
+	login->ers_collection = ers_collection_create(MEMORYTYPE_SHARED);
+	if(!login->ers_collection)
+		exit(EXIT_FAILURE);
+
 	account_defaults();
 	login_defaults();
 
@@ -2188,7 +2254,7 @@ int do_init(int argc, char **argv)
 
 	cmdline->exec(argc, argv, CMDLINE_OPT_NORMAL);
 	login->config_read(login->LOGIN_CONF_NAME, false);
-	sockt->net_config_read(login->NET_CONF_NAME);
+	socket_io->net_config_read(login->NET_CONF_NAME);
 
 	for (i = 0; i < ARRAYLENGTH(login->dbs->server); ++i)
 		lchrif->server_init(i);
@@ -2202,23 +2268,29 @@ int do_init(int argc, char **argv)
 
 	// Online user database init
 	login->online_db = idb_alloc(DB_OPT_RELEASE_DATA);
-	timer->add_func_list(login->waiting_disconnect_timer, "login->waiting_disconnect_timer");
+	timer->add_func_list(login->waiting_disconnect_timer,
+		"login->waiting_disconnect_timer");
 
 	// Interserver auth init
 	login->auth_db = idb_alloc(DB_OPT_RELEASE_DATA);
 
+	// Create login queue
+	action->queue_create(10, login->ers_collection);
+
 	// set default parser as lclif->parse function
-	sockt->set_defaultparse(lclif->parse);
-	sockt->validate = true;
+	socket_io->set_defaultparse(lclif->parse);
+	socket_io->validate = true;
 
 	// every 10 minutes cleanup online account db.
 	timer->add_func_list(login->online_data_cleanup, "login->online_data_cleanup");
-	timer->add_interval(timer->gettick() + 600*1000, login->online_data_cleanup, 0, 0, 600*1000);
+	timer->add_interval(timer->gettick() + 600*1000, login->online_data_cleanup,
+		0, 0, 600*1000);
 
 	// add timer to detect ip address change and perform update
 	if (login->config->ip_sync_interval) {
 		timer->add_func_list(login->sync_ip_addresses, "login->sync_ip_addresses");
-		timer->add_interval(timer->gettick() + login->config->ip_sync_interval, login->sync_ip_addresses, 0, 0, login->config->ip_sync_interval);
+		timer->add_interval(timer->gettick() + login->config->ip_sync_interval,
+			login->sync_ip_addresses, 0, 0, login->config->ip_sync_interval);
 	}
 
 	// Account database init
@@ -2230,8 +2302,9 @@ int do_init(int argc, char **argv)
 	HPM->event(HPET_INIT);
 
 	// server port open & binding
-	if ((login->fd = sockt->make_listen_bind(login->config->login_ip,login->config->login_port)) == -1) {
-		ShowFatalError("Failed to bind to port '"CL_WHITE"%d"CL_RESET"'\n",login->config->login_port);
+	if(!socket_io->make_listen_bind(login->config->login_ip,login->config->login_port)) {
+		ShowFatalError("Failed to bind to port '"CL_WHITE"%d"CL_RESET"'\n",
+			login->config->login_port);
 		exit(EXIT_FAILURE);
 	}
 
