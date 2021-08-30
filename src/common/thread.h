@@ -33,6 +33,13 @@ typedef void *(*threadFunc)(void *); ///< Thread entry point function.
 
 /* Enums */
 
+/// Thread flag
+enum thread_flag {
+	THREADFLAG_NONE = 0,
+	THREADFLAG_IO = 0x1,
+	THREADFLAG_ACTION = 0x2
+};
+
 /// Thread priority
 enum thread_priority {
 	THREADPRIO_IDLE = 0, //< Lowest priority possible (must be the first value)
@@ -190,6 +197,18 @@ struct thread_interface {
 	 * @param handle The thread to get the priority for.
 	 */
 	enum thread_priority (*prio_get) (struct thread_handle *handle);
+
+	/**
+	 * Sets thread flag to provided value.
+	 *
+	 * @param flag New flag value
+	 **/
+	void (*flag_set) (uint32_t flag);
+
+	/**
+	 * Gets thread flag
+	 **/
+	uint32_t (*flag_get) (void);
 
 	/**
 	 * Tells the OS scheduler to yield the execution of the calling thread.

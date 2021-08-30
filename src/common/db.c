@@ -20,12 +20,13 @@
  */
 
 /*****************************************************************************\
- *  This file is separated in five sections:
+ *  This file is separated in six sections:
  *  (1) Private enums, structures, defines and global variables
  *  (2) Private functions
  *  (3) Protected functions used internally
  *  (4) Protected functions used in the interface of the database
  *  (5) Public functions
+ *  (6) Linkdb system (doubly-linked list wrapper)
  *
  *  The databases are hash tables with balanced trees (RED-BLACK) to handle
  *  any collisions instead of chaining. With the latter the worst
@@ -3200,7 +3201,6 @@ static void db_clear_stats(void)
 /**
  * Initializes the database system.
  *
- * @remarks Acquires write g_ers_list_lock
  * @public
  * @see #db_final(void)
  */
@@ -3237,7 +3237,7 @@ static void db_init(void)
 /**
  * Finalizes the database system.
  *
- * @remarks Acquires write g_ers_list_lock and write db_ers_collection
+ * @remarks Acquires write db_ers_collection
  * @public
  * @see #db_init(void)
  */
@@ -3363,11 +3363,30 @@ static void db_final(void)
 	ers_collection_destroy(db_ers_collection);
 }
 
-// Link DB System - jAthena
+
+/*****************************************************************************\
+ *  (6) Section with link DB (jAthena).                                      *
+ *  Link DB is a doubly linked list wrapper.                                 *
+ *                                                                           *
+ *  linkdb_insert   - Inserts a new node into the list.                      *
+ *  linkdb_vforeach - Iterator (va_arg).                                     *
+ *  linkdb_foreach  - Iterator.                                              *
+ *  linkdb_search   - Searches for a key.                                    *
+ *  linkdb_erase    - Removes node                                           *
+ *  linkdb_replace  - Inserts a new node (if key exists replaces node).      *
+ *  linkdb_final    - Frees all nodes.                                       *
+\*****************************************************************************/
+
+/**
+ * Inserts a node into the list, doesn't take key into account.
+ * @param head Pointer to first item (the item can be NULL)
+ * @param key  Key to be set
+ * @param data Data
+ **/
 void linkdb_insert(struct linkdb_node **head, void *key, void *data)
 {
 	struct linkdb_node *node;
-	if( head == NULL ) return ;
+	nullpo_retv(head);
 	node = (struct linkdb_node*)aMalloc( sizeof(struct linkdb_node) );
 	if( *head == NULL ) {
 		// first node
@@ -3385,10 +3404,16 @@ void linkdb_insert(struct linkdb_node **head, void *key, void *data)
 	node->data = data;
 }
 
+/**
+ * Iterates database applying <code>func</code>
+ * @param head Pointer to first item (the item can be NULL)
+ * @param func Function to be applyed
+ * @param ap   Function arguments
+ **/
 void linkdb_vforeach(struct linkdb_node **head, LinkDBFunc func, va_list ap)
 {
 	struct linkdb_node *node;
-	if( head == NULL ) return;
+	nullpo_retv(head);
 	node = *head;
 	while ( node ) {
 		va_list argscopy;
@@ -3399,6 +3424,12 @@ void linkdb_vforeach(struct linkdb_node **head, LinkDBFunc func, va_list ap)
 	}
 }
 
+/**
+ * Iterates database applying <code>func</code>
+ * @param head Pointer to first item (the item can be NULL)
+ * @param func Function to be applyed
+ * @param ...  Function arguments
+ **/
 void linkdb_foreach(struct linkdb_node **head, LinkDBFunc func, ...)
 {
 	va_list ap;
@@ -3407,11 +3438,18 @@ void linkdb_foreach(struct linkdb_node **head, LinkDBFunc func, ...)
 	va_end(ap);
 }
 
+/**
+ * Searches db for key-value pair.
+ * @param head Pointer to first item (the item can be NULL)
+ * @param key  Key to be found
+ * @return data
+ * @retval NULL failed to find.
+ **/
 void* linkdb_search(struct linkdb_node **head, void *key)
 {
 	int n = 0;
 	struct linkdb_node *node;
-	if( head == NULL ) return NULL;
+	nullpo_retr(NULL, head);
 	node = *head;
 	while( node ) {
 		if( node->key == key ) {
@@ -3432,10 +3470,17 @@ void* linkdb_search(struct linkdb_node **head, void *key)
 	return NULL;
 }
 
+/**
+ * Removes key-value pair from database and returns value.
+ * @param head Pointer to first item (the item can be NULL)
+ * @param key  Key to be found
+ * @return data
+ * @retval NULL failed to find.
+ **/
 void* linkdb_erase(struct linkdb_node **head, void *key)
 {
 	struct linkdb_node *node;
-	if( head == NULL ) return NULL;
+	nullpo_retr(NULL, head);
 	node = *head;
 	while( node ) {
 		if( node->key == key ) {
@@ -3454,11 +3499,18 @@ void* linkdb_erase(struct linkdb_node **head, void *key)
 	return NULL;
 }
 
+/**
+ * Inserts a node into the list, takes key into account i.e. if there's
+ * a key-value pair with this key it's only replaced.
+ * @param head Pointer to first item (the item can be NULL)
+ * @param key  Key to be set
+ * @param data Data
+ **/
 void linkdb_replace(struct linkdb_node **head, void *key, void *data)
 {
 	int n = 0;
 	struct linkdb_node *node;
-	if( head == NULL ) return ;
+	nullpo_retv(head);
 	node = *head;
 	while( node ) {
 		if( node->key == key ) {
@@ -3481,10 +3533,14 @@ void linkdb_replace(struct linkdb_node **head, void *key, void *data)
 	linkdb_insert( head, key, data );
 }
 
+/**
+ * Destroys database (frees all nodes).
+ * @param head Pointer to first item (the item can be NULL)
+ **/
 void linkdb_final(struct linkdb_node **head)
 {
 	struct linkdb_node *node, *node2;
-	if( head == NULL ) return ;
+	nullpo_retv(NULL);
 	node = *head;
 	while( node ) {
 		node2 = node->next;

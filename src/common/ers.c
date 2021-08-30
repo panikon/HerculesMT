@@ -174,10 +174,6 @@ INDEX_MAP_STRUCT_DECL(s_cache_list, ers_cache_t);
  * so it's possible to have multiple managers with the same
  * entry size in the server.
  *
- * All collection objects are in a doubly-linked list
- * @see g_ers_list
- * @lock g_ers_list_lock
- *
  * @remarks
  * rwlock were chosen because currently most operations involving ERS
  * managed data are read operations.
@@ -192,7 +188,6 @@ struct ers_collection_t {
 	 * where to store pertinent data.
 	 * @remarks This value never changes after setup
 	 *
-	 * @readlock g_ers_list_lock
 	 * @writelock ers_collection_t::lock
 	 **/
 	enum memory_type type;  //< Memory management used in this collection
@@ -204,7 +199,6 @@ struct ers_collection_t {
 	 * of these instances is also accounted for in
 	 * its cache (via ReferenceCount)
 	 *
-	 * @readlock g_ers_list_lock
 	 * @writelock ers_collection_t::lock
 	 **/
 	struct ers_instance_t *instance_list;
@@ -658,7 +652,6 @@ void ers_report(void)
  * Creates a new ERS collection
  *
  * @param memory_type Type of memory allocation
- * @mutex g_ers_list_free_mutex when MEMORY_SHARED
  **/
 struct ers_collection_t *ers_collection_create(enum memory_type memory_type) {
 	struct ers_collection_t *ers_collection;
@@ -688,8 +681,6 @@ struct ers_collection_t *ers_collection_create(enum memory_type memory_type) {
 
 /**
  * Clears remaining entries in this collection.
- *
- * @writelock g_ers_list_lock
  **/
 void ers_collection_destroy(struct ers_collection_t *ers_cur) {
 	rwlock->write_lock(ers_cur->lock);
@@ -749,7 +740,6 @@ struct rwlock_data *ers_collection_lock(struct ers_collection_t *collection)
  * Call on shutdown to clear remaining entries
  *
  * @param memory_type Type of list to be cleared
- * @writelock g_ers_list_lock
  **/
 void ers_final(enum memory_type memory_type)
 {

@@ -151,7 +151,6 @@ enum ERSOptions {
  * @param entry_size Return the size of the entries of this manager
  * @param destroy Destroy this instance of the manager
  *
- * @lock g_ers_list_lock
  * @lock collection_lock
  */
 typedef struct eri {

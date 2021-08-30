@@ -81,6 +81,7 @@ struct thread_handle {
 	void *param;
 	void *result;
 	enum thread_status status;
+	uint32_t flag;
 
 	#ifdef WIN32
 	HANDLE hThread;
@@ -388,6 +389,18 @@ void thread_name_set(const char *name)
 #endif
 }
 
+/// @copydoc thread_interface::flag_set
+static void thread_flag_set(uint32_t flag)
+{
+	l_threads[g_thread_id].flag = flag;
+}
+
+/// @copydoc thread_interface::flag_get
+static uint32_t thread_flag_get(void)
+{
+	return l_threads[g_thread_id].flag;
+}
+
 /// @copydoc thread_interface::create()
 static struct thread_handle *thread_create(const char *name, threadFunc entry_point, void *param)
 {
@@ -629,6 +642,8 @@ void thread_defaults(void)
 	thread->name_get = thread_name_get;
 	thread->prio_set = thread_prio_set;
 	thread->prio_get = thread_prio_get;
+	thread->flag_set = thread_flag_set;
+	thread->flag_get = thread_flag_get;
 	thread->yield = thread_yield;
 	thread->count = thread_count;
 }
