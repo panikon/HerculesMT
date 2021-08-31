@@ -38,6 +38,7 @@
 #include <sys/time.h>
 #include <string.h> // strerror
 #endif
+#include <stdlib.h>
 
 /** @file
  * Implementation of the mutex interface.
@@ -91,7 +92,7 @@ static struct mutex_data *mutex_create_sub(struct mutex_data *m)
 {
 	if (m == NULL) {
 		ShowFatalError("mutex_create_sub: OOM while allocating %"PRIuS" bytes.\n", sizeof(struct mutex_data));
-		return NULL;
+		exit(EXIT_FAILURE);
 	}
 
 #ifdef WIN32
@@ -111,7 +112,7 @@ static struct mutex_data *mutex_create_sub(struct mutex_data *m)
 	pthread_mutexattr_t attr;
 	if(pthread_mutexattr_init(&attr) == -1) {
 		ShowFatalError("mutex_create_sub: Failed to initialize mutex attribute\n");
-		return NULL;
+		exit(EXIT_FAILURE);
 	}
 	pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK); // Enable error checking
 	retval = pthread_mutex_init(&m->hMutex, &attr);
@@ -121,7 +122,7 @@ static struct mutex_data *mutex_create_sub(struct mutex_data *m)
 	if(retval) {
 		ShowFatalError("mutex_create_sub: Failed to create mutex (%d:%s)\n",
 			retval, strerror(retval));
-		return NULL;
+		exit(EXIT_FAILURE);
 	}
 #endif
 

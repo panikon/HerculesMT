@@ -205,6 +205,7 @@ static void *action_worker(void *param)
 	InterlockedDecrement(&action_ready);
 	ShowInfo("action_worker(%ld): Shutting down!\n",
 		thread->get_tid());
+	return NULL;
 }
 
 /**

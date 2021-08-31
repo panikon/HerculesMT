@@ -33,6 +33,7 @@
 #include "common/socket.h"
 #include "common/sql.h"
 #include "common/strlib.h"
+#include "common/mutex.h"
 
 #include <stdlib.h>
 
@@ -58,6 +59,14 @@ static AccountDB *account_db_sql(void)
 	db->vtable.load_num     = account->db_sql_load_num;
 	db->vtable.load_str     = account->db_sql_load_str;
 	db->vtable.iterator     = account->db_sql_iterator;
+	db->vtable.lock         = account->db_lock;
+	db->vtable.unlock       = account->db_unlock;
+
+	db->mutex = mutex->create();
+	if(!db->mutex) {
+		ShowFatalError("account_db_sql: Failed to setup mutex!\n");
+		exit(EXIT_FAILURE);
+	}
 
 	// initialize to default values
 	db->accounts = NULL;
@@ -115,8 +124,24 @@ static void account_db_sql_destroy(AccountDB *self)
 
 	nullpo_retv(db);
 	SQL->Free(db->accounts);
+	mutex->destroy(db->mutex);
+	db->mutex = NULL;
 	db->accounts = NULL;
 	aFree(db);
+}
+
+/// @copydoc AccountDB::lock
+static void account_db_lock(AccountDB *self)
+{
+	AccountDB_SQL* db = (AccountDB_SQL*)self;
+	mutex->lock(db->mutex);
+}
+
+/// @copydoc AccountDB::unlock
+static void account_db_unlock(AccountDB *self)
+{
+	AccountDB_SQL* db = (AccountDB_SQL*)self;
+	mutex->unlock(db->mutex);
 }
 
 /// Gets a property from this database.
@@ -622,60 +647,83 @@ static struct Sql *account_db_sql_up(AccountDB *self)
 	return db ? db->accounts : NULL;
 }
 
-static void account_mmo_save_accreg2(AccountDB *self, int fd, int account_id, int char_id)
+/**
+ * 0x2728 WA_ACCOUNT_REG2
+ * Parses account reg packet with new registry information and saves to db
+ **/
+static void account_mmo_save_accreg2(AccountDB *self, struct s_receive_action_data *act, int account_id, int char_id)
 {
 	struct Sql *sql_handle;
 	AccountDB_SQL* db = (AccountDB_SQL*)self;
-	int count = RFIFOW(fd, 12);
+	int count = RFIFOW(act, 12);
 
 	nullpo_retv(db);
 	sql_handle = db->accounts;
-	if (count) {
-		int cursor = 14, i;
-		char key[SCRIPT_VARNAME_LENGTH + 1];
-		char sval[SCRIPT_STRING_VAR_LENGTH + 1];
+	if(!count)
+		return;
 
-		for (i = 0; i < count; i++) {
-			unsigned int index;
-			int len = RFIFOB(fd, cursor);
-			safestrncpy(key, RFIFOP(fd, cursor + 1), min((int)sizeof(key), len));
-			cursor += len + 1;
+	int cursor = 14, i;
+	char key[SCRIPT_VARNAME_LENGTH + 1];
+	char sval[SCRIPT_STRING_VAR_LENGTH + 1];
 
-			index = RFIFOL(fd, cursor);
-			cursor += 4;
+	for (i = 0; i < count; i++) {
+		unsigned int index;
+		int len = RFIFOB(act, cursor);
+		safestrncpy(key, RFIFOP(act, cursor + 1), min((int)sizeof(key), len));
+		cursor += len + 1;
 
-			switch (RFIFOB(fd, cursor++)) {
-				/* int */
-				case 0:
-					if( SQL_ERROR == SQL->Query(sql_handle, "REPLACE INTO `%s` (`account_id`,`key`,`index`,`value`) VALUES ('%d','%s','%u','%u')", db->global_acc_reg_num_db, account_id, key, index, RFIFOL(fd, cursor)) )
-						Sql_ShowDebug(sql_handle);
-					cursor += 4;
-					break;
-				case 1:
-					if( SQL_ERROR == SQL->Query(sql_handle, "DELETE FROM `%s` WHERE `account_id` = '%d' AND `key` = '%s' AND `index` = '%u' LIMIT 1", db->global_acc_reg_num_db, account_id, key, index) )
-						Sql_ShowDebug(sql_handle);
-					break;
-				/* str */
-				case 2:
-					len = RFIFOB(fd, cursor);
-					safestrncpy(sval, RFIFOP(fd, cursor + 1), min((int)sizeof(sval), len + 1));
-					cursor += len + 2;
-					if( SQL_ERROR == SQL->Query(sql_handle, "REPLACE INTO `%s` (`account_id`,`key`,`index`,`value`) VALUES ('%d','%s','%u','%s')", db->global_acc_reg_str_db, account_id, key, index, sval) )
-						Sql_ShowDebug(sql_handle);
-					break;
-				case 3:
-					if( SQL_ERROR == SQL->Query(sql_handle, "DELETE FROM `%s` WHERE `account_id` = '%d' AND `key` = '%s' AND `index` = '%u' LIMIT 1", db->global_acc_reg_str_db, account_id, key, index) )
-						Sql_ShowDebug(sql_handle);
-					break;
-				default:
-					ShowError("mmo_save_accreg2: DA HOO UNKNOWN TYPE %d\n",RFIFOB(fd, cursor - 1));
-					return;
-			}
+		index = RFIFOL(act, cursor);
+		cursor += 4;
+
+		switch (RFIFOB(act, cursor++)) {
+			/* int */
+			case 0:
+				if( SQL_ERROR == SQL->Query(sql_handle,
+					"REPLACE INTO `%s` (`account_id`,`key`,`index`,`value`) VALUES ('%d','%s','%u','%u')",
+					db->global_acc_reg_num_db, account_id, key, index, RFIFOL(act, cursor))
+				)
+					Sql_ShowDebug(sql_handle);
+				cursor += 4;
+				break;
+			case 1:
+				if( SQL_ERROR == SQL->Query(sql_handle,
+					"DELETE FROM `%s` WHERE `account_id` = '%d' AND `key` = '%s' AND `index` = '%u' LIMIT 1",
+					db->global_acc_reg_num_db, account_id, key, index)
+				)
+					Sql_ShowDebug(sql_handle);
+				break;
+			/* str */
+			case 2:
+				len = RFIFOB(act, cursor);
+				safestrncpy(sval, RFIFOP(act, cursor + 1), min((int)sizeof(sval), len + 1));
+				cursor += len + 2;
+				if( SQL_ERROR == SQL->Query(sql_handle,
+					"REPLACE INTO `%s` (`account_id`,`key`,`index`,`value`) VALUES ('%d','%s','%u','%s')",
+					db->global_acc_reg_str_db, account_id, key, index, sval)
+				)
+					Sql_ShowDebug(sql_handle);
+				break;
+			case 3:
+				if( SQL_ERROR == SQL->Query(sql_handle,
+					"DELETE FROM `%s` WHERE `account_id` = '%d' AND `key` = '%s' AND `index` = '%u' LIMIT 1",
+					db->global_acc_reg_str_db, account_id, key, index) )
+					Sql_ShowDebug(sql_handle);
+				break;
+			default:
+				ShowError("mmo_save_accreg2: DA HOO UNKNOWN TYPE %d\n",RFIFOB(act, cursor - 1));
+				return;
 		}
 	}
 }
 
-static void account_mmo_send_accreg2(AccountDB *self, int fd, int account_id, int char_id)
+/**
+ * Sends all account-specific registry information (0x3804)
+ *  At least one packet per type is sent, and if either has more than 6000bytes it's broken into
+ *  more packets.
+ *  The last packet has <is complete> marked.
+ * 0x3804 <account_id>.L <char_id>.L <is complete>.B <var type>.B <count>.W {vessel type}
+ **/
+static void account_mmo_send_accreg2(AccountDB *self, struct socket_data *session, int account_id, int char_id)
 {
 	struct Sql *sql_handle;
 	AccountDB_SQL* db = (AccountDB_SQL*)self;
@@ -685,17 +733,20 @@ static void account_mmo_send_accreg2(AccountDB *self, int fd, int account_id, in
 
 	nullpo_retv(db);
 	sql_handle = db->accounts;
-	if( SQL_ERROR == SQL->Query(sql_handle, "SELECT `key`, `index`, `value` FROM `%s` WHERE `account_id`='%d'", db->global_acc_reg_str_db, account_id) )
+	if( SQL_ERROR == SQL->Query(sql_handle,
+		"SELECT `key`, `index`, `value` FROM `%s` WHERE `account_id`='%d'",
+		db->global_acc_reg_str_db, account_id)
+	)
 		Sql_ShowDebug(sql_handle);
 
-	WFIFOHEAD(fd, 60000 + 300);
-	WFIFOW(fd, 0) = 0x3804;
+	WFIFOHEAD(session, 60000 + 300, true);
+	WFIFOW(session, 0) = 0x3804;
 	/* 0x2 = length, set prior to being sent */
-	WFIFOL(fd, 4) = account_id;
-	WFIFOL(fd, 8) = char_id;
-	WFIFOB(fd, 12) = 0;/* var type (only set when all vars have been sent, regardless of type) */
-	WFIFOB(fd, 13) = 1;/* is string type */
-	WFIFOW(fd, 14) = 0;/* count */
+	WFIFOL(session, 4) = account_id;
+	WFIFOL(session, 8) = char_id;
+	WFIFOB(session, 12) = 0;/* var type (only set when all vars have been sent, regardless of type) */
+	WFIFOB(session, 13) = 1;/* is string type */
+	WFIFOW(session, 14) = 0;/* count */
 	plen = 16;
 
 	/**
@@ -708,62 +759,65 @@ static void account_mmo_send_accreg2(AccountDB *self, int fd, int account_id, in
 		SQL->GetData(sql_handle, 0, &data, NULL);
 		len = strlen(data)+1;
 
-		WFIFOB(fd, plen) = (unsigned char)len;/* won't be higher; the column size is 32 */
+		WFIFOB(session, plen) = (unsigned char)len;/* won't be higher; the column size is 32 */
 		plen += 1;
 
-		safestrncpy(WFIFOP(fd,plen), data, len);
+		safestrncpy(WFIFOP(session,plen), data, len);
 		plen += len;
 
 		SQL->GetData(sql_handle, 1, &data, NULL);
 
-		WFIFOL(fd, plen) = (unsigned int)atol(data);
+		WFIFOL(session, plen) = (unsigned int)atol(data);
 		plen += 4;
 
 		SQL->GetData(sql_handle, 2, &data, NULL);
 		len = strlen(data);
 
-		WFIFOB(fd, plen) = (unsigned char)len; // Won't be higher; the column size is 255.
+		WFIFOB(session, plen) = (unsigned char)len; // Won't be higher; the column size is 255.
 		plen += 1;
 
-		safestrncpy(WFIFOP(fd, plen), data, len + 1);
+		safestrncpy(WFIFOP(session, plen), data, len + 1);
 		plen += len + 1;
 
-		WFIFOW(fd, 14) += 1;
+		WFIFOW(session, 14) += 1;
 
 		if( plen > 60000 ) {
-			WFIFOW(fd, 2) = plen;
-			WFIFOSET(fd, plen);
+			WFIFOW(session, 2) = plen;
+			WFIFOSET(session, plen);
 
 			/* prepare follow up */
-			WFIFOHEAD(fd, 60000 + 300);
-			WFIFOW(fd, 0) = 0x3804;
+			WFIFOHEAD(session, 60000 + 300, true);
+			WFIFOW(session, 0) = 0x3804;
 			/* 0x2 = length, set prior to being sent */
-			WFIFOL(fd, 4) = account_id;
-			WFIFOL(fd, 8) = char_id;
-			WFIFOB(fd, 12) = 0;/* var type (only set when all vars have been sent, regardless of type) */
-			WFIFOB(fd, 13) = 1;/* is string type */
-			WFIFOW(fd, 14) = 0;/* count */
+			WFIFOL(session, 4) = account_id;
+			WFIFOL(session, 8) = char_id;
+			WFIFOB(session, 12) = 0;/* var type (only set when all vars have been sent, regardless of type) */
+			WFIFOB(session, 13) = 1;/* is string type */
+			WFIFOW(session, 14) = 0;/* count */
 			plen = 16;
 		}
 	}
 
 	/* mark & go. */
-	WFIFOW(fd, 2) = plen;
-	WFIFOSET(fd, plen);
+	WFIFOW(session, 2) = plen;
+	WFIFOSET(session, plen);
 
 	SQL->FreeResult(sql_handle);
 
-	if( SQL_ERROR == SQL->Query(sql_handle, "SELECT `key`, `index`, `value` FROM `%s` WHERE `account_id`='%d'", db->global_acc_reg_num_db, account_id) )
+	if( SQL_ERROR == SQL->Query(sql_handle,
+		"SELECT `key`, `index`, `value` FROM `%s` WHERE `account_id`='%d'",
+		db->global_acc_reg_num_db, account_id)
+	)
 		Sql_ShowDebug(sql_handle);
 
-	WFIFOHEAD(fd, 60000 + 300);
-	WFIFOW(fd, 0) = 0x3804;
+	WFIFOHEAD(session, 60000 + 300, true);
+	WFIFOW(session, 0) = 0x3804;
 	/* 0x2 = length, set prior to being sent */
-	WFIFOL(fd, 4) = account_id;
-	WFIFOL(fd, 8) = char_id;
-	WFIFOB(fd, 12) = 0;/* var type (only set when all vars have been sent, regardless of type) */
-	WFIFOB(fd, 13) = 0;/* is int type */
-	WFIFOW(fd, 14) = 0;/* count */
+	WFIFOL(session, 4) = account_id;
+	WFIFOL(session, 8) = char_id;
+	WFIFOB(session, 12) = 0;/* var type (only set when all vars have been sent, regardless of type) */
+	WFIFOB(session, 13) = 0;/* is int type */
+	WFIFOW(session, 14) = 0;/* count */
 	plen = 16;
 
 	/**
@@ -776,46 +830,46 @@ static void account_mmo_send_accreg2(AccountDB *self, int fd, int account_id, in
 		SQL->GetData(sql_handle, 0, &data, NULL);
 		len = strlen(data)+1;
 
-		WFIFOB(fd, plen) = (unsigned char)len;/* won't be higher; the column size is 32 */
+		WFIFOB(session, plen) = (unsigned char)len;/* won't be higher; the column size is 32 */
 		plen += 1;
 
-		safestrncpy(WFIFOP(fd,plen), data, len);
+		safestrncpy(WFIFOP(session,plen), data, len);
 		plen += len;
 
 		SQL->GetData(sql_handle, 1, &data, NULL);
 
-		WFIFOL(fd, plen) = (unsigned int)atol(data);
+		WFIFOL(session, plen) = (unsigned int)atol(data);
 		plen += 4;
 
 		SQL->GetData(sql_handle, 2, &data, NULL);
 
-		WFIFOL(fd, plen) = atoi(data);
+		WFIFOL(session, plen) = atoi(data);
 		plen += 4;
 
-		WFIFOW(fd, 14) += 1;
+		WFIFOW(session, 14) += 1;
 
 		if( plen > 60000 ) {
-			WFIFOW(fd, 2) = plen;
-			WFIFOSET(fd, plen);
+			WFIFOW(session, 2) = plen;
+			WFIFOSET(session, plen);
 
 			/* prepare follow up */
-			WFIFOHEAD(fd, 60000 + 300);
-			WFIFOW(fd, 0) = 0x3804;
+			WFIFOHEAD(session, 60000 + 300, true);
+			WFIFOW(session, 0) = 0x3804;
 			/* 0x2 = length, set prior to being sent */
-			WFIFOL(fd, 4) = account_id;
-			WFIFOL(fd, 8) = char_id;
-			WFIFOB(fd, 12) = 0;/* var type (only set when all vars have been sent, regardless of type) */
-			WFIFOB(fd, 13) = 0;/* is int type */
-			WFIFOW(fd, 14) = 0;/* count */
+			WFIFOL(session, 4) = account_id;
+			WFIFOL(session, 8) = char_id;
+			WFIFOB(session, 12) = 0;/* var type (only set when all vars have been sent, regardless of type) */
+			WFIFOB(session, 13) = 0;/* is int type */
+			WFIFOW(session, 14) = 0;/* count */
 
 			plen = 16;
 		}
 	}
 
 	/* mark as complete & go. */
-	WFIFOB(fd, 12) = 1;
-	WFIFOW(fd, 2) = plen;
-	WFIFOSET(fd, plen);
+	WFIFOB(session, 12) = 1;
+	WFIFOW(session, 2) = plen;
+	WFIFOSET(session, plen);
 
 	SQL->FreeResult(sql_handle);
 }
@@ -844,4 +898,7 @@ void account_defaults(void)
 	account->db_sql_iter_destroy = account_db_sql_iter_destroy;
 	account->db_sql_iter_next = account_db_sql_iter_next;
 	account->db_read_inter = account_db_read_inter;
+
+	account->db_lock = account_db_lock;
+	account->db_unlock = account_db_unlock;
 }

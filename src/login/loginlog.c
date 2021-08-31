@@ -30,6 +30,7 @@
 #include "common/socket.h"
 #include "common/sql.h"
 #include "common/strlib.h"
+#include "common/mutex.h"
 
 #include <stdlib.h> // exit
 
@@ -47,8 +48,9 @@ static unsigned long loginlog_failedattempts(uint32 ip, unsigned int minutes)
 	if( !loginlog->enabled )
 		return 0;
 
+	mutex->lock(loginlog->mutex);
 	if( SQL_ERROR == SQL->Query(loginlog->sql_handle, "SELECT count(*) FROM `%s` WHERE `ip` = '%s' AND `rcode` = '1' AND `time` > NOW() - INTERVAL %u MINUTE",
-		loginlog->dbs->log_login_db, sockt->ip2str(ip,NULL), minutes) )// how many times failed account? in one ip.
+		loginlog->dbs->log_login_db, socket_io->ip2str(ip,NULL), minutes) )// how many times failed account? in one ip.
 		Sql_ShowDebug(loginlog->sql_handle);
 
 	if( SQL_SUCCESS == SQL->NextRow(loginlog->sql_handle) )
@@ -58,6 +60,8 @@ static unsigned long loginlog_failedattempts(uint32 ip, unsigned int minutes)
 		failures = strtoul(data, NULL, 10);
 		SQL->FreeResult(loginlog->sql_handle);
 	}
+	mutex->unlock(loginlog->mutex);
+
 	return failures;
 }
 
@@ -77,15 +81,17 @@ static void loginlog_log(uint32 ip, const char *username, int rcode, const char 
 	if( !loginlog->enabled )
 		return;
 
+	mutex->lock(loginlog->mutex);
 	SQL->EscapeStringLen(loginlog->sql_handle, esc_username, username, strnlen(username, NAME_LENGTH));
 	SQL->EscapeStringLen(loginlog->sql_handle, esc_message, message, strnlen(message, 255));
 
 	retcode = SQL->Query(loginlog->sql_handle,
 		"INSERT INTO `%s`(`time`,`ip`,`user`,`rcode`,`log`) VALUES (NOW(), '%s', '%s', '%d', '%s')",
-		loginlog->dbs->log_login_db, sockt->ip2str(ip,NULL), esc_username, rcode, esc_message);
+		loginlog->dbs->log_login_db, socket_io->ip2str(ip,NULL), esc_username, rcode, esc_message);
 
 	if( retcode != SQL_SUCCESS )
 		Sql_ShowDebug(loginlog->sql_handle);
+	mutex->unlock(loginlog->mutex);
 }
 
 static bool loginlog_init(void)
@@ -96,6 +102,11 @@ static bool loginlog_init(void)
 	                              loginlog->dbs->log_db_hostname, loginlog->dbs->log_db_port, loginlog->dbs->log_db_database)) {
 		Sql_ShowDebug(loginlog->sql_handle);
 		SQL->Free(loginlog->sql_handle);
+		exit(EXIT_FAILURE);
+	}
+	loginlog->mutex = mutex->create();
+	if(!loginlog->mutex) {
+		ShowFatalError("loginlog_init: Failed to set up mutex\n");
 		exit(EXIT_FAILURE);
 	}
 
@@ -111,6 +122,10 @@ static bool loginlog_final(void)
 {
 	SQL->Free(loginlog->sql_handle);
 	loginlog->sql_handle = NULL;
+
+	mutex->destroy(loginlog->mutex);
+	loginlog->mutex = NULL;
+
 	return true;
 }
 
@@ -224,6 +239,7 @@ void loginlog_defaults(void)
 
 	loginlog->sql_handle = NULL;
 	loginlog->enabled = false;
+	loginlog->mutex = NULL;
 
 	// Sql settings
 	strcpy(loginlog->dbs->log_db_hostname, "127.0.0.1");

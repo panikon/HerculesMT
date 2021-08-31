@@ -43,11 +43,12 @@ struct s_ipban_dbs {
 struct ipban_interface {
 	struct s_ipban_dbs *dbs;
 	struct Sql *sql_handle;
+	struct mutex_data *mutex;
 	int cleanup_timer_id;
 	bool inited;
 	void (*init) (void);
 	void (*final) (void);
-	int (*cleanup) (int tid, int64 tick, int id, intptr_t data);
+	int (*cleanup) (struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data);
 	bool (*config_read_inter) (const char *filename, bool imported);
 	bool (*config_read_connection) (const char *filename, struct config_t *config, bool imported);
 	bool (*config_read_dynamic) (const char *filename, struct config_t *config, bool imported);

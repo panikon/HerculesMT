@@ -152,6 +152,17 @@ struct AccountDB
 	/// @param self Database
 	/// @return Iterator
 	AccountDBIterator* (*iterator)(AccountDB* self);
+
+	/// Acquires database mutex
+	///
+	/// All operations in the database must be locked!
+	/// @param self Database
+	void (*lock)(AccountDB* self);
+
+	/// Releases database mutex
+	///
+	/// @param self Database
+	void (*unlock)(AccountDB* self);
 };
 
 typedef struct AccountDB_SQL
@@ -172,6 +183,8 @@ typedef struct AccountDB_SQL
 	char account_db[32];
 	char global_acc_reg_num_db[32];
 	char global_acc_reg_str_db[32];
+
+	struct mutex_data *mutex;
 } AccountDB_SQL;
 
 /// internal structure
@@ -188,8 +201,8 @@ typedef struct AccountDBIterator_SQL
  **/
 struct account_interface {
 	struct Sql* (*db_sql_up) (AccountDB* self);
-	void (*mmo_send_accreg2) (AccountDB* self, int fd, int account_id, int char_id);
-	void (*mmo_save_accreg2) (AccountDB* self, int fd, int account_id, int char_id);
+	void (*mmo_send_accreg2) (AccountDB *self, struct socket_data *session, int account_id, int char_id);
+	void (*mmo_save_accreg2) (AccountDB *self, struct s_receive_action_data *act, int account_id, int char_id);
 	bool (*mmo_auth_fromsql) (AccountDB_SQL* db, struct mmo_account* acc, int account_id);
 	bool (*mmo_auth_tosql) (AccountDB_SQL* db, const struct mmo_account* acc, bool is_new);
 
@@ -208,6 +221,8 @@ struct account_interface {
 	bool (*db_sql_iter_next) (AccountDBIterator* self, struct mmo_account* acc);
 
 	bool (*db_read_inter) (AccountDB_SQL *db, const char *filename, bool imported);
+	void (*db_lock)(AccountDB* self);
+	void (*db_unlock)(AccountDB* self);
 };
 
 #ifdef HERCULES_CORE

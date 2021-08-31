@@ -85,7 +85,10 @@ struct SqlStmt {
 static struct Sql *Sql_Malloc(void)
 {
 	struct Sql *self;
-
+	if(!mysql_thread_safe()) {
+		ShowFatalError("Sql_Malloc: client library was not compiled as thread-safe!\n");
+		exit(EXIT_FAILURE);
+	}
 	CREATE(self, struct Sql, 1);
 	mysql_init(&self->handle);
 	StrBuf->Init(&self->buf);

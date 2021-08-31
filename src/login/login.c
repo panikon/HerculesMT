@@ -294,11 +294,10 @@ static struct mmo_char_server *lchrif_server_find(struct socket_data *session)
  **/
 static void lchrif_server_destroy(struct mmo_char_server *server)
 {
-	int i;
 	rwlock->write_lock(g_char_server_list_lock);
 
 	if(server) {
-		INDEX_MAP_REMOVE(g_char_server_list, i);
+		INDEX_MAP_REMOVE(g_char_server_list, server->pos);
 		socket_io->session_disconnect_guard(server->session);
 		aFree(server);
 	}
@@ -390,6 +389,21 @@ static bool login_check_password(const char *md5key, int passwdenc, const char *
 		return ((passwdenc&PWENC_ENCRYPT) && login->check_encrypted(md5key, refpass, passwd)) ||
 		       ((passwdenc&PWENC_ENCRYPT2) && login->check_encrypted(refpass, md5key, passwd));
 	}
+}
+
+/**
+ * Acquires account lock and then tries to load account with provided id.
+ *
+ * @param account_id Account to be loaded
+ * @param out_acc    Object to be filled with account information
+ * @return bool Account found
+ **/
+static bool login_account_load(int account_id, struct mmo_account *out_acc)
+{
+	accounts->lock(accounts);
+	bool ret = accounts->load_num(accounts, out_acc, account_id);
+	accounts->unlock(accounts);
+	return ret;
 }
 
 
@@ -524,24 +538,29 @@ static void login_fromchar_parse_request_change_email(struct s_receive_action_da
 	safestrncpy(email, RFIFOP(act,6), 40); remove_control_chars(email);
 	RFIFOSKIP(act,46);
 
+
 	if( e_mail_check(email) == 0 ) {
 		ShowNotice("Char-server '%s': Attempt to create an e-mail on an account with "
 			"a default e-mail REFUSED - e-mail is invalid (account: %d, ip: %s)\n",
 			server->name, account_id, ip);
-	} else
-	if( !accounts->load_num(accounts, &acc, account_id) || strcmp(acc.email, "a@a.com") == 0 || acc.email[0] == '\0' ) {
+		return;
+	}
+	if( !login->account_load(account_id, &acc) || strcmp(acc.email, "a@a.com") == 0 || acc.email[0] == '\0' ) {
 		ShowNotice("Char-server '%s': Attempt to create an e-mail on an account with "
 			"a default e-mail REFUSED - account doesn't exist or e-mail of account "
 			"isn't default e-mail (account: %d, ip: %s).\n",
 			server->name, account_id, ip);
-	} else {
-		memcpy(acc.email, email, sizeof(acc.email));
-		ShowNotice("Char-server '%s': Create an e-mail on an account with a "
-			"default e-mail (account: %d, new e-mail: %s, ip: %s).\n",
-			server->name, account_id, email, ip);
-		// Save
-		accounts->save(accounts, &acc);
+		return;
 	}
+
+	memcpy(acc.email, email, sizeof(acc.email));
+	ShowNotice("Char-server '%s': Create an e-mail on an account with a "
+		"default e-mail (account: %d, new e-mail: %s, ip: %s).\n",
+		server->name, account_id, email, ip);
+	// Save
+	accounts->lock(accounts);
+	accounts->save(accounts, &acc);
+	accounts->unlock(accounts);
 }
 
 /**
@@ -608,15 +627,15 @@ static void login_fromchar_parse_account_data(struct s_receive_action_data *act,
 	int account_id = RFIFOL(act,2);
 	RFIFOSKIP(act,6);
 
-	if( !accounts->load_num(accounts, &acc, account_id) )
+	if( !login->account_load(account_id, &acc) )
 	{
 		ShowNotice("Char-server '%s': account %d NOT found (ip: %s).\n",
 			server->name, account_id, ip);
 		login->fromchar_account(act->session, account_id, NULL);
+		return;
 	}
-	else {
-		login->fromchar_account(act->session, account_id, &acc);
-	}
+
+	login->fromchar_account(act->session, account_id, &acc);
 }
 
 /**
@@ -656,26 +675,34 @@ static void login_fromchar_parse_change_email(struct s_receive_action_data *act,
 	safestrncpy(new_email, RFIFOP(act,46), 40);
 	RFIFOSKIP(act, 86);
 
-	if( e_mail_check(actual_email) == 0 )
+	if( e_mail_check(actual_email) == 0 ) {
 		ShowNotice("Char-server '%s': Attempt to modify an e-mail on an account "
 		"(@email GM command), but actual email is invalid (account: %d, ip: %s)\n",
 			server->name, account_id, ip);
-	else
-	if( e_mail_check(new_email) == 0 )
+		return;
+	}
+
+	if( e_mail_check(new_email) == 0 ) {
 		ShowNotice("Char-server '%s': Attempt to modify an e-mail on an account "
 			"(@email GM command) with a invalid new e-mail (account: %d, ip: %s)\n",
 			server->name, account_id, ip);
-	else
-	if( strcmpi(new_email, "a@a.com") == 0 )
+		return;
+	}
+
+	if( strcmpi(new_email, "a@a.com") == 0 ) {
 		ShowNotice("Char-server '%s': Attempt to modify an e-mail on an account "
 			"(@email GM command) with a default e-mail (account: %d, ip: %s)\n",
 			server->name, account_id, ip);
-	else
-	if( !accounts->load_num(accounts, &acc, account_id) )
+		return;
+	}
+
+	if( !login->account_load(account_id, &acc) ) {
 		ShowNotice("Char-server '%s': Attempt to modify an e-mail on an account "
 			"(@email GM command), but account doesn't exist (account: %d, ip: %s).\n",
 			server->name, account_id, ip);
-	else
+		return;
+	}
+
 	if( strcmpi(acc.email, actual_email) != 0 )
 		ShowNotice("Char-server '%s': Attempt to modify an e-mail on an account "
 			"(@email GM command), but actual e-mail is incorrect "
@@ -687,7 +714,9 @@ static void login_fromchar_parse_change_email(struct s_receive_action_data *act,
 			"(@email GM command) (account: %d (%s), new e-mail: %s, ip: %s).\n",
 			server->name, account_id, acc.userid, new_email, ip);
 		// Save
+		accounts->lock(accounts);
 		accounts->save(accounts, &acc);
+		accounts->unlock(accounts);
 	}
 
 }
@@ -707,6 +736,7 @@ static void login_fromchar_account_update_other(int account_id, unsigned int sta
 	charif_sendallwos(NULL, buf, 11);
 }
 
+
 /**
  * 0x2724 WA_UPDATE_STATE
  * Updates state of account (blocks)
@@ -720,27 +750,32 @@ static void login_fromchar_parse_account_update(struct s_receive_action_data *ac
 	unsigned int state = RFIFOL(act,6);
 	RFIFOSKIP(act,10);
 
-	if( !accounts->load_num(accounts, &acc, account_id) )
+	if( !login->account_load(account_id, &acc) ) {
 		ShowNotice("Char-server '%s': Error of Status change (account: %d not found, "
 			"suggested status %u, ip: %s).\n",
 			server->name, account_id, state, ip);
-	else
-	if( acc.state == state )
+		return;
+	}
+
+	if( acc.state == state ) {
 		ShowNotice("Char-server '%s':  Error of Status change - actual status is "
 			"already the good status (account: %d, status %u, ip: %s).\n",
 			server->name, account_id, state, ip);
-	else {
-		ShowNotice("Char-server '%s': Status change (account: %d, new status %u, "
-			"ip: %s).\n", server->name, account_id, state, ip);
+		return;
+	}
 
-		acc.state = state;
-		// Save
-		accounts->save(accounts, &acc);
+	ShowNotice("Char-server '%s': Status change (account: %d, new status %u, "
+		"ip: %s).\n", server->name, account_id, state, ip);
 
-		// notify other servers
-		if (state != 0) {
-			login->fromchar_account_update_other(account_id, state);
-		}
+	acc.state = state;
+	// Save
+	accounts->lock(accounts);
+	accounts->save(accounts, &acc);
+	accounts->unlock(accounts);
+
+	// notify other servers
+	if (state != 0) {
+		login->fromchar_account_update_other(account_id, state);
 	}
 }
 
@@ -776,45 +811,48 @@ static void login_fromchar_parse_ban(struct s_receive_action_data *act,
 	int sec        = RFIFOW(act,16);
 	RFIFOSKIP(act,18);
 
-	if (!accounts->load_num(accounts, &acc, account_id)) {
+	if (!login->account_load(account_id, &acc)) {
 		ShowNotice("Char-server '%s': Error of ban request (account: %d not found, ip: %s).\n",
 			server->name, account_id, ip);
+		return;
+	}
+
+	time_t timestamp;
+	struct tm *tmtime;
+	if (acc.unban_time == 0 || acc.unban_time < time(NULL))
+		timestamp = time(NULL); // new ban
+	else
+		timestamp = acc.unban_time; // add to existing ban
+	tmtime = localtime(&timestamp);
+	tmtime->tm_year += year;
+	tmtime->tm_mon  += month;
+	tmtime->tm_mday += mday;
+	tmtime->tm_hour += hour;
+	tmtime->tm_min  += min;
+	tmtime->tm_sec  += sec;
+	timestamp = mktime(tmtime);
+	if (timestamp == -1) {
+		ShowNotice("Char-server '%s': Error of ban request (account: %d, invalid date, ip: %s).\n",
+			server->name, account_id, ip);
+	} else if( timestamp <= time(NULL) || timestamp == 0 ) {
+		ShowNotice("Char-server '%s': Error of ban request (account: %d, new date unbans "
+			"the account, ip: %s).\n", 
+			server->name, account_id, ip);
 	} else {
-		time_t timestamp;
-		struct tm *tmtime;
-		if (acc.unban_time == 0 || acc.unban_time < time(NULL))
-			timestamp = time(NULL); // new ban
-		else
-			timestamp = acc.unban_time; // add to existing ban
-		tmtime = localtime(&timestamp);
-		tmtime->tm_year += year;
-		tmtime->tm_mon  += month;
-		tmtime->tm_mday += mday;
-		tmtime->tm_hour += hour;
-		tmtime->tm_min  += min;
-		tmtime->tm_sec  += sec;
-		timestamp = mktime(tmtime);
-		if (timestamp == -1) {
-			ShowNotice("Char-server '%s': Error of ban request (account: %d, invalid date, ip: %s).\n",
-				server->name, account_id, ip);
-		} else if( timestamp <= time(NULL) || timestamp == 0 ) {
-			ShowNotice("Char-server '%s': Error of ban request (account: %d, new date unbans "
-				"the account, ip: %s).\n", 
-				server->name, account_id, ip);
-		} else {
-			char tmpstr[24];
-			timestamp2string(tmpstr, sizeof(tmpstr), timestamp, login->config->date_format);
-			ShowNotice("Char-server '%s': Ban request (account: %d, new final "
-				"date of banishment: %ld (%s), ip: %s).\n",
-			    server->name, account_id, (long)timestamp, tmpstr, ip);
+		char tmpstr[24];
+		timestamp2string(tmpstr, sizeof(tmpstr), timestamp, login->config->date_format);
+		ShowNotice("Char-server '%s': Ban request (account: %d, new final "
+			"date of banishment: %ld (%s), ip: %s).\n",
+		    server->name, account_id, (long)timestamp, tmpstr, ip);
 
-			acc.unban_time = timestamp;
+		acc.unban_time = timestamp;
 
-			// Save
-			accounts->save(accounts, &acc);
+		// Save
+		accounts->lock(accounts);
+		accounts->save(accounts, &acc);
+		accounts->unlock(accounts);
 
-			login->fromchar_ban(account_id, timestamp);
-		}
+		login->fromchar_ban(account_id, timestamp);
 	}
 }
 
@@ -843,28 +881,32 @@ static void login_fromchar_parse_change_sex(struct s_receive_action_data *act,
 	int account_id = RFIFOL(act,2);
 	RFIFOSKIP(act,6);
 
-	if( !accounts->load_num(accounts, &acc, account_id) )
+	if( !login->account_load(account_id, &acc) ) {
 		ShowNotice("Char-server '%s': Error of sex change (account: %d not found, ip: %s).\n",
 			server->name, account_id, ip);
-	else
-	if( acc.sex == 'S' )
+		return;
+	}
+
+	if( acc.sex == 'S' ) {
 		ShowNotice("Char-server '%s': Error of sex change - account to change is a Server account "
 		"(account: %d, ip: %s).\n",
 			server->name, account_id, ip);
-	else
-	{
-		char sex = ( acc.sex == 'M' ) ? 'F' : 'M'; //Change gender
-
-		ShowNotice("Char-server '%s': Sex change (account: %d, new sex %c, ip: %s).\n",
-			server->name, account_id, sex, ip);
-
-		acc.sex = sex;
-		// Save
-		accounts->save(accounts, &acc);
-
-		// announce to other servers
-		login->fromchar_change_sex_other(account_id, sex);
+		return;
 	}
+
+	char sex = ( acc.sex == 'M' ) ? 'F' : 'M'; //Change gender
+
+	ShowNotice("Char-server '%s': Sex change (account: %d, new sex %c, ip: %s).\n",
+		server->name, account_id, sex, ip);
+
+	acc.sex = sex;
+	// Save
+	accounts->lock(accounts);
+	accounts->save(accounts, &acc);
+	accounts->unlock(accounts);
+
+	// announce to other servers
+	login->fromchar_change_sex_other(account_id, sex);
 }
 
 /**
@@ -878,6 +920,7 @@ static void login_fromchar_parse_account_reg2(struct s_receive_action_data *act,
 
 	int account_id = RFIFOL(act,4);
 
+	accounts->lock(accounts);
 	if( !accounts->load_num(accounts, &acc, account_id) )
 		ShowStatus("Char-server '%s': receiving (from the char-server) of account_reg2 "
 		"(account: %d not found, ip: %s).\n",
@@ -885,6 +928,8 @@ static void login_fromchar_parse_account_reg2(struct s_receive_action_data *act,
 	else {
 		account->mmo_save_accreg2(accounts,act,account_id,RFIFOL(act, 8));
 	}
+	accounts->unlock(accounts);
+
 	RFIFOSKIP(act,RFIFOW(act,2));
 }
 
@@ -900,6 +945,7 @@ static void login_fromchar_parse_unban(struct s_receive_action_data *act,
 	int account_id = RFIFOL(act,2);
 	RFIFOSKIP(act,6);
 
+	accounts->lock(accounts);
 	if( !accounts->load_num(accounts, &acc, account_id) )
 		ShowNotice("Char-server '%s': Error of Unban request "
 			"(account: %d not found, ip: %s).\n",
@@ -917,6 +963,7 @@ static void login_fromchar_parse_unban(struct s_receive_action_data *act,
 		accounts->save(accounts, &acc);
 		// FIXME/TODO: Shouldn't this be broadcast as AW_BAN_BROADCAST is?
 	}
+	accounts->unlock(accounts);
 }
 
 /**
@@ -981,7 +1028,9 @@ static void login_fromchar_parse_request_account_reg2(struct s_receive_action_da
 	int char_id = RFIFOL(act,6);
 	RFIFOSKIP(act,10);
 
-	account->mmo_send_accreg2(accounts,act,account_id,char_id);
+	accounts->lock(accounts);
+	account->mmo_send_accreg2(accounts,act->session,account_id,char_id);
+	accounts->unlock(accounts);
 }
 
 /**
@@ -1027,11 +1076,13 @@ static void login_fromchar_parse_change_pincode(struct s_receive_action_data *ac
 {
 	struct mmo_account acc;
 
+	accounts->lock(accounts);
 	if (accounts->load_num(accounts, &acc, RFIFOL(act,2))) {
 		safestrncpy(acc.pincode, RFIFOP(act,6), sizeof(acc.pincode));
 		acc.pincode_change = ((unsigned int)time(NULL));
 		accounts->save(accounts, &acc);
 	}
+	accounts->unlock(accounts);
 	RFIFOSKIP(act,11);
 }
 
@@ -1045,7 +1096,7 @@ static bool login_fromchar_parse_wrong_pincode(struct s_receive_action_data *act
 {
 	struct mmo_account acc;
 
-	if( accounts->load_num(accounts, &acc, RFIFOL(act,2) ) ) {
+	if( login->account_load(RFIFOL(act,2), &acc) ) {
 		mutex->lock(login->online_db_mutex);
 		struct online_login_data* ld = (struct online_login_data*)idb_get(login->online_db,acc.account_id);
 		mutex->unlock(login->online_db_mutex);
@@ -1119,7 +1170,7 @@ static void login_fromchar_parse_accinfo(struct s_receive_action_data *act)
 	int32_t u_aid      = RFIFOL(act, 10);
 	int32_t u_group    = RFIFOL(act, 14);
 	int32_t map_fd     = RFIFOL(act, 18);
-	if (accounts->load_num(accounts, &acc, account_id)) {
+	if (login->account_load(account_id, &acc)) {
 		login->fromchar_accinfo(act->session, account_id, u_fd, u_aid, u_group, map_fd, &acc);
 	} else {
 		login->fromchar_accinfo(act->session, account_id, u_fd, u_aid, u_group, map_fd, NULL);
@@ -1347,7 +1398,10 @@ static enum accept_login_errorcode login_mmo_auth_new(const char *userid, const 
 		return ALE_UNREGISTERED;
 
 	// check if the account doesn't exist already
-	if( accounts->load_str(accounts, &acc, userid) ) {
+	accounts->lock(accounts);
+	bool acc_found = accounts->load_str(accounts, &acc, userid);
+	accounts->unlock(accounts);
+	if( acc_found ) {
 		ShowNotice("Attempt of creation of an already existing account "
 			"(account: %s_%c, pass: %s, received pass: %s)\n",
 			userid, sex, acc.pass, pass);
@@ -1368,7 +1422,10 @@ static enum accept_login_errorcode login_mmo_auth_new(const char *userid, const 
 	acc.pincode_change = 0;
 	acc.char_slots = 0;
 
-	if( !accounts->create(accounts, &acc) )
+	accounts->lock(accounts);
+	bool create = accounts->create(accounts, &acc);
+	accounts->unlock(accounts);
+	if( !create )
 		return ALE_UNREGISTERED; // Failed to create an account
 
 	ShowNotice("Account creation (account %s, id: %d, pass: %s, sex: %c)\n", acc.userid, acc.account_id, acc.pass, acc.sex);
@@ -1475,7 +1532,10 @@ static enum accept_login_errorcode login_mmo_auth(struct login_session_data *sd,
 		return ALE_UNREGISTERED;
 	}
 
-	if( !accounts->load_str(accounts, &acc, sd->userid) ) {
+	accounts->lock(accounts);
+	bool acc_found = accounts->load_str(accounts, &acc, sd->userid);
+	accounts->unlock(accounts);
+	if( !acc_found ) {
 		ShowNotice("Unknown account (account: %s, received pass: %s, ip: %s)\n", sd->userid, sd->passwd, ip);
 		return ALE_UNREGISTERED;
 	}
@@ -1548,7 +1608,9 @@ static enum accept_login_errorcode login_mmo_auth(struct login_session_data *sd,
 	acc.unban_time = 0;
 	acc.logincount++;
 
+	accounts->lock(accounts);
 	accounts->save(accounts, &acc);
+	accounts->unlock(accounts);
 
 	if( sd->sex != 'S' && sd->account_id < START_ACCOUNT_NUM )
 		ShowWarning("Account %s has account id %d! Account IDs must be over %d to work properly!\n", sd->userid, sd->account_id, START_ACCOUNT_NUM);
@@ -1726,8 +1788,10 @@ static void login_auth_failed(struct login_session_data *sd, int result)
 
 	if (result == 6) {
 		struct mmo_account acc = { 0 };
+		accounts->lock(accounts);
 		if (accounts->load_str(accounts, &acc, sd->userid))
 			ban_time = acc.unban_time;
+		accounts->unlock(accounts);
 	}
 	lclif->auth_failed(sd->session, ban_time, result);
 }
@@ -2577,12 +2641,12 @@ void cmdline_args_init_local(void)
 //------------------------------
 int do_init(int argc, char **argv)
 {
+	account_defaults();
+	login_defaults();
+
 	login->ers_collection = ers_collection_create(MEMORYTYPE_SHARED);
 	if(!login->ers_collection)
 		exit(EXIT_FAILURE);
-
-	account_defaults();
-	login_defaults();
 
 	// initialize engine (to accept config settings)
 	account_engine.constructor = account->db_sql;
@@ -2719,6 +2783,7 @@ void login_defaults(void)
 	login->check_encrypted = login_check_encrypted;
 	login->check_password = login_check_password;
 	login->lan_subnet_check = login_lan_subnet_check;
+	login->account_load = login_account_load;
 
 	login->fromchar_auth_ack = login_fromchar_auth_ack;
 	login->fromchar_accinfo = login_fromchar_accinfo;

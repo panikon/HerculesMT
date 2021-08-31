@@ -43,6 +43,8 @@ struct loginlog_interface {
 	struct Sql *sql_handle;
 	bool enabled;
 	struct s_loginlog_dbs *dbs;
+	struct mutex_data *mutex;
+
 	unsigned long (*failedattempts) (uint32 ip, unsigned int minutes);
 	void (*log) (uint32 ip, const char* username, int rcode, const char* message);
 	bool (*init) (void);

@@ -31,6 +31,7 @@
 #include "common/sql.h"
 #include "common/strlib.h"
 #include "common/timer.h"
+#include "common/mutex.h"
 
 #include <stdlib.h>
 
@@ -38,7 +39,9 @@ static struct ipban_interface ipban_s;
 struct ipban_interface *ipban;
 static struct s_ipban_dbs ipbandbs;
 
-// initialize
+/**
+ * Initializes IPBan
+ **/
 static void ipban_init(void)
 {
 	ipban->inited = true;
@@ -54,20 +57,29 @@ static void ipban_init(void)
 		SQL->Free(ipban->sql_handle);
 		exit(EXIT_FAILURE);
 	}
+	ipban->mutex = mutex->create();
+	if(!ipban->mutex) {
+		ShowFatalError("ipban_init: Failed to setup mutex\n");
+		exit(EXIT_FAILURE);
+	}
+
 	if (ipban->dbs->codepage[0] != '\0' && SQL_ERROR == SQL->SetEncoding(ipban->sql_handle, ipban->dbs->codepage))
 		Sql_ShowDebug(ipban->sql_handle);
 
 	if (login->config->ipban_cleanup_interval > 0) {
 		// set up periodic cleanup of connection history and active bans
 		timer->add_func_list(ipban->cleanup, "ipban_cleanup");
-		ipban->cleanup_timer_id = timer->add_interval(timer->gettick()+10, ipban->cleanup, 0, 0, login->config->ipban_cleanup_interval*1000);
+		ipban->cleanup_timer_id = timer->add_interval(timer->gettick()+10,
+			ipban->cleanup, 0, 0, login->config->ipban_cleanup_interval*1000);
 	} else {
 		// make sure it gets cleaned up on login-server start regardless of interval-based cleanups
-		ipban->cleanup(0,0,0,0);
+		ipban->cleanup(0,0,0,0,0);
 	}
 }
 
-// finalize
+/**
+ * Finalizes IPBan
+ **/
 static void ipban_final(void)
 {
 	if (!login->config->ipban)
@@ -77,11 +89,14 @@ static void ipban_final(void)
 		// release data
 		timer->delete(ipban->cleanup_timer_id, ipban->cleanup);
 
-	ipban->cleanup(0,0,0,0); // always clean up on login-server stop
+	ipban->cleanup(0,0,0,0,0); // always clean up on login-server stop
 
 	// close connections
 	SQL->Free(ipban->sql_handle);
 	ipban->sql_handle = NULL;
+
+	mutex->destroy(ipban->mutex);
+	ipban->mutex = NULL;
 }
 
 /**
@@ -92,7 +107,6 @@ static void ipban_final(void)
  * @param imported Whether the current config is imported from another file.
  *
  * @retval false in case of error.
-
  */
 static bool ipban_config_read_inter(const char *filename, bool imported)
 {
@@ -233,7 +247,11 @@ static bool ipban_config_read(const char *filename, struct config_t *config, boo
 	return retval;
 }
 
-// check ip against active bans list
+/**
+ * Checks if IP is in active bans list
+ *
+ * @return bool Ip in list
+ **/
 static bool ipban_check(uint32 ip)
 {
 	uint8* p = (uint8*)&ip;
@@ -243,25 +261,34 @@ static bool ipban_check(uint32 ip)
 	if (!login->config->ipban)
 		return false;// ipban disabled
 
-	if( SQL_ERROR == SQL->Query(ipban->sql_handle, "SELECT count(*) FROM `%s` WHERE `rtime` > NOW() AND (`list` = '%u.*.*.*' OR `list` = '%u.%u.*.*' OR `list` = '%u.%u.%u.*' OR `list` = '%u.%u.%u.%u')",
+	mutex->lock(ipban->mutex);
+	if( SQL_ERROR == SQL->Query(ipban->sql_handle,
+		"SELECT count(*) FROM `%s` WHERE `rtime` > NOW() "
+		"AND (`list` = '%u.*.*.*' OR `list` = '%u.%u.*.*' OR `list` = '%u.%u.%u.*' OR `list` = '%u.%u.%u.%u')",
 		ipban->dbs->table, p[3], p[3], p[2], p[3], p[2], p[1], p[3], p[2], p[1], p[0]) )
 	{
 		Sql_ShowDebug(ipban->sql_handle);
 		// close connection because we can't verify their connectivity.
+		mutex->unlock(ipban->mutex);
 		return true;
 	}
 
-	if( SQL_SUCCESS != SQL->NextRow(ipban->sql_handle) )
+	if( SQL_SUCCESS != SQL->NextRow(ipban->sql_handle) ) {
+		mutex->unlock(ipban->mutex);
 		return false;
+	}
 
 	SQL->GetData(ipban->sql_handle, 0, &data, NULL);
 	matches = atoi(data);
 	SQL->FreeResult(ipban->sql_handle);
+	mutex->unlock(ipban->mutex);
 
 	return( matches > 0 );
 }
 
-// log failed attempt
+/**
+ * Logs failed attempts
+ **/
 static void ipban_log(uint32 ip)
 {
 	unsigned long failures;
@@ -275,22 +302,33 @@ static void ipban_log(uint32 ip)
 	if (failures >= login->config->dynamic_pass_failure_ban_limit)
 	{
 		uint8* p = (uint8*)&ip;
-		if (SQL_ERROR == SQL->Query(ipban->sql_handle, "INSERT INTO `%s`(`list`,`btime`,`rtime`,`reason`) VALUES ('%u.%u.%u.*', NOW() , NOW() +  INTERVAL %u MINUTE ,'Password error ban')",
+		mutex->lock(ipban->mutex);
+		if (SQL_ERROR == SQL->Query(ipban->sql_handle,
+			"INSERT INTO `%s`(`list`,`btime`,`rtime`,`reason`) VALUES "
+			"('%u.%u.%u.*', NOW() , NOW() +  INTERVAL %u MINUTE ,'Password error ban')",
 			ipban->dbs->table, p[3], p[2], p[1], login->config->dynamic_pass_failure_ban_duration))
 		{
 			Sql_ShowDebug(ipban->sql_handle);
 		}
+		mutex->unlock(ipban->mutex);
 	}
 }
 
-// remove expired bans
-static int ipban_cleanup(int tid, int64 tick, int id, intptr_t data)
+/**
+ * Remove expired bans
+ * This could also be done by CREATE_EVENT directly in the database
+ * @see TimerFunc
+ * @see mariadb.com/kb/en/create-event/
+ **/
+static int ipban_cleanup(struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data)
 {
 	if (!login->config->ipban)
 		return 0;// ipban disabled
 
+	mutex->lock(ipban->mutex);
 	if( SQL_ERROR == SQL->Query(ipban->sql_handle, "DELETE FROM `%s` WHERE `rtime` <= NOW()", ipban->dbs->table) )
 		Sql_ShowDebug(ipban->sql_handle);
+	mutex->unlock(ipban->mutex);
 
 	return 0;
 }

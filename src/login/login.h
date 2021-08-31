@@ -326,6 +326,7 @@ struct login_interface {
 	int (*online_data_cleanup_sub) (const struct DBKey_s *key, struct DBData *data, va_list ap);
 	int (*online_data_cleanup) (struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data);
 	int (*sync_ip_addresses) (struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data);
+	bool (*account_load) (int account_id, struct mmo_account *out_acc);
 
 	bool (*check_encrypted) (const char* str1, const char* str2, const char* passwd);
 	bool (*check_password) (const char* md5key, int passwdenc, const char* passwd, const char* refpass);
