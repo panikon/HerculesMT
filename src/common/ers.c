@@ -292,7 +292,7 @@ static ers_cache_t *ers_find_cache(struct s_cache_list *cache_list, unsigned int
 ) {
 	ers_cache_t *cache;
 
-	for(uint32_t i = 0; i < INDEX_MAP_LENGTH(*cache_list); i++) {
+	for(int32_t i = 0; i < INDEX_MAP_LENGTH(*cache_list); i++) {
 		cache = INDEX_MAP_INDEX(*cache_list, i);
 		if(!cache)
 			continue;
@@ -541,7 +541,7 @@ void ers_report_cache(struct s_cache_list *cache_list)
 {
 	struct ers_cache *cache;
 	unsigned int cache_c = 0, blocks_u = 0, blocks_a = 0, memory_b = 0, memory_t = 0;
-	for(uint32_t i = 0; i < INDEX_MAP_LENGTH(*cache_list); i++) {
+	for(int32_t i = 0; i < INDEX_MAP_LENGTH(*cache_list); i++) {
 		cache = INDEX_MAP_INDEX(*cache_list, i);
 		if(!cache)
 			continue;
@@ -634,7 +634,7 @@ void ers_report(void)
 	ShowMessage(CL_BOLD"[ERS Global Report]\n"CL_NORMAL);
 
 	mutex->lock(g_ers_list_mutex);
-	for(uint32_t i = 0; i < INDEX_MAP_LENGTH(g_ers_list); i++) {
+	for(int32_t i = 0; i < INDEX_MAP_LENGTH(g_ers_list); i++) {
 		struct ers_collection_t *collection = INDEX_MAP_INDEX(g_ers_list, i);
 		if(!collection)
 			continue;
@@ -744,7 +744,7 @@ struct rwlock_data *ers_collection_lock(struct ers_collection_t *collection)
 void ers_final(enum memory_type memory_type)
 {
 	if(memory_type == MEMORYTYPE_SHARED) {
-		for(uint32_t i = 0; i < INDEX_MAP_LENGTH(g_ers_list); i++) {
+		for(int32_t i = 0; i < INDEX_MAP_LENGTH(g_ers_list); i++) {
 			if(!INDEX_MAP_INDEX(g_ers_list, i))
 				continue;
 			ers_collection_destroy(INDEX_MAP_INDEX(g_ers_list, i));
@@ -759,7 +759,7 @@ void ers_final(enum memory_type memory_type)
 	if(!INDEX_MAP_LENGTH(l_ers_list))
 		return;
 
-	for(uint32_t i = 0; i < INDEX_MAP_LENGTH(l_ers_list); i++) {
+	for(int32_t i = 0; i < INDEX_MAP_LENGTH(l_ers_list); i++) {
 		if(!INDEX_MAP_INDEX(l_ers_list, i))
 			continue;
 		ers_collection_destroy(INDEX_MAP_INDEX(l_ers_list, i));

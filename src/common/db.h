@@ -2291,8 +2291,8 @@ HPShared struct db_interface *DB;
 	struct {                             \
 		_type **_data_;                  \
 		uint32_t *_free_index_;          \
-		uint32_t _free_index_length_;    \
-		uint32_t _count_;                \
+		int32_t _free_index_length_;     \
+		int32_t _count_;                 \
 		enum memory_type _mt_;           \
 	}
 /**
@@ -2305,8 +2305,8 @@ HPShared struct db_interface *DB;
 	struct _name {                          \
 		_type **_data_;                     \
 		uint32_t *_free_index_;             \
-		uint32_t _free_index_length_;       \
-		uint32_t _count_;                   \
+		int32_t _free_index_length_;        \
+		int32_t _count_;                    \
 		enum memory_type _mt_;              \
 	}
 

@@ -156,7 +156,7 @@ struct HPM_interface {
 	void (*config_read) (void);
 	bool (*parse_battle_conf) (const struct config_t *config, const char *filename, bool imported);
 	char *(*pid2name) (unsigned int pid);
-	unsigned char (*parse_packets) (int fd, int packet_id, enum HPluginPacketHookingPoints point);
+	unsigned char (*parse_packets) (struct s_receive_action_data *act, int packet_id, enum HPluginPacketHookingPoints point);
 	void (*load_sub) (struct hplugin *plugin);
 	/* for custom config parsing */
 	bool (*parse_conf) (const struct config_t *config, const char *filename, enum HPluginConfType point, bool imported);

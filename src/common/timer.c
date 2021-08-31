@@ -593,11 +593,13 @@ static void timer_add_func_list_guard(TimerFunc func, char *name)
  * @copydoc timer_add_sub
  * @remarks Adds mutex guards to timer_add_sub calls
  **/
-static int timer_add_sub_guard(int64 tick, TimerFunc func, int id, intptr_t data, int interval, unsigned char type)
-{
+static int timer_add_sub_guard(int64 tick, TimerFunc func, int id,
+	intptr_t data, int interval, unsigned char type, unsigned char target,
+	int32_t target_id
+) {
 	int tid;
 	mutex->lock(timer_perform_mutex);
-	tid = timer_add_sub(tick, func, id, data, interval, type);
+	tid = timer_add_sub(tick, func, id, data, interval, type, target, target_id);
 	mutex->unlock(timer_perform_mutex);
 	return tid;
 }
@@ -622,7 +624,7 @@ static int64 timer_addtick_tm(int tid, int64 tick)
  **/
 static int timer_add_tm(int64 tick, TimerFunc func, int id, intptr_t data)
 {
-	return tm->add_sub(tick, func, id, data, 1000, TIMER_ONCE_AUTODEL);
+	return tm->add_sub(tick, func, id, data, 1000, TIMER_ONCE_AUTODEL, TIMER_THREAD, 0);
 }
 
 /**
@@ -631,7 +633,7 @@ static int timer_add_tm(int64 tick, TimerFunc func, int id, intptr_t data)
  **/
 static int timer_add_interval_tm(int64 tick, TimerFunc func, int id, intptr_t data, int interval)
 {
-	return tm->add_sub(tick, func, id, data, interval, TIMER_INTERVAL);
+	return tm->add_sub(tick, func, id, data, interval, TIMER_INTERVAL, TIMER_THREAD, 0);
 }
 
 /**

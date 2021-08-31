@@ -20,6 +20,7 @@
 #ifndef LOGIN_LCLIF_H
 #define LOGIN_LCLIF_H
 
+#include "common/socket.h"
 #include "common/hercules.h"
 
 /** @file
@@ -69,7 +70,7 @@ struct lclif_interface {
 	 * @param error Error code.
 	 * @see #PACKET_SC_NOTIFY_BAN.
 	 */
-	void (*connection_error)(int fd, uint8 error);
+	void (*connection_error)(struct socket_data *session, uint8 error);
 
 	/**
 	 * Sends the character server list to the client.
@@ -92,7 +93,7 @@ struct lclif_interface {
 	 * @see #HEADER_AC_REFUSE_LOGIN.
 	 * @see #HEADER_AC_REFUSE_LOGIN_R2.
 	 */
-	void (*auth_failed)(int fd, time_t ban, uint32 error);
+	void (*auth_failed)(struct socket_data *session, time_t ban, uint32 error);
 
 	/**
 	 * Reports a login error to the client.
@@ -101,7 +102,7 @@ struct lclif_interface {
 	 * @param error Error code.
 	 * @see #PACKET_AC_REFUSE_LOGIN.
 	 */
-	void (*login_error)(int fd, uint8 error);
+	void (*login_error)(struct socket_data *session, uint8 error);
 
 	/**
 	 * Sends an authentication challenge to the client.
@@ -110,7 +111,7 @@ struct lclif_interface {
 	 * @param sd The client to send to.
 	 * @see #PACKET_AC_ACK_HASH.
 	 */
-	void (*coding_key)(int fd, struct login_session_data *sd);
+	void (*coding_key)(struct socket_data *session, struct login_session_data *sd);
 
 	/**
 	 * Retrieves a packet's data from the packet db.

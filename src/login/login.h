@@ -55,7 +55,7 @@ enum password_enc {
 
 struct login_session_data {
 	int account_id;
-	int login_id1;
+	int login_id1; //< Id1 is position in server list for servers
 	int login_id2;
 	char sex;// 'F','M','S'
 
@@ -76,6 +76,56 @@ struct login_session_data {
 	time_t expiration_time;
 
 	struct socket_data *session;
+};
+
+/**
+ * SC_NOTIFY_BAN Error code list
+ * @see lclif_connection_error
+ * @see login_auth_ok
+ **/
+enum notify_ban_errorcode {
+	NBE_SUCCESS = -1,		// Internal use, success
+	NBE_DISCONNECTED,		// "Disconnected from server"
+	NBE_SERVER_CLOSED,		// "Server closed"
+	NBE_DUPLICATE_ID,		// "Someone has logged in with this ID"
+	NBE_TIME_GAP,			// "You've been disconected due to a time gap between you and the server."
+	NBE_JAMMED_SHORTLY,		// "Server is jammed due to overpopulation. Please try again shortly."
+	NBE_UNDERAGED,			// "You are underaged and cannot join this server"
+	NBE_NO_PAY,				// "You didn't pay for this ID. Would you like to pay for it now? Opens window"
+	NBE_JAMMED_MINUTES,		// "Server is jammed due to overpopulation. Please try again in a few minutes."
+	NBE_RECOGNIZES,			// "Server still recognizes your last log-in. Please try again after a few minutes."
+	NBE_IC_FULL,			// "IP capacity of this Internet Cafe is full. Would you like to pay the personal base?"
+	NBE_NO_PAYING_TIME,		// "You are out of available paying time. Game will be shutdown automatically."
+	NBE_ACCOUNT_POSTPONED,	// "Your account was postponed"
+	NBE_POLICY_CHANGE,		// "Will be disconnected temporarily due to a change in payment policy. Please connect again."
+	NBE_IP_MISMATCH,		// "Will be terminated because do not match between your IP address and approved IP in Account server."
+	NBE_IC_OVERPAYMENT,		// "Will be terminated to prevent overpayment of meter-rate system in Internet Cafe.
+							// Please connect with unaproved IP to use personal meter-rate system."
+	//15 - Disconnected from server
+	NBE_JPN_REJOIN = 16,	// "A message to the BETA users in Japan -> Let's rejoin kung-ho"
+	NBE_JPN_BILLS,			// "A message to users terminated in Japan -> Pay bills, Pay twice"
+	NBE_ALREADY_ON,			// "You already have been connected to another account server."
+	//18-99 - Disconnected
+	NBE_IC_2_ACCOUNTS = 100,// "There are more than 2 account connected to PC cafe payment system.
+							// Please check this matter"
+	NBE_30_PLAYERS_SAME_IP,	// "More than 30 players sharing the same IP have logged into the game for an hour.
+							// Please check this matter."
+	NBE_10_PLAYERS_SAME_IP,	// "More than 10 connections sharing the same IP have logged into the game for an hour.
+							// Please check this matter."
+	NBE_PRIVACY_POLICY,		// "You need to accept the Privacy Policy from gravity in order to use the service."
+	NBE_USER_AGREEMENT,		// "You need to accept User Agreement in order to use the service."
+	NBE_NONEXISTENT_ID,		// "Incorrect or nonexitent ID."
+	//106 - DISCONNECTED
+	NBE_IP_BLOCKED = 107,	// "Unavailable to access in your connected IP"
+	NBE_IP_BLOCKED2,		// "Unavailable to access in your connected IP"
+	NBE_BRUTE_FORCE,		// "Unable to access for a while due to errors on password 6 times"
+	NBE_INVALID_TEST_CHAR,	// "Sorry. Do not access selected character for the test."
+	//111 - 112 - DISCONNECTED
+	NBE_KRN_LAW,			// "By the korean law, the under 16 age users will be limited to play games
+							// until 0~6am and game will be closed."
+	NBE_NO_MSG,				// "NO MSG"
+	//115 - 225 - DISCONNECTED
+	NBE_LAST = 255
 };
 
 /**
@@ -146,27 +196,6 @@ enum accept_login_errorcode {
 	ALE_LAST = 255
 };
 
-/**
- * Character server information
- *
- * This information is used in order to keep track of all authenticated
- * char-servers and to send the data via (lclif_send_server_list) to
- * the clients.
- * @see lclif_send_server_list
- * @see s_login_dbs::server
- * @see PACKET_AC_ACCEPT_LOGIN
- **/
-struct mmo_char_server {
-	char name[20];
-	struct socket_data *session;
-	uint32 ip;
-	uint16 port;
-
-	uint16 users; ///< user count on this server
-	uint16 type;  ///< 0=normal, 1=maintenance, 2=over 18, 3=paying, 4=P2P (@see e_char_server_type in mmo.h)
-	uint16 new_;  ///< should display as 'new'?
-};
-
 struct client_hash_node {
 	int group_id;
 	uint8 hash[16];
@@ -223,24 +252,55 @@ struct login_auth_node {
 	time_t expiration_time;
 };
 
-//-----------------------------------------------------
-// Online User Database [Wizputer]
-//-----------------------------------------------------
+/**
+ * Online User Database
+ * @author Wizputer
+ **/
 struct online_login_data {
 	int account_id;
+	/**
+	 * Session timeout until confirmation by char-server that the client
+	 * connected.
+	 * @see login_auth_ok
+	 * @see login_waiting_disconnect_timer
+	 **/
 	int waiting_disconnect;
-	int char_server;
+	/**
+	 * Server that currently owns this account.
+	 * Server account id
+	 **/
+	enum {
+		ACC_DISCONNECTED  = -2, //< Owner disconnected
+		ACC_WAIT_TIMEOUT  = -1, //< Waiting timeout (didn't connect to char-server yet)
+		ACC_CHAR_VALID    = 0   //< Greater than ACC_CHAR_VALID owner
+	} char_server;
 };
 
 #define sex_num2str(num) ( ((num) ==  SEX_FEMALE) ? 'F' : ((num) ==  SEX_MALE) ? 'M' : 'S' )
 #define sex_str2num(str) ( ((str) == 'F') ? SEX_FEMALE : ((str) == 'M') ? SEX_MALE : SEX_SERVER )
 
-#define MAX_SERVERS 30
+/**
+ * Character server information
+ *
+ * This information is used in order to keep track of all authenticated
+ * char-servers and to send the data via (lclif_send_server_list) to
+ * the clients.
+ * @see lclif_send_server_list
+ * @see s_login_dbs::server
+ * @see PACKET_AC_ACCEPT_LOGIN
+ **/
+struct mmo_char_server {
+	uint32 pos; // Position in list
+	char name[20];
+	struct socket_data *session;
+	uint32 ip;
+	uint16 port;
 
-struct s_login_dbs {
-	struct mmo_char_server server[MAX_SERVERS];
-	struct Account_engine *account_engine;
+	uint16 users; ///< user count on this server
+	uint16 type;  ///< 0=normal, 1=maintenance, 2=over 18, 3=paying, 4=P2P (@see e_char_server_type in mmo.h)
+	uint16 new_;  ///< should display as 'new'?
 };
+INDEX_MAP_STRUCT_DECL(s_mmo_char_server_list, struct mmo_char_server);
 
 /**
  * Login.c Interface
@@ -250,58 +310,64 @@ struct login_interface {
 	struct DBMap *online_db;
 	struct Login_Config *config;
 	struct AccountDB* accounts;
-	struct s_login_dbs *dbs;
 	struct ers_collection_t *ers_collection;
 
-	int (*mmo_auth) (struct login_session_data* sd, bool isServer);
-	int (*mmo_auth_new) (const char* userid, const char* pass, const char sex, const char* last_ip);
-	int (*waiting_disconnect_timer) (int tid, int64 tick, int id, intptr_t data);
-	struct DBData (*create_online_user) (union DBKey key, va_list args);
+	enum accept_login_errorcode (*mmo_auth) (struct login_session_data* sd, bool isServer);
+	enum accept_login_errorcode (*mmo_auth_new) (const char* userid, const char* pass, const char sex, const char* last_ip);
+	int (*waiting_disconnect_timer) (struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data);
+	struct DBData (*create_online_user) (const struct DBKey_s *key, va_list args);
 	struct online_login_data* (*add_online_user) (int char_server, int account_id);
 	void (*remove_online_user) (int account_id);
-	int (*online_db_setoffline) (union DBKey key, struct DBData *data, va_list ap);
-	int (*online_data_cleanup_sub) (union DBKey key, struct DBData *data, va_list ap);
-	int (*online_data_cleanup) (int tid, int64 tick, int id, intptr_t data);
-	int (*sync_ip_addresses) (int tid, int64 tick, int id, intptr_t data);
+	int (*online_db_setoffline) (const struct DBKey_s *key, struct DBData *data, va_list ap);
+	int (*online_data_cleanup_sub) (const struct DBKey_s *key, struct DBData *data, va_list ap);
+	int (*online_data_cleanup) (struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data);
+	int (*sync_ip_addresses) (struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data);
+
 	bool (*check_encrypted) (const char* str1, const char* str2, const char* passwd);
 	bool (*check_password) (const char* md5key, int passwdenc, const char* passwd, const char* refpass);
 	uint32 (*lan_subnet_check) (uint32 ip);
-	void (*fromchar_accinfo) (int fd, int account_id, int u_fd, int u_aid, int u_group, int map_fd, struct mmo_account *acc);
-	void (*fromchar_account) (int fd, int account_id, struct mmo_account *acc);
+
+	void (*fromchar_accinfo) (struct socket_data *session, int account_id, int u_fd, int u_aid, int u_group, int map_fd, struct mmo_account *acc);
+	void (*fromchar_account) (struct socket_data *session, int account_id, struct mmo_account *acc);
 	void (*fromchar_account_update_other) (int account_id, unsigned int state);
-	void (*fromchar_auth_ack) (int fd, int account_id, uint32 login_id1, uint32 login_id2, uint8 sex, int request_id, struct login_auth_node* node);
+	void (*fromchar_auth_ack) (struct socket_data *session, int account_id, uint32 login_id1, uint32 login_id2, uint8 sex, int request_id, struct login_auth_node* node);
 	void (*fromchar_ban) (int account_id, time_t timestamp);
 	void (*fromchar_change_sex_other) (int account_id, char sex);
-	void (*fromchar_pong) (int fd);
-	void (*fromchar_parse_auth) (int fd, int id, const char *ip);
-	void (*fromchar_parse_update_users) (int fd, int id);
-	void (*fromchar_parse_request_change_email) (int fd, int id, const char *ip);
-	void (*fromchar_parse_account_data) (int fd, int id, const char *ip);
-	void (*fromchar_parse_ping) (int fd);
-	void (*fromchar_parse_change_email) (int fd, int id, const char *ip);
-	void (*fromchar_parse_account_update) (int fd, int id, const char *ip);
-	void (*fromchar_parse_ban) (int fd, int id, const char *ip);
-	void (*fromchar_parse_change_sex) (int fd, int id, const char *ip);
-	void (*fromchar_parse_account_reg2) (int fd, int id, const char *ip);
-	void (*fromchar_parse_unban) (int fd, int id, const char *ip);
-	void (*fromchar_parse_account_online) (int fd, int id);
-	void (*fromchar_parse_account_offline) (int fd);
-	void (*fromchar_parse_online_accounts) (int fd, int id);
-	void (*fromchar_parse_request_account_reg2) (int fd);
-	void (*fromchar_parse_update_wan_ip) (int fd, int id);
-	void (*fromchar_parse_all_offline) (int fd, int id);
-	void (*fromchar_parse_change_pincode) (int fd);
-	bool (*fromchar_parse_wrong_pincode) (int fd);
-	void (*fromchar_parse_accinfo) (int fd);
-	int (*parse_fromchar) (int fd);
+	void (*fromchar_pong) (struct socket_data *session);
+
+	void (*fromchar_parse_auth) (struct s_receive_action_data *act, struct mmo_char_server *server);
+	void (*fromchar_parse_update_users) (struct s_receive_action_data *act, struct mmo_char_server *server);
+	void (*fromchar_parse_request_change_email) (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_account_data) (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_ping) (struct s_receive_action_data *act);
+	void (*fromchar_parse_change_email) (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_account_update) (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_ban) (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_change_sex)      (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_account_reg2)    (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_unban)           (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_account_online)  (struct s_receive_action_data *act, struct mmo_char_server *server);
+	void (*fromchar_parse_account_offline) (struct s_receive_action_data *act);
+	void (*fromchar_parse_online_accounts) (struct s_receive_action_data *act, struct mmo_char_server *server);
+	void (*fromchar_parse_request_account_reg2) (struct s_receive_action_data *act);
+	void (*fromchar_parse_update_wan_ip) (struct s_receive_action_data *act, struct mmo_char_server *server);
+	void (*fromchar_parse_all_offline)   (struct s_receive_action_data *act, struct mmo_char_server *server);
+	void (*fromchar_parse_change_pincode) (struct s_receive_action_data *act);
+	bool (*fromchar_parse_wrong_pincode) (struct s_receive_action_data *act);
+	void (*fromchar_parse_accinfo) (struct s_receive_action_data *act);
+	int (*parse_fromchar) (struct s_receive_action_data *act);
+
 	void (*kick) (struct login_session_data* sd);
 	void (*auth_ok) (struct login_session_data* sd);
 	void (*auth_failed) (struct login_session_data* sd, int result);
-	bool (*client_login) (int fd, struct login_session_data *sd);
-	bool (*client_login_otp) (int fd, struct login_session_data *sd);
-	void (*client_login_mobile_otp_request) (int fd, struct login_session_data *sd);
-	void (*char_server_connection_status) (int fd, struct login_session_data* sd, uint8 status);
-	void (*parse_request_connection) (int fd, struct login_session_data* sd, const char *ip, uint32 ipl);
+
+	bool (*client_login) (struct socket_data *session, struct login_session_data *sd);
+	bool (*client_login_otp) (struct socket_data *session, struct login_session_data *sd);
+	void (*client_login_mobile_otp_request) (struct socket_data *session, struct login_session_data *sd);
+	void (*char_server_connection_status) (struct socket_data *session, struct login_session_data* sd, uint8 status);
+
+	void (*parse_request_connection) (struct s_receive_action_data *act, struct login_session_data* sd, const char *ip, uint32 ipl);
+
 	void (*config_set_defaults) (void);
 	bool (*config_read) (const char *filename, bool included);
 	bool (*config_read_inter) (const char *filename, struct config_t *config, bool imported);
@@ -317,7 +383,8 @@ struct login_interface {
 	void (*clear_client_hash_nodes) (void);
 	void (*config_set_md5hash) (struct config_setting_t *setting);
 	uint16 (*convert_users_to_colors) (uint16 users);
-	int (*check_client_version) (struct login_session_data *sd);
+	bool (*check_client_version) (struct login_session_data *sd);
+
 	char *LOGIN_CONF_NAME;
 	char *NET_CONF_NAME; ///< Network configuration filename
 };
@@ -326,10 +393,10 @@ struct login_interface {
  * Login.c Interface
  **/
 struct lchrif_interface {
-	void (*server_init) (int id);
-	void (*server_destroy) (int id);
-	void (*server_reset) (int id);
-	void (*on_disconnect) (int id);
+	void (*server_destroy) (struct mmo_char_server *server);
+	void (*server_reset) (struct mmo_char_server *server);
+	struct mmo_char_server *(*server_find) (struct socket_data *session);
+	void (*on_disconnect) (struct mmo_char_server *server);
 };
 
 #ifdef HERCULES_CORE

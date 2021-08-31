@@ -633,7 +633,7 @@ HPExport const char *HPM_shared_symbols(int server_type)
 		return "skill";
 #endif // MAP_SKILL_H
 #ifdef COMMON_SOCKET_H /* sockt */
-	if ((server_type&(SERVER_TYPE_ALL)) != 0 && !HPM_SYMBOL("sockt", sockt))
+	if ((server_type&(SERVER_TYPE_ALL)) != 0 && !HPM_SYMBOL("socket_io", socket_io))
 		return "sockt";
 #endif // COMMON_SOCKET_H
 #ifdef COMMON_SQL_H /* SQL */

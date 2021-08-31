@@ -2892,14 +2892,14 @@ static int char_parse_fromlogin(int fd)
 			}
 			break;
 
-			case 0x2736: // Failed accinfo lookup to forward to mapserver
+			case 0x2744: // Failed accinfo lookup to forward to mapserver
 				if (RFIFOREST(fd) < 18)
 					return 0;
 
 				chr->parse_fromlogin_accinfo2_failed(fd);
 			break;
 
-			case 0x2737: // Successful accinfo lookup to forward to mapserver
+			case 0x2743: // Successful accinfo lookup to forward to mapserver
 				if (RFIFOREST(fd) < 183)
 					return 0;
 

@@ -276,7 +276,7 @@ HPExport const struct s_HPMDataCheck HPMDataCheck[] = {
 		{ "s_subnet", sizeof(struct s_subnet), SERVER_TYPE_ALL },
 		{ "s_subnet_vector", sizeof(struct s_subnet_vector), SERVER_TYPE_ALL },
 		{ "socket_data", sizeof(struct socket_data), SERVER_TYPE_ALL },
-		{ "socket_interface", sizeof(struct socket_interface), SERVER_TYPE_ALL },
+		{ "socket_interface", sizeof(struct socket_io_interface), SERVER_TYPE_ALL },
 	#else
 		#define COMMON_SOCKET_H
 	#endif // COMMON_SOCKET_H
@@ -364,7 +364,6 @@ HPExport const struct s_HPMDataCheck HPMDataCheck[] = {
 		{ "login_session_data", sizeof(struct login_session_data), SERVER_TYPE_LOGIN },
 		{ "mmo_char_server", sizeof(struct mmo_char_server), SERVER_TYPE_LOGIN },
 		{ "online_login_data", sizeof(struct online_login_data), SERVER_TYPE_LOGIN },
-		{ "s_login_dbs", sizeof(struct s_login_dbs), SERVER_TYPE_LOGIN },
 	#else
 		#define LOGIN_LOGIN_H
 	#endif // LOGIN_LOGIN_H
