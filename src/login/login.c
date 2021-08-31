@@ -107,7 +107,11 @@ static struct DBData login_create_online_user(const struct DBKey_s *key, va_list
 static struct online_login_data* login_add_online_user(int char_server, int account_id)
 {
 	struct online_login_data* p;
+
+	mutex->lock(login->online_db_mutex);
 	p = idb_ensure(login->online_db, account_id, login->create_online_user);
+	mutex->unlock(login->online_db_mutex);
+
 	p->char_server = char_server;
 	if( p->waiting_disconnect != INVALID_TIMER )
 	{
@@ -119,36 +123,50 @@ static struct online_login_data* login_add_online_user(int char_server, int acco
 
 /**
  * Removes account from online_db
+ * @see login_online_data_cleanup_sub
  **/
 static void login_remove_online_user(int account_id)
 {
 	struct online_login_data* p;
-	p = (struct online_login_data*)idb_get(login->online_db, account_id);
-	if( p == NULL )
-		return;
-	if( p->waiting_disconnect != INVALID_TIMER )
-		timer->delete(p->waiting_disconnect, login->waiting_disconnect_timer);
 
-	idb_remove(login->online_db, account_id);
+	mutex->lock(login->online_db_mutex);
+
+	p = (struct online_login_data*)idb_get(login->online_db, account_id);
+	if(p) {
+		if( p->waiting_disconnect != INVALID_TIMER )
+			timer->delete(p->waiting_disconnect, login->waiting_disconnect_timer);
+
+		idb_remove(login->online_db, account_id);
+	}
+
+	mutex->unlock(login->online_db_mutex);
 }
 
 /**
  * Timeout between disconnection from login-server and reconnection to char-server
+ * @see TimerFunc
  **/
 static int login_waiting_disconnect_timer(struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data)
 {
+	mutex->lock(login->online_db_mutex);
 	struct online_login_data* p = (struct online_login_data*)idb_get(login->online_db, id);
+	mutex->unlock(login->online_db_mutex);
+
 	if( p != NULL && p->waiting_disconnect == tid && p->account_id == id )
 	{
 		p->waiting_disconnect = INVALID_TIMER;
 		login->remove_online_user(id);
+
+		mutex->lock(login->auth_db_mutex);
 		idb_remove(login->auth_db, id);
+		mutex->unlock(login->auth_db_mutex);
 	}
 	return 0;
 }
 
 /**
  * @see DBApply
+ * @mutex login->online_db_mutex
  */
 static int login_online_db_setoffline(const struct DBKey_s *key, struct DBData *data, va_list ap)
 {
@@ -170,20 +188,41 @@ static int login_online_db_setoffline(const struct DBKey_s *key, struct DBData *
 }
 
 /**
- * @see DBApply
+ * Removes all online users that have an invalid char_server (ACC_DISCONNECTED)
+ * @see DBApply (online_db)
+ * @see login_online_data_cleanup
+ * @mutex login->online_db_mutex
  */
 static int login_online_data_cleanup_sub(const struct DBKey_s *key, struct DBData *data, va_list ap)
 {
 	struct online_login_data *character= DB->data2ptr(data);
-	nullpo_ret(character);
-	if (character->char_server == ACC_DISCONNECTED) //Unknown server.. set them offline
-		login->remove_online_user(character->account_id);
+	struct timer_interface *tm = NULL;
+
+	tm = va_arg(ap, struct timer_interface *);
+	/**
+	 * We don't call login->remove_online_user because it'll try to reacquire the mutex
+	 * and also we can't know if this function is being called from the timer thread
+	 * (with all the heap locks) or from an action worker, so we need to use the
+	 * timer interface provided by the system.
+	 **/
+	if(character->char_server == ACC_DISCONNECTED) {
+		if(character->waiting_disconnect != INVALID_TIMER)
+			tm->delete(character->waiting_disconnect, login->waiting_disconnect_timer);
+		login->online_db->remove(login->online_db, *key, NULL);
+	}
+
 	return 0;
 }
 
+/**
+ * Periodic removal of invalid entries in online_db
+ * @see TimerFunc
+ **/
 static int login_online_data_cleanup(struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data)
 {
-	login->online_db->foreach(login->online_db, login->online_data_cleanup_sub);
+	mutex->lock(login->online_db_mutex);
+	login->online_db->foreach(login->online_db, login->online_data_cleanup_sub, tm);
+	mutex->unlock(login->online_db_mutex);
 	return 0;
 }
 
@@ -277,7 +316,10 @@ static void lchrif_server_destroy(struct mmo_char_server *server)
 static void lchrif_server_reset(struct mmo_char_server *server)
 {
 	struct login_session_data *sd = server->session->session_data;
+
+	mutex->lock(login->online_db_mutex);
 	login->online_db->foreach(login->online_db, login->online_db_setoffline, sd->account_id);
+	mutex->unlock(login->online_db_mutex);
 
 	mutex->lock(server->session->mutex);
 	// Let char-server know that we're shutting down
@@ -414,7 +456,10 @@ static void login_fromchar_parse_auth(struct s_receive_action_data *act, struct 
 	int request_id = RFIFOL(act,19);
 	RFIFOSKIP(act,23);
 
+	mutex->lock(login->auth_db_mutex);
 	node = (struct login_auth_node*)idb_get(login->auth_db, account_id);
+	mutex->unlock(login->auth_db_mutex);
+
 	if( core->runflag == LOGINSERVER_ST_RUNNING &&
 		node != NULL &&
 		node->account_id == account_id &&
@@ -429,7 +474,9 @@ static void login_fromchar_parse_auth(struct s_receive_action_data *act, struct 
 		// send ack
 		login->fromchar_auth_ack(act->session, account_id, login_id1, login_id2, sex, request_id, node);
 		// each auth entry can only be used once
+		mutex->lock(login->auth_db_mutex);
 		idb_remove(login->auth_db, account_id);
+		mutex->unlock(login->auth_db_mutex);
 	}
 	else
 	{// authentication not found
@@ -904,6 +951,9 @@ static void login_fromchar_parse_online_accounts(struct s_receive_action_data *a
 	uint32 i, users;
 	struct login_session_data *sd = server->session->session_data;
 	int id = sd->account_id;
+
+	mutex->lock(login->online_db_mutex);
+
 	//Set all chars from this char-server offline first
 	login->online_db->foreach(login->online_db, login->online_db_setoffline, id);
 	users = RFIFOW(act,4);
@@ -917,6 +967,8 @@ static void login_fromchar_parse_online_accounts(struct s_receive_action_data *a
 			p->waiting_disconnect = INVALID_TIMER;
 		}
 	}
+
+	mutex->unlock(login->online_db_mutex);
 }
 
 /**
@@ -958,8 +1010,12 @@ static void login_fromchar_parse_all_offline(struct s_receive_action_data *act,
 ) {
 	struct login_session_data *sd = server->session->session_data;
 	ShowInfo("Setting accounts from char-server %d offline.\n", server->pos);
+
+	mutex->lock(login->online_db_mutex);
 	login->online_db->foreach(login->online_db, login->online_db_setoffline,
 		sd->account_id);
+	mutex->unlock(login->online_db_mutex);
+
 	RFIFOSKIP(act,2);
 }
 
@@ -990,7 +1046,9 @@ static bool login_fromchar_parse_wrong_pincode(struct s_receive_action_data *act
 	struct mmo_account acc;
 
 	if( accounts->load_num(accounts, &acc, RFIFOL(act,2) ) ) {
+		mutex->lock(login->online_db_mutex);
 		struct online_login_data* ld = (struct online_login_data*)idb_get(login->online_db,acc.account_id);
+		mutex->unlock(login->online_db_mutex);
 
 		if (ld == NULL) {
 			RFIFOSKIP(act,6);
@@ -1553,19 +1611,24 @@ static void login_auth_ok(struct login_session_data *sd)
 		return;
 	}
 
+	mutex->lock(login->online_db_mutex);
 	struct online_login_data* data = (struct online_login_data*)idb_get(login->online_db, sd->account_id);
 	if( data )
 	{// account is already marked as online!
 		switch(data->char_server) {
 			case ACC_WAIT_TIMEOUT: // client has authed but did not access char-server yet
 				// wipe previous session
+				mutex->lock(login->auth_db_mutex);
 				idb_remove(login->auth_db, sd->account_id);
+				mutex->unlock(login->auth_db_mutex);
+
 				login->remove_online_user(sd->account_id);
 				data = NULL;
 				break;
 			case ACC_DISCONNECTED:
 			case ACC_CHAR_VALID:
 			default: // Request char servers to kick this account out. [Skotlex]
+				mutex->unlock(login->online_db_mutex);
 				ShowNotice("User '%s' is already online - Rejected.\n", sd->userid);
 				login->kick(sd);
 				if( data->waiting_disconnect == INVALID_TIMER )
@@ -1576,6 +1639,7 @@ static void login_auth_ok(struct login_session_data *sd)
 				return;
 		}
 	}
+	mutex->unlock(login->online_db_mutex);
 
 	rwlock->read_lock(g_char_server_list_lock);
 	bool server_list = lclif->server_list(sd, &g_char_server_list);
@@ -1602,7 +1666,10 @@ static void login_auth_ok(struct login_session_data *sd)
 	node->clienttype = sd->clienttype;
 	node->group_id = sd->group_id;
 	node->expiration_time = sd->expiration_time;
+
+	mutex->lock(login->auth_db_mutex);
 	idb_put(login->auth_db, sd->account_id, node);
+	mutex->unlock(login->auth_db_mutex);
 
 
 	// mark client as 'online'
@@ -2388,6 +2455,8 @@ int do_final(void)
 	accounts = NULL;
 	login->online_db->destroy(login->online_db, NULL);
 	login->auth_db->destroy(login->auth_db, NULL);
+	mutex->destroy(login->online_db_mutex);
+	mutex->destroy(login->auth_db_mutex);
 
 	for(int i = 0; i < INDEX_MAP_LENGTH(g_char_server_list); i++) {
 		struct mmo_char_server *server = INDEX_MAP_INDEX(g_char_server_list, i);
@@ -2536,26 +2605,6 @@ int do_init(int argc, char **argv)
 	login->LOGIN_CONF_NAME = aStrdup("conf/login/login-server.conf");
 	login->NET_CONF_NAME   = aStrdup("conf/network.conf");
 
-	{
-		// TODO: Remove this when no longer needed.
-#define CHECK_OLD_LOCAL_CONF(oldname, newname) do { \
-	if (stat((oldname), &fileinfo) == 0 && fileinfo.st_size > 0) { \
-		ShowWarning("An old configuration file \"%s\" was found.\n", (oldname)); \
-		ShowWarning("If it contains settings you wish to keep, please merge them into \"%s\".\n", (newname)); \
-		ShowWarning("Otherwise, just delete it.\n"); \
-		ShowInfo("Resuming in 10 seconds...\n"); \
-		HSleep(10); \
-	} \
-} while (0)
-		struct stat fileinfo;
-
-		CHECK_OLD_LOCAL_CONF("conf/import/login_conf.txt", "conf/import/login-server.conf");
-		CHECK_OLD_LOCAL_CONF("conf/import/inter_conf.txt", "conf/import/inter-server.conf");
-		CHECK_OLD_LOCAL_CONF("conf/import/packet_conf.txt", "conf/import/socket.conf");
-
-#undef CHECK_OLD_LOCAL_CONF
-	}
-
 	lclif->init();
 
 	HPM_login_do_init();
@@ -2583,11 +2632,21 @@ int do_init(int argc, char **argv)
 
 	// Online user database init
 	login->online_db = idb_alloc(DB_OPT_RELEASE_DATA);
+	login->online_db_mutex = mutex->create();
+	if(!login->online_db_mutex) {
+		ShowFatalError("Failed to initialize online db\n");
+		exit(EXIT_FAILURE);
+	}
 	timer->add_func_list(login->waiting_disconnect_timer,
 		"login->waiting_disconnect_timer");
 
 	// Interserver auth init
 	login->auth_db = idb_alloc(DB_OPT_RELEASE_DATA);
+	login->auth_db_mutex = mutex->create();
+	if(!login->auth_db_mutex) {
+		ShowFatalError("Failed to initialize auth db\n");
+		exit(EXIT_FAILURE);
+	}
 
 	// Create login queue
 	action->queue_create(10, login->ers_collection);
