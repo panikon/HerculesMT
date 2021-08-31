@@ -84,6 +84,17 @@ struct rwlock_data *g_char_server_list_lock = NULL;
 #define AUTH_TIMEOUT 30000
 
 /**
+ * Linked list of all action workers active in this server with the
+ * char-server that's attached.
+ **/
+struct s_action_information {
+	uint32_t index;
+	struct mmo_char_server *server;
+};
+struct linkdb_node *action_information = NULL; // <server> <s_action_information>
+struct mutex_data *action_information_mutex = NULL;
+
+/**
  * Creates a new entry in online_db
  *
  * @see login_add_online_user
@@ -299,6 +310,15 @@ static void lchrif_server_destroy(struct mmo_char_server *server)
 	if(server) {
 		INDEX_MAP_REMOVE(g_char_server_list, server->pos);
 		socket_io->session_disconnect_guard(server->session);
+
+		mutex->lock(action_information_mutex);
+		struct s_action_information *data = linkdb_erase(&action_information, server);
+		if(data) {
+			data->server = NULL;
+			linkdb_insert(&action_information, NULL, data);
+		}
+		mutex->unlock(action_information_mutex);
+
 		aFree(server);
 	}
 
@@ -1982,10 +2002,31 @@ static void login_parse_request_connection(struct s_receive_action_data *act, st
 	sd->login_id1 = server->pos;
 	rwlock->write_unlock(g_char_server_list_lock);
 
+	// Find proper action worker for this char-server
+	mutex->lock(action_information_mutex);
+	struct s_action_information *data = linkdb_search(&action_information, NULL);
+	if(!data) { // Create a new action queue for this server
+		struct s_action_queue *queue = action->queue_create(10, login->ers_collection);
+		data = aMalloc(sizeof(*data));
+		data->index = action->queue_get_index(queue);
+		data->server = server;
+		action_information_mutex = mutex->create();
+		if(!action_information_mutex) {
+			ShowFatalError("Failed to initialize action information list\n");
+			exit(EXIT_FAILURE);
+		}
+	} else { // Remove and then reinsert with a server
+		data->server = server;
+		data = linkdb_erase(&action_information, NULL);
+	}
+	linkdb_insert(&action_information, server, data);
+	mutex->unlock(action_information_mutex);
+
 	mutex->lock(act->session->mutex);
 	socket_io->session_update_parse(act->session, login->parse_fromchar);
 	act->session->flag.server = 1;
 	act->session->flag.validate = 0;
+	action->queue_set(act->session, data->index);
 	mutex->unlock(act->session->mutex);
 
 	// send connection success
@@ -2531,6 +2572,8 @@ int do_final(void)
 	rwlock->destroy(g_char_server_list_lock);
 	g_char_server_list_lock = NULL;
 	INDEX_MAP_DESTROY(g_char_server_list);
+	mutex->destroy(action_information_mutex);
+	linkdb_final(&action_information); // TODO: free data
 
 	lclif->final();
 
@@ -2713,7 +2756,17 @@ int do_init(int argc, char **argv)
 	}
 
 	// Create login queue
-	action->queue_create(10, login->ers_collection);
+	struct s_action_queue *queue = action->queue_create(10, login->ers_collection);
+
+	struct s_action_information *ainfo = aMalloc(sizeof(*ainfo));
+	ainfo->index = action->queue_get_index(queue);
+	ainfo->server = NULL;
+	action_information_mutex = mutex->create();
+	if(!action_information_mutex) {
+		ShowFatalError("Failed to initialize action information list\n");
+		exit(EXIT_FAILURE);
+	}
+	linkdb_insert(&action_information, NULL, ainfo);
 
 	// set default parser as lclif->parse function
 	socket_io->set_defaultparse(lclif->parse);

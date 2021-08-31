@@ -2271,6 +2271,7 @@ HPShared struct db_interface *DB;
  * INDEX_MAP_REMOVE              - Removes entry from index map.              *
  * INDEX_MAP_ADD                 - Adds entry, grows map if necessary.        *
  * INDEX_MAP_LENGTH              - Length of entry array.                     *
+ * INDEX_MAP_EMPTY               - Next empty index.                          *
  * INDEX_MAP_COUNT               - Number of valid entries.                   *
  * INDEX_MAP_INDEX               - Returns object.                            *
  ******************************************************************************/
@@ -2388,6 +2389,15 @@ HPShared struct db_interface *DB;
 		(_new_index) = _empty_index;                                           \
 		(_im)._count_ = (_im)._count_+1;                                       \
 	} while(false)
+
+/**
+ * Finds next empty index
+ *
+ * @param _im Index map object
+ * @return Next empty index
+ * @retval -1 All entries occupied
+ **/
+#define INDEX_MAP_EMPTY(_im) (find_first_set_array((_im)._free_index_, (_im)._free_index_length_, true))
 
 /**
  * Number of valid entries.

@@ -78,6 +78,8 @@ static struct mutex_data *action_queue_list_mutex = NULL;
  **/
 static int32_t action_ready = 0;
 
+static thread_local int32_t l_list_index = -1;
+
 /**
  * Initial length of the action queue list (this number is multiplied by 32)
  * @see action_queue_init
@@ -122,6 +124,7 @@ void action_enqueue(struct s_action_queue *queue, ActionFunc perform, void *data
  * Sets queue id for a session
  * @param session
  * @return Success (bool)
+ * @mutex session->mutex
  **/
 bool action_queue_set(struct socket_data *session, int32_t queue_id)
 {
@@ -134,7 +137,39 @@ bool action_queue_set(struct socket_data *session, int32_t queue_id)
 }
 
 /**
+ * Returns a random action queue
+ * @return NULL No queues available
+ **/
+struct s_action_queue *action_queue_get_random(void)
+{
+	struct s_action_queue *queue = NULL;
+	int32_t empty_idx = INDEX_MAP_EMPTY(action_queue_list);
+	int32_t rnd_idx = 0;
+
+	if(empty_idx == 0) // No action queue available
+		return NULL;
+
+	if(empty_idx < 0)
+		rnd_idx = rnd->value(0, INDEX_MAP_LENGTH(action_queue_list)-1);
+	else
+		rnd_idx = rnd->value(0, empty_idx-1);
+	queue = INDEX_MAP_INDEX(action_queue_list, rnd_idx);
+	if(queue)
+		return queue;
+
+	// Shouldn't happen
+	ShowDebug("action_queue_get_random: Failed to find action queue\n");
+	for(int i = 0; i < INDEX_MAP_LENGTH(action_queue_list); i++) {
+		queue = INDEX_MAP_INDEX(action_queue_list, i);
+		if(queue)
+			return queue;
+	}
+	return NULL;
+}
+
+/**
  * Returns appropriate queue for a given session.
+ * When session doesn't have any queue attached randomizes and attaches a queue.
  *
  * @param session
  * @return Action queue
@@ -142,8 +177,12 @@ bool action_queue_set(struct socket_data *session, int32_t queue_id)
  **/
 struct s_action_queue *action_queue_get(const struct socket_data *session)
 {
-	if(session->action_queue_id < 0)
-		return NULL;
+	if(session->action_queue_id < 0) {
+		struct s_action_queue *queue = action->queue_get_random();
+		if(queue)
+			action->queue_set(session, action->queue_get_index(queue));
+		return queue;
+	}
 	if(session->action_queue_id >= INDEX_MAP_LENGTH(action_queue_list))
 		return NULL;
 	return INDEX_MAP_INDEX(action_queue_list, session->action_queue_id);
@@ -162,6 +201,26 @@ struct s_action_queue *action_queue_get_id(int32_t queue_id)
 	if(queue_id >= INDEX_MAP_LENGTH(action_queue_list))
 		return NULL;
 	return INDEX_MAP_INDEX(action_queue_list, queue_id);
+}
+
+/**
+ * Returns index of given queue
+ **/
+static uint32 action_queue_get_index(struct s_action_queue *queue)
+{
+	return queue->list_index;
+}
+
+/**
+ * Returns index of current thread
+ * @return -1 Not a valid action thread
+ **/
+static int32 action_queue_index(void)
+{
+	// Only action workers
+	if(!(thread->flag_get()&THREADFLAG_ACTION))
+		return -1;
+	return l_list_index;
 }
 
 /**
@@ -272,6 +331,7 @@ struct s_action_queue *action_queue_create(int initial_capacity, struct ers_coll
 	mutex->lock(action_queue_list_mutex);
 	INDEX_MAP_ADD(action_queue_list, queue, queue->list_index);
 	mutex->unlock(action_queue_list_mutex);
+	l_list_index = queue->list_index;
 	if(!thread->create("Action worker", action_worker, queue)) {
 		ShowError("action_queue_create: Failed to create new thread\n");
 		goto cleanup;
@@ -325,13 +385,16 @@ void action_queue_init(void)
 void action_defaults(void)
 {
 	action = &action_s;
-	action->ready          = action_ready_get;
-	action->enqueue        = action_enqueue;
-	action->queue_set      = action_queue_set;
-	action->queue_get      = action_queue_get;
-	action->queue_get_id   = action_queue_get_id;
-	action->queue_destroy  = action_queue_destroy;
-	action->queue_create   = action_queue_create;
+	action->ready            = action_ready_get;
+	action->enqueue          = action_enqueue;
+	action->queue_set        = action_queue_set;
+	action->queue_get_random = action_queue_get_random;
+	action->queue_get        = action_queue_get;
+	action->queue_get_id     = action_queue_get_id;
+	action->queue_get_index  = action_queue_get_index;
+	action->queue_get        = action_queue_get;
+	action->queue_destroy    = action_queue_destroy;
+	action->queue_create     = action_queue_create;
 
 	action->queue_final = action_queue_final;
 	action->queue_init  = action_queue_init;
