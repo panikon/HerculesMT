@@ -42,7 +42,7 @@ enum parsefunc_rcode {
 };
 
 /* Function Typedefs */
-typedef enum parsefunc_rcode (LoginParseFunc)(int fd, struct login_session_data *sd);
+typedef enum parsefunc_rcode (LoginParseFunc)(struct s_receive_action_data *act, struct login_session_data *sd);
 
 /* Structs */
 
@@ -73,13 +73,15 @@ struct lclif_interface {
 
 	/**
 	 * Sends the character server list to the client.
-	 *
-	 * @param sd The client to send to.
+	 * 
+	 * @param sd          The client to send to.
+	 * @param server_list Updated server list
 	 * @return Success status.
 	 * @retval false in case of failure (no server available).
 	 * @see #PACKET_AC_ACCEPT_LOGIN.
+	 * @readlock server_list
 	 */
-	bool (*server_list)(struct login_session_data *sd);
+	bool (*server_list)(struct login_session_data *sd, struct s_mmo_char_server_list *server_list);
 
 	/**
 	 * Reports an authentication failure to the client.
@@ -123,22 +125,19 @@ struct lclif_interface {
 	 * Parses a packet.
 	 *
 	 * @param lpd Packet database entry.
-	 * @param fd  Client connection file descriptor.
+	 * @param act Receive action.
 	 * @param sd  Session data.
 	 * @return Parse result error code.
 	 */
-	enum parsefunc_rcode (*parse_packet)(const struct login_packet_db *lpd, int fd, struct login_session_data *sd);
+	enum parsefunc_rcode (*parse_packet)(const struct login_packet_db *lpd, struct s_receive_action_data *act, struct login_session_data *sd);
 
 	/**
 	 * Packet parser loop function.
 	 *
 	 * Parses packets received from a client.
-	 *
-	 * @param fd Client connection file descriptor.
-	 * @return error code.
-	 * @retval 0 in case of success.
+	 * @param act Action to be processed.
 	 */
-	int (*parse)(int fd);
+	ActionParseFunc parse;
 };
 
 #ifdef HERCULES_CORE

@@ -39,6 +39,9 @@
 #include "common/strlib.h"
 #include "common/utils.h"
 
+#include "common/action.h"
+#include "common/mutex.h"
+
 /** @file
  * Implementation of the login client interface.
  */
@@ -60,27 +63,27 @@ static void lclif_connection_error(int fd, uint8 error)
 }
 
 /// @copydoc lclif_interface_private::parse_CA_CONNECT_INFO_CHANGED()
-static enum parsefunc_rcode lclif_parse_CA_CONNECT_INFO_CHANGED(int fd, struct login_session_data *sd) __attribute__((nonnull (2)));
-static enum parsefunc_rcode lclif_parse_CA_CONNECT_INFO_CHANGED(int fd, struct login_session_data *sd)
+static enum parsefunc_rcode lclif_parse_CA_CONNECT_INFO_CHANGED(struct s_receive_action_data *act, struct login_session_data *sd) __attribute__((nonnull (2)));
+static enum parsefunc_rcode lclif_parse_CA_CONNECT_INFO_CHANGED(struct s_receive_action_data *act, struct login_session_data *sd)
 {
 	return PACKET_VALID;
 }
 
 /// @copydoc lclif_interface_private::parse_CA_EXE_HASHCHECK()
-static enum parsefunc_rcode lclif_parse_CA_EXE_HASHCHECK(int fd, struct login_session_data *sd) __attribute__((nonnull (2)));
-static enum parsefunc_rcode lclif_parse_CA_EXE_HASHCHECK(int fd, struct login_session_data *sd)
+static enum parsefunc_rcode lclif_parse_CA_EXE_HASHCHECK(struct s_receive_action_data *act, struct login_session_data *sd) __attribute__((nonnull (2)));
+static enum parsefunc_rcode lclif_parse_CA_EXE_HASHCHECK(struct s_receive_action_data *act, struct login_session_data *sd)
 {
-	const struct PACKET_CA_EXE_HASHCHECK *packet = RP2PTR(fd);
+	const struct PACKET_CA_EXE_HASHCHECK *packet = RP2PTR(act);
 	sd->has_client_hash = 1;
 	memcpy(sd->client_hash, packet->hash_value, 16);
 	return PACKET_VALID;
 }
 
 /// @copydoc lclif_interface_private::parse_CA_LOGIN()
-static enum parsefunc_rcode lclif_parse_CA_LOGIN(int fd, struct login_session_data *sd) __attribute__((nonnull (2)));
-static enum parsefunc_rcode lclif_parse_CA_LOGIN(int fd, struct login_session_data *sd)
+static enum parsefunc_rcode lclif_parse_CA_LOGIN(struct s_receive_action_data *act, struct login_session_data *sd) __attribute__((nonnull (2)));
+static enum parsefunc_rcode lclif_parse_CA_LOGIN(struct s_receive_action_data *act, struct login_session_data *sd)
 {
-	const struct PACKET_CA_LOGIN *packet = RP2PTR(fd);
+	const struct PACKET_CA_LOGIN *packet = RP2PTR(act);
 
 	sd->version = packet->version;
 	sd->clienttype = packet->clienttype;
@@ -91,15 +94,15 @@ static enum parsefunc_rcode lclif_parse_CA_LOGIN(int fd, struct login_session_da
 		md5->string(sd->passwd, sd->passwd);
 	sd->passwdenc = PWENC_NONE;
 
-	login->client_login(fd, sd);
+	login->client_login(act, sd);
 	return PACKET_VALID;
 }
 
 /// @copydoc lclif_interface_private::parse_CA_LOGIN2()
-static enum parsefunc_rcode lclif_parse_CA_LOGIN2(int fd, struct login_session_data *sd) __attribute__((nonnull (2)));
-static enum parsefunc_rcode lclif_parse_CA_LOGIN2(int fd, struct login_session_data *sd)
+static enum parsefunc_rcode lclif_parse_CA_LOGIN2(struct s_receive_action_data *act, struct login_session_data *sd) __attribute__((nonnull (2)));
+static enum parsefunc_rcode lclif_parse_CA_LOGIN2(struct s_receive_action_data *act, struct login_session_data *sd)
 {
-	const struct PACKET_CA_LOGIN2 *packet = RP2PTR(fd);
+	const struct PACKET_CA_LOGIN2 *packet = RP2PTR(act);
 
 	sd->version = packet->version;
 	sd->clienttype = packet->clienttype;
@@ -107,15 +110,15 @@ static enum parsefunc_rcode lclif_parse_CA_LOGIN2(int fd, struct login_session_d
 	bin2hex(sd->passwd, packet->password_md5, 16);
 	sd->passwdenc = PASSWORDENC;
 
-	login->client_login(fd, sd);
+	login->client_login(act, sd);
 	return PACKET_VALID;
 }
 
 /// @copydoc lclif_interface_private::parse_CA_LOGIN3()
-static enum parsefunc_rcode lclif_parse_CA_LOGIN3(int fd, struct login_session_data *sd) __attribute__((nonnull (2)));
-static enum parsefunc_rcode lclif_parse_CA_LOGIN3(int fd, struct login_session_data *sd)
+static enum parsefunc_rcode lclif_parse_CA_LOGIN3(struct s_receive_action_data *act, struct login_session_data *sd) __attribute__((nonnull (2)));
+static enum parsefunc_rcode lclif_parse_CA_LOGIN3(struct s_receive_action_data *act, struct login_session_data *sd)
 {
-	const struct PACKET_CA_LOGIN3 *packet = RP2PTR(fd);
+	const struct PACKET_CA_LOGIN3 *packet = RP2PTR(act);
 
 	sd->version = packet->version;
 	sd->clienttype = packet->clienttype;
@@ -125,15 +128,15 @@ static enum parsefunc_rcode lclif_parse_CA_LOGIN3(int fd, struct login_session_d
 	bin2hex(sd->passwd, packet->password_md5, 16);
 	sd->passwdenc = PASSWORDENC;
 
-	login->client_login(fd, sd);
+	login->client_login(act, sd);
 	return PACKET_VALID;
 }
 
 /// @copydoc lclif_interface_private::parse_CA_LOGIN4()
-static enum parsefunc_rcode lclif_parse_CA_LOGIN4(int fd, struct login_session_data *sd) __attribute__((nonnull (2)));
-static enum parsefunc_rcode lclif_parse_CA_LOGIN4(int fd, struct login_session_data *sd)
+static enum parsefunc_rcode lclif_parse_CA_LOGIN4(struct s_receive_action_data *act, struct login_session_data *sd) __attribute__((nonnull (2)));
+static enum parsefunc_rcode lclif_parse_CA_LOGIN4(struct s_receive_action_data *act, struct login_session_data *sd)
 {
-	const struct PACKET_CA_LOGIN4 *packet = RP2PTR(fd);
+	const struct PACKET_CA_LOGIN4 *packet = RP2PTR(act);
 
 	sd->version = packet->version;
 	sd->clienttype = packet->clienttype;
@@ -143,15 +146,15 @@ static enum parsefunc_rcode lclif_parse_CA_LOGIN4(int fd, struct login_session_d
 	bin2hex(sd->passwd, packet->password_md5, 16);
 	sd->passwdenc = PASSWORDENC;
 
-	login->client_login(fd, sd);
+	login->client_login(act, sd);
 	return PACKET_VALID;
 }
 
 /// @copydoc lclif_interface_private::parse_CA_LOGIN_PCBANG()
-static enum parsefunc_rcode lclif_parse_CA_LOGIN_PCBANG(int fd, struct login_session_data *sd) __attribute__((nonnull (2)));
-static enum parsefunc_rcode lclif_parse_CA_LOGIN_PCBANG(int fd, struct login_session_data *sd)
+static enum parsefunc_rcode lclif_parse_CA_LOGIN_PCBANG(struct s_receive_action_data *act, struct login_session_data *sd) __attribute__((nonnull (2)));
+static enum parsefunc_rcode lclif_parse_CA_LOGIN_PCBANG(struct s_receive_action_data *act, struct login_session_data *sd)
 {
-	const struct PACKET_CA_LOGIN_PCBANG *packet = RP2PTR(fd);
+	const struct PACKET_CA_LOGIN_PCBANG *packet = RP2PTR(act);
 
 	sd->version = packet->version;
 	sd->clienttype = packet->clienttype;
@@ -165,15 +168,15 @@ static enum parsefunc_rcode lclif_parse_CA_LOGIN_PCBANG(int fd, struct login_ses
 		md5->string(sd->passwd, sd->passwd);
 	sd->passwdenc = PWENC_NONE;
 
-	login->client_login(fd, sd);
+	login->client_login(act, sd);
 	return PACKET_VALID;
 }
 
 /// @copydoc lclif_interface_private::parse_CA_LOGIN_HAN()
-static enum parsefunc_rcode lclif_parse_CA_LOGIN_HAN(int fd, struct login_session_data *sd) __attribute__((nonnull (2)));
-static enum parsefunc_rcode lclif_parse_CA_LOGIN_HAN(int fd, struct login_session_data *sd)
+static enum parsefunc_rcode lclif_parse_CA_LOGIN_HAN(struct s_receive_action_data *act, struct login_session_data *sd) __attribute__((nonnull (2)));
+static enum parsefunc_rcode lclif_parse_CA_LOGIN_HAN(struct s_receive_action_data *act, struct login_session_data *sd)
 {
-	const struct PACKET_CA_LOGIN_HAN *packet = RP2PTR(fd);
+	const struct PACKET_CA_LOGIN_HAN *packet = RP2PTR(act);
 
 	sd->version = packet->version;
 	sd->clienttype = packet->clienttype;
@@ -188,20 +191,21 @@ static enum parsefunc_rcode lclif_parse_CA_LOGIN_HAN(int fd, struct login_sessio
 		md5->string(sd->passwd, sd->passwd);
 	sd->passwdenc = PWENC_NONE;
 
-	login->client_login(fd, sd);
+	login->client_login(act, sd);
 	return PACKET_VALID;
 }
 
 /// @copydoc lclif_interface_private::parse_CA_SSO_LOGIN_REQ()
-static enum parsefunc_rcode lclif_parse_CA_SSO_LOGIN_REQ(int fd, struct login_session_data *sd) __attribute__((nonnull (2)));
-static enum parsefunc_rcode lclif_parse_CA_SSO_LOGIN_REQ(int fd, struct login_session_data *sd)
+static enum parsefunc_rcode lclif_parse_CA_SSO_LOGIN_REQ(struct s_receive_action_data *act, struct login_session_data *sd) __attribute__((nonnull (2)));
+static enum parsefunc_rcode lclif_parse_CA_SSO_LOGIN_REQ(struct s_receive_action_data *act, struct login_session_data *sd)
 {
-	const struct PACKET_CA_SSO_LOGIN_REQ *packet = RP2PTR(fd);
-	int tokenlen = (int)RFIFOREST(fd) - (int)sizeof(*packet);
+	const struct PACKET_CA_SSO_LOGIN_REQ *packet = RP2PTR(act);
+	int tokenlen = (int)RFIFOREST(act) - (int)sizeof(*packet);
 
 	if (tokenlen > PASSWD_LEN || tokenlen < 1) {
-		ShowError("PACKET_CA_SSO_LOGIN_REQ: Token length is not between allowed password length, kicking player ('%s')", packet->id);
-		sockt->eof(fd);
+		ShowError("PACKET_CA_SSO_LOGIN_REQ: Token length is not between allowed "
+			"password length, kicking player ('%s')", packet->id);
+		socket_io->session_disconnect_guard(act->session);
 		return PACKET_VALID;
 	}
 
@@ -214,80 +218,78 @@ static enum parsefunc_rcode lclif_parse_CA_SSO_LOGIN_REQ(int fd, struct login_se
 		md5->string(sd->passwd, sd->passwd);
 	sd->passwdenc = PWENC_NONE;
 
-	login->client_login(fd, sd);
+	login->client_login(act, sd);
 	return PACKET_VALID;
 }
 
 /// @copydoc lclif_interface_private::parse_CA_LOGIN_OTP()
-static enum parsefunc_rcode lclif_parse_CA_LOGIN_OTP(int fd, struct login_session_data *sd) __attribute__((nonnull (2)));
-static enum parsefunc_rcode lclif_parse_CA_LOGIN_OTP(int fd, struct login_session_data *sd)
+static enum parsefunc_rcode lclif_parse_CA_LOGIN_OTP(struct s_receive_action_data *act, struct login_session_data *sd) __attribute__((nonnull (2)));
+static enum parsefunc_rcode lclif_parse_CA_LOGIN_OTP(struct s_receive_action_data *act, struct login_session_data *sd)
 {
 	//const struct PACKET_CA_LOGIN_OTP *packet = RP2PTR(fd);
-	login->client_login_otp(fd, sd);
+	login->client_login_otp(act, sd);
 	return PACKET_VALID;
 }
 
 /// @copydoc lclif_interface_private::parse_CA_ACK_MOBILE_OTP()
-static enum parsefunc_rcode lclif_parse_CA_ACK_MOBILE_OTP(int fd, struct login_session_data *sd) __attribute__((nonnull (2)));
-static enum parsefunc_rcode lclif_parse_CA_ACK_MOBILE_OTP(int fd, struct login_session_data *sd)
+static enum parsefunc_rcode lclif_parse_CA_ACK_MOBILE_OTP(struct s_receive_action_data *act, struct login_session_data *sd) __attribute__((nonnull (2)));
+static enum parsefunc_rcode lclif_parse_CA_ACK_MOBILE_OTP(struct s_receive_action_data *act, struct login_session_data *sd)
 {
 	// TODO: parsing packet data
 	return PACKET_VALID;
 }
 
 /// @copydoc lclif_interface_private::parse_CA_OTP_CODE()
-static enum parsefunc_rcode lclif_parse_CA_OTP_CODE(int fd, struct login_session_data *sd) __attribute__((nonnull (2)));
-static enum parsefunc_rcode lclif_parse_CA_OTP_CODE(int fd, struct login_session_data *sd)
+static enum parsefunc_rcode lclif_parse_CA_OTP_CODE(struct s_receive_action_data *act, struct login_session_data *sd) __attribute__((nonnull (2)));
+static enum parsefunc_rcode lclif_parse_CA_OTP_CODE(struct s_receive_action_data *act, struct login_session_data *sd)
 {
 	// TODO: parsing packet data
 	return PACKET_VALID;
 }
 
 /// @copydoc lclif_interface_private::parse_CA_REQ_HASH()
-static enum parsefunc_rcode lclif_parse_CA_REQ_HASH(int fd, struct login_session_data *sd) __attribute__((nonnull (2)));
-static enum parsefunc_rcode lclif_parse_CA_REQ_HASH(int fd, struct login_session_data *sd)
+static enum parsefunc_rcode lclif_parse_CA_REQ_HASH(struct s_receive_action_data *act, struct login_session_data *sd) __attribute__((nonnull (2)));
+static enum parsefunc_rcode lclif_parse_CA_REQ_HASH(struct s_receive_action_data *act, struct login_session_data *sd)
 {
 	memset(sd->md5key, '\0', sizeof(sd->md5key));
 	sd->md5keylen = (uint16)(12 + rnd() % 4);
 	md5->salt(sd->md5keylen, sd->md5key);
 
-	lclif->coding_key(fd, sd);
+	lclif->coding_key(act, sd);
 	return PACKET_VALID;
 }
 
 /// @copydoc lclif_interface_private::parse_CA_CHARSERVERCONNECT()
-static enum parsefunc_rcode lclif_parse_CA_CHARSERVERCONNECT(int fd, struct login_session_data *sd) __attribute__((nonnull (2)));
-static enum parsefunc_rcode lclif_parse_CA_CHARSERVERCONNECT(int fd, struct login_session_data *sd)
+static enum parsefunc_rcode lclif_parse_CA_CHARSERVERCONNECT(struct s_receive_action_data *act, struct login_session_data *sd) __attribute__((nonnull (2)));
+static enum parsefunc_rcode lclif_parse_CA_CHARSERVERCONNECT(struct s_receive_action_data *act, struct login_session_data *sd)
 {
 	char ip[16];
-	uint32 ipl = sockt->session[fd]->client_addr;
-	sockt->ip2str(ipl, ip);
+	uint32 ipl = act->session->client_addr; // Doesn't change during connection, no mutex
+	socket_io->ip2str(ipl, ip);
 
-	login->parse_request_connection(fd, sd, ip, ipl);
+	login->parse_request_connection(act, sd, ip, ipl);
 
 	return PACKET_STOPPARSE;
 }
 
 /// @copydoc lclif_interface::server_list()
-static bool lclif_send_server_list(struct login_session_data *sd)
+static bool lclif_send_server_list(struct login_session_data *sd, struct s_mmo_char_server_list *server_list)
 {
 	int server_num = 0, i, n, length;
 	uint32 ip;
 	struct PACKET_AC_ACCEPT_LOGIN *packet = NULL;
 
-	for (i = 0; i < ARRAYLENGTH(login->dbs->server); ++i) {
-		if (sockt->session_is_active(login->dbs->server[i].fd))
-			server_num++;
-	}
+	server_num = INDEX_MAP_COUNT(*server_list);
+
 	if (server_num == 0)
 		return false;
 
 	length = sizeof(*packet) + sizeof(packet->server_list[0]) * server_num;
-	ip = sockt->session[sd->fd]->client_addr;
+	ip = sd->session->client_addr;
 
 	// Allocate the packet
-	WFIFOHEAD(sd->fd, length);
-	packet = WP2PTR(sd->fd);
+	WFIFOHEAD(sd->session, length, true);
+	packet = WP2PTR(sd->session);
 
 #if PACKETVER < 20170315
 	packet->packet_id = HEADER_AC_ACCEPT_LOGIN;
@@ -301,27 +303,27 @@ static bool lclif_send_server_list(struct login_session_data *sd)
 	packet->last_login_ip = 0; // Not used anymore
 	memset(packet->last_login_time, '\0', sizeof(packet->last_login_time)); // Not used anymore
 	packet->sex = sex_str2num(sd->sex);
-	for (i = 0, n = 0; i < ARRAYLENGTH(login->dbs->server); ++i) {
+	for (i = 0, n = 0; i < INDEX_MAP_LENGTH(*server_list); ++i) {
 		uint32 subnet_char_ip;
-
-		if (!sockt->session_is_valid(login->dbs->server[i].fd))
+		struct mmo_char_server *server = INDEX_MAP_INDEX(*server_list, i);
+		if(!server)
 			continue;
 
 		subnet_char_ip = login->lan_subnet_check(ip);
-		packet->server_list[n].ip = htonl((subnet_char_ip) ? subnet_char_ip : login->dbs->server[i].ip);
-		packet->server_list[n].port = sockt->ntows(htons(login->dbs->server[i].port)); // [!] LE byte order here [!]
-		safestrncpy(packet->server_list[n].name, login->dbs->server[i].name, 20);
-		packet->server_list[n].usercount = login->convert_users_to_colors(login->dbs->server[i].users);
+		packet->server_list[n].ip = htonl((subnet_char_ip) ? subnet_char_ip : server->ip);
+		packet->server_list[n].port = socket_io->ntows(htons(server->port)); // [!] LE byte order here [!]
+		safestrncpy(packet->server_list[n].name, server->name, 20);
+		packet->server_list[n].usercount = login->convert_users_to_colors(server->users);
 
-		if (login->dbs->server[i].type == CST_PAYING && sd->expiration_time > time(NULL))
+		if (server->type == CST_PAYING && sd->expiration_time > time(NULL))
 			packet->server_list[n].property = CST_NORMAL;
 		else
-			packet->server_list[n].property = login->dbs->server[i].type;
+			packet->server_list[n].property = server->type;
 
-		packet->server_list[n].state = login->dbs->server[i].new_;
+		packet->server_list[n].state = server->new_;
 		++n;
 	}
-	WFIFOSET(sd->fd, length);
+	WFIFOSET(sd->session, length);
 
 	return true;
 }
@@ -351,15 +353,16 @@ static void lclif_send_auth_failed(int fd, time_t ban, uint32 error)
 }
 
 /// @copydoc lclif_interface::login_error()
-static void lclif_send_login_error(int fd, uint8 error)
+static void lclif_send_login_error(struct socket_data *session, uint8 error)
 {
 	struct PACKET_AC_REFUSE_LOGIN *packet = NULL;
-	WFIFOHEAD(fd, sizeof(*packet));
-	packet = WP2PTR(fd);
+	// Only called from lclif->parse with session mutex
+	WFIFOHEAD(session, sizeof(*packet), false);
+	packet = WP2PTR(session);
 	packet->packet_id = HEADER_AC_REFUSE_LOGIN;
 	packet->error_code = error;
 	memset(packet->block_date, '\0', sizeof(packet->block_date));
-	WFIFOSET(fd, sizeof(*packet));
+	WFIFOSET(session, sizeof(*packet));
 }
 
 /// @copydoc lclif_interface::coding_key()
@@ -378,45 +381,50 @@ static void lclif_send_coding_key(int fd, struct login_session_data *sd)
 }
 
 /// @copydoc lclif_interface::parse()
-static int lclif_parse(int fd)
+static void *lclif_parse(struct s_receive_action_data *act)
 {
 	struct login_session_data *sd = NULL;
 	int i;
-	char ip[16];
-	uint32 ipl = sockt->session[fd]->client_addr;
-	sockt->ip2str(ipl, ip);
 
-	if (sockt->session[fd]->flag.eof) {
-		ShowInfo("Closed connection from '"CL_WHITE"%s"CL_RESET"'.\n", ip);
-		sockt->close(fd);
+	mutex->lock(act->session->mutex);
+	uint32 ipl = act->session->client_addr;
+
+	if(socket_io->session_marked_removal(act->session)) {
+		ShowInfo("Closed connection from '"CL_WHITE"%s"CL_RESET"'.\n",
+			socket_io->ip2str(ipl, NULL));
+		socket_io->session_disconnect(act->session);
+		mutex->unlock(act->session->mutex);
 		return 0;
 	}
 
-	if ((sd = sockt->session[fd]->session_data) == NULL) {
+	if(act->session->session_data == NULL) { // First contact with login-server
 		// Perform ip-ban check
-		if (login->config->ipban && !sockt->trusted_ip_check(ipl) && ipban->check(ipl)) {
-			ShowStatus("Connection refused: IP isn't authorized (deny/allow, ip: %s).\n", ip);
+		if (login->config->ipban && !socket_io->trusted_ip_check(ipl) && ipban->check(ipl)) {
+			ShowStatus("Connection refused: IP isn't authorized (deny/allow, ip: %s).\n",
+				socket_io->ip2str(ipl, NULL));
 			loginlog->log(ipl, "unknown", -3, "ip banned");
-			lclif->login_error(fd, 3); // 3 = Rejected from Server
-			sockt->eof(fd);
+			lclif->login_error(act, 3); // 3 = Rejected from Server
+			socket_io->session_disconnect(act->session);
+			mutex->unlock(act->session->mutex);
 			return 0;
 		}
 
 		// create a session for this new connection
-		CREATE(sockt->session[fd]->session_data, struct login_session_data, 1);
-		sd = sockt->session[fd]->session_data;
-		sd->fd = fd;
+		CREATE(act->session->session_data, struct login_session_data, 1);
+		sd = act->session->session_data;
+		sd->session = act->session;
 	}
+	mutex->unlock(act->session->mutex);
 
 	for (i = 0; i < MAX_PROCESSED_PACKETS; ++i) {
 		enum parsefunc_rcode result;
-		int16 packet_id = RFIFOW(fd, 0);
-		int packet_len = (int)RFIFOREST(fd);
+		int16 packet_id = RFIFOW(act, 0);
+		int packet_len = (int)RFIFOREST(act);
 
 		if (packet_len < 2)
 			return 0;
 
-		result = lclif->p->parse_sub(fd, sd);
+		result = lclif->p->parse_sub(act, sd);
 
 		switch (result) {
 		case PACKET_VALID:
@@ -426,18 +434,22 @@ static int lclif_parse(int fd)
 		case PACKET_STOPPARSE:
 			return 0;
 		case PACKET_UNKNOWN:
-			ShowWarning("lclif_parse: Received unsupported packet (packet 0x%04x, %d bytes received), disconnecting session #%d.\n", (unsigned int)packet_id, packet_len, fd);
+			ShowWarning("lclif_parse: Received unsupported packet (packet 0x%04x, "
+				"%d bytes received), disconnecting session #%d.\n",
+				(unsigned int)packet_id, packet_len, act->session->id);
 #ifdef DUMP_INVALID_PACKET
 			ShowDump(RFIFOP(fd, 0), RFIFOREST(fd));
 #endif
-			sockt->eof(fd);
+			socket_io->session_disconnect_guard(act->session);
 			return 0;
 		case PACKET_INVALIDLENGTH:
-			ShowWarning("lclif_parse: Received packet 0x%04x specifies invalid packet_len (%d), disconnecting session #%d.\n", (unsigned int)packet_id, packet_len, fd);
+			ShowWarning("lclif_parse: Received packet 0x%04x specifies invalid "
+				"packet_len (%d), disconnecting session #%d.\n",
+				(unsigned int)packet_id, packet_len, act->session->id);
 #ifdef DUMP_INVALID_PACKET
 			ShowDump(RFIFOP(fd, 0), RFIFOREST(fd));
 #endif
-			sockt->eof(fd);
+			socket_io->session_disconnect_guard(act->session);
 			return 0;
 		}
 	}
@@ -445,14 +457,14 @@ static int lclif_parse(int fd)
 }
 
 /// @copydoc lclif_interface_private::parse_sub()
-static enum parsefunc_rcode lclif_parse_sub(int fd, struct login_session_data *sd)
+static enum parsefunc_rcode lclif_parse_sub(struct s_receive_action_data *act, struct login_session_data *sd)
 {
-	int packet_len = (int)RFIFOREST(fd);
-	int16 packet_id = RFIFOW(fd, 0);
+	int packet_len = (int)RFIFOREST(act);
+	int16 packet_id = RFIFOW(act, 0);
 	const struct login_packet_db *lpd;
 
 	if (VECTOR_LENGTH(HPM->packets[hpParse_Login]) > 0) {
-		int result = HPM->parse_packets(fd, packet_id, hpParse_Login);
+		int result = HPM->parse_packets(act, packet_id, hpParse_Login);
 		if (result == 1)
 			return PACKET_VALID;
 		if (result == 2)
@@ -476,17 +488,17 @@ static enum parsefunc_rcode lclif_parse_sub(int fd, struct login_session_data *s
 		if (packet_len < 4)
 			return PACKET_INCOMPLETE; //Packet incomplete
 
-		packet_var_len = RFIFOW(fd, 2);
+		packet_var_len = RFIFOW(act, 2);
 
 		if (packet_var_len < 4 || packet_var_len > SINT16_MAX)
 			return PACKET_INVALIDLENGTH; //Something is wrong, close connection.
 
-		if (RFIFOREST(fd) < packet_var_len)
+		if (RFIFOREST(act) < packet_var_len)
 			return PACKET_INCOMPLETE; //Packet incomplete again.
 
-		return lclif->parse_packet(lpd, fd, sd);
+		return lclif->parse_packet(lpd, act, sd);
 	} else if (lpd->len <= packet_len) {
-		return lclif->parse_packet(lpd, fd, sd);
+		return lclif->parse_packet(lpd, act, sd);
 	}
 
 	return PACKET_VALID;
@@ -505,11 +517,12 @@ static const struct login_packet_db *lclif_packet(int16 packet_id)
 }
 
 /// @copydoc lclif_interface::parse_packet()
-static enum parsefunc_rcode lclif_parse_packet(const struct login_packet_db *lpd, int fd, struct login_session_data *sd)
-{
+static enum parsefunc_rcode lclif_parse_packet(const struct login_packet_db *lpd,
+	struct s_receive_action_data *act, struct login_session_data *sd
+) {
 	int result;
-	result = (*lpd->pFunc)(fd, sd);
-	RFIFOSKIP(fd, (lpd->len == -1) ? RFIFOW(fd, 2) : lpd->len);
+	result = (*lpd->pFunc)(act, sd);
+	RFIFOSKIP(act, (lpd->len == -1) ? RFIFOW(act, 2) : lpd->len);
 	return result;
 }
 

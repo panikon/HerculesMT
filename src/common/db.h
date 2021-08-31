@@ -2271,6 +2271,7 @@ HPShared struct db_interface *DB;
  * INDEX_MAP_REMOVE              - Removes entry from index map.              *
  * INDEX_MAP_ADD                 - Adds entry, grows map if necessary.        *
  * INDEX_MAP_LENGTH              - Length of entry array.                     *
+ * INDEX_MAP_COUNT               - Number of valid entries.                   *
  * INDEX_MAP_INDEX               - Returns object.                            *
  ******************************************************************************/
 
@@ -2291,6 +2292,7 @@ HPShared struct db_interface *DB;
 		_type **_data_;                  \
 		uint32_t *_free_index_;          \
 		uint32_t _free_index_length_;    \
+		uint32_t _count_;                \
 		enum memory_type _mt_;           \
 	}
 /**
@@ -2304,13 +2306,14 @@ HPShared struct db_interface *DB;
 		_type **_data_;                     \
 		uint32_t *_free_index_;             \
 		uint32_t _free_index_length_;       \
+		uint32_t _count_;                   \
 		enum memory_type _mt_;              \
 	}
 
 /**
  * Static initializer.
  **/
-#define INDEX_MAP_STATIC_INITIALIZER(_mem) {NULL, NULL, 0, (_mem)}
+#define INDEX_MAP_STATIC_INITIALIZER(_mem) {NULL, NULL, 0, 0, (_mem)}
 
 /**
  * Sets up a new index map.
@@ -2328,6 +2331,7 @@ HPShared struct db_interface *DB;
 									(_im)._mt_);                                   \
 		(_im)._free_index_length_ = (_sz);                                         \
 		memset((_im)._free_index_, UINT32_MAX, sizeof(*(_im)._free_index_)*(_sz)); \
+		(_im)._count_ = 0;                                                         \
 	} while(false)
 		
 /**
@@ -2351,6 +2355,7 @@ HPShared struct db_interface *DB;
 	do {                                                \
 		(_im)._data_[(_pos)] = NULL;                    \
 		BIT_SET((_im)._free_index_[(_pos)/32], (_pos)); \
+		(_im)._count_ = (_im)._count_-1;                \
 	} while(false)
 
 /**
@@ -2381,7 +2386,15 @@ HPShared struct db_interface *DB;
 		}                                                                      \
 		(_im)._data_[_empty_index] = (_val);                                   \
 		(_new_index) = _empty_index;                                           \
+		(_im)._count_ = (_im)._count_+1;                                       \
 	} while(false)
+
+/**
+ * Number of valid entries.
+ *
+ * @param _im  Index map object
+ **/
+#define INDEX_MAP_COUNT(_im) ((_im)._count_)
 
 /**
  * Length of entry array.

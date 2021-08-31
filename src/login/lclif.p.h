@@ -68,7 +68,7 @@ struct lclif_interface_private {
 	 * @param sd  Session data.
 	 * @return Parse result error code.
 	 */
-	enum parsefunc_rcode (*parse_sub)(int fd, struct login_session_data *sd);
+	enum parsefunc_rcode (*parse_sub)(struct s_receive_action_data *act, struct login_session_data *sd);
 
 	LoginParseFunc *parse_CA_CONNECT_INFO_CHANGED; ///< Packet handler for #PACKET_CA_CONNECT_INFO_CHANGED.
 	LoginParseFunc *parse_CA_EXE_HASHCHECK;        ///< Packet handler for #PACKET_CA_EXE_HASHCHECK.
