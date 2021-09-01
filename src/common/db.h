@@ -1005,7 +1005,15 @@ struct linkdb_node {
 	void               *data;
 };
 
-typedef void (*LinkDBFunc)(void* key, void* data, va_list args);
+/**
+ * Function to be applied to an item when calling linkdb_foreach
+ *
+ * @see linkdb_vforeach
+ * @see linkdb_foreach
+ * @retval 0 Keep item
+ * @retval 1 Remove item
+ **/
+typedef int (*LinkDBFunc)(void *key, void *data, va_list args);
 
 #ifdef HERCULES_CORE
 void  linkdb_insert  (struct linkdb_node** head, void *key, void* data); // Doesn't take into account duplicate keys

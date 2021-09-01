@@ -69,7 +69,7 @@ struct TimerData {
 	int interval;
 
 	unsigned char timer_target;
-	int32_t target_id;
+	int32_t target_id; // Target id (session or action id depending on target)
 
 	// general-purpose storage
 	int id;
@@ -104,6 +104,7 @@ struct timer_interface {
 
 	unsigned long (*get_uptime) (void);
 
+	void (*update) (int tid, int64 tick, bool acquire_lock);
 	int (*perform) (int64 tick);
 	void (*init) (void);
 	void (*final) (void);

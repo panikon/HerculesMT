@@ -769,7 +769,7 @@ static int vShowMessage_thread_(enum msg_type flag, const char *string, va_list 
 static int showmsg_print(enum msg_type flag, const char *string, int str_len);
 
 /**
- * Dequeues all remaining messages and prints  them via showmsg_print
+ * Dequeues all remaining messages and prints them via showmsg_print
  * @mutex showmsg_mutex
  **/
 static void showmsg_dequeue_print(void)
@@ -930,7 +930,7 @@ static void showmsg_prefix(char *prefix, size_t prefix_len, enum msg_type flag, 
 			strncat(prefix,
 				   (color)?CL_RED"["MSG_ERROR_STR"]"CL_RESET":" : MSG_ERROR_STR, prefix_len);
 			break;
-		case MSG_FATALERROR: //Bright Red (Fatal errors, abort(); if possible)
+		case MSG_FATALERROR: //Bright Red (Fatal errors)
 			strncat(prefix,
 				   (color)?CL_RED"["MSG_FATALERROR_STR"]"CL_RESET":" : MSG_FATALERROR_STR, prefix_len);
 			break;
@@ -1153,12 +1153,24 @@ static void showmsg_showFatalError(const char *string, ...)
 	va_end(ap);
 }
 
+/**
+ * Exit handler
+ * Used to force print all messages in queue in case of an exit
+ **/
+static void showmsg_exit_handler(void)
+{
+	if(showmsg_mutex) mutex->lock(showmsg_mutex);
+	showmsg_dequeue_print();
+	if(showmsg_mutex) mutex->unlock(showmsg_mutex);
+}
+
 static void showmsg_init(void)
 {
 #ifdef SHOWMSG_USE_THREAD
 	if(!showmsg_thread_init())
 		ShowError("showmsg_init: Failed to initialize message thread\n");
 #endif
+	atexit(showmsg_exit_handler);
 }
 
 static void showmsg_final(void)

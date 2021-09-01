@@ -3416,11 +3416,23 @@ void linkdb_vforeach(struct linkdb_node **head, LinkDBFunc func, va_list ap)
 	nullpo_retv(head);
 	node = *head;
 	while ( node ) {
+		int ret;
 		va_list argscopy;
 		va_copy(argscopy, ap);
-		func(node->key, node->data, argscopy);
+		ret = func(node->key, node->data, argscopy);
 		va_end(argscopy);
-		node = node->next;
+		if(ret == 1) { // Remove item
+			if(node->prev == NULL)
+				*head = node->next;
+			else
+				node->prev->next = node->next;
+			if(node->next)
+				node->next->prev = node->prev;
+			struct linkdb_node *node_next = node->next;
+			aFree(node);
+			node = node_next;
+		} else
+			node = node->next;
 	}
 }
 
@@ -3429,6 +3441,7 @@ void linkdb_vforeach(struct linkdb_node **head, LinkDBFunc func, va_list ap)
  * @param head Pointer to first item (the item can be NULL)
  * @param func Function to be applyed
  * @param ...  Function arguments
+ * @remarks Functions that alter a node must not be called from within the iterator.
  **/
 void linkdb_foreach(struct linkdb_node **head, LinkDBFunc func, ...)
 {
@@ -3540,7 +3553,7 @@ void linkdb_replace(struct linkdb_node **head, void *key, void *data)
 void linkdb_final(struct linkdb_node **head)
 {
 	struct linkdb_node *node, *node2;
-	nullpo_retv(NULL);
+	nullpo_retv(head);
 	node = *head;
 	while( node ) {
 		node2 = node->next;

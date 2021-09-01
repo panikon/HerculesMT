@@ -496,19 +496,24 @@ static int timer_do_delete(int tid, TimerFunc func)
 	nullpo_retr(-2, func);
 
 	if (tid < 1 || tid >= timer_data_num) {
-		ShowError("timer_do_delete error : no such timer [%d](%p(%s))\n", tid, func, search_timer_func_list(func));
+		ShowError("timer_do_delete error : no such timer [%d](%p(%s))\n",
+			tid, func, search_timer_func_list(func));
 		Assert_retr(-1, 0);
 		return -1;
 	}
 	if( timer_data[tid].func != func ) {
-		ShowError("timer_do_delete error : function mismatch [%d]%p(%s) != %p(%s)\n", tid, timer_data[tid].func, search_timer_func_list(timer_data[tid].func), func, search_timer_func_list(func));
+		ShowError("timer_do_delete error : function mismatch [%d]%p(%s) != %p(%s)\n",
+			tid, timer_data[tid].func, search_timer_func_list(timer_data[tid].func),
+			func, search_timer_func_list(func));
 		Assert_retr(-2, 0);
 		return -2;
 	}
 
 	if (timer_data[tid].type == 0 || timer_data[tid].type == TIMER_REMOVE_HEAP)
 	{
-		ShowError("timer_do_delete: timer already deleted: %d, [%d]%p(%s) -> %p(%s)\n", timer_data[tid].type, tid, func, search_timer_func_list(func), func, search_timer_func_list(func));
+		ShowError("timer_do_delete: timer already deleted: %d, [%d]%p(%s) -> %p(%s)\n",
+			timer_data[tid].type, tid, func, search_timer_func_list(func),
+			func, search_timer_func_list(func));
 		Assert_retr(-3, 0);
 		return -3;
 	}
@@ -678,6 +683,48 @@ static int64 timer_settick_guard(int tid, int64 tick)
 #endif
 
 /**
+ * Updates timer data after execution
+ *
+ * @param tid          Timer id
+ * @param tick         Tick when executing
+ * @param acquire_lock Should timer_perform_mutex be acquired
+ **/
+static void timer_update(int tid, int64 tick, bool acquire_lock)
+{
+	if(acquire_lock) mutex->lock(timer_perform_mutex);
+
+	if(!(timer_data[tid].type&TIMER_REMOVE_HEAP)) {
+		if(acquire_lock) mutex->unlock(timer_perform_mutex);
+		return;
+	}
+
+	timer_data[tid].type &= ~TIMER_REMOVE_HEAP;
+
+	switch( timer_data[tid].type ) {
+		default:
+		case TIMER_ONCE_AUTODEL:
+			timer_data[tid].type = 0;
+			timer_data[tid].func = NULL;
+			if (free_timer_list_pos >= free_timer_list_max) {
+				free_timer_list_max += 256;
+				RECREATE(free_timer_list,int,free_timer_list_max);
+				memset(free_timer_list + (free_timer_list_max - 256), 0, 256 * sizeof(int));
+			}
+			free_timer_list[free_timer_list_pos++] = tid;
+		break;
+		case TIMER_INTERVAL:
+			if( DIFF_TICK(timer_data[tid].tick, tick) < -1000 )
+				timer_data[tid].tick = tick + timer_data[tid].interval;
+			else
+				timer_data[tid].tick += timer_data[tid].interval;
+			push_timer_heap(tid);
+		break;
+	}
+
+	if(acquire_lock) mutex->unlock(timer_perform_mutex);
+}
+
+/**
  * Returns timer mutex when TIMER_USE_THREAD is defined
  **/
 static struct mutex_data *timer_get_mutex(void)
@@ -691,6 +738,7 @@ static struct mutex_data *timer_get_mutex(void)
 
 struct s_timer_action_data {
 	int tid;
+	int64 tick;
 	struct TimerData data;
 };
 
@@ -706,8 +754,9 @@ static void action_timer(void *data)
 		return;
 	}
 	act->data.func(timer, act->tid,
-		timer->get_server_tick(),
+		act->tick,
 		act->data.id, act->data.data);
+	timer->update(act->tid, act->tick, true);
 	aFree(act);
 }
 
@@ -763,7 +812,9 @@ static int do_timer(int64 tick)
 				struct s_timer_action_data *timer_action = aMalloc(sizeof(*timer_action));
 				memcpy(&timer_action->data, &timer_data[tid], sizeof(timer_data[tid]));
 				timer_action->tid = tid;
+				timer_action->tick = tick;
 				action->enqueue(target_queue, action_timer, timer_action);
+				continue; // Don't try to update timer (it'll be updated by the action thread)
 			}
 		}
 #else
@@ -775,31 +826,7 @@ static int do_timer(int64 tick)
 				timer_data[tid].func(tm, tid, timer_data[tid].tick, timer_data[tid].id, timer_data[tid].data);
 		}
 #endif
-		// in the case the function didn't change anything...
-		if( timer_data[tid].type & TIMER_REMOVE_HEAP ) {
-			timer_data[tid].type &= ~TIMER_REMOVE_HEAP;
-
-			switch( timer_data[tid].type ) {
-				default:
-				case TIMER_ONCE_AUTODEL:
-					timer_data[tid].type = 0;
-					timer_data[tid].func = NULL;
-					if (free_timer_list_pos >= free_timer_list_max) {
-						free_timer_list_max += 256;
-						RECREATE(free_timer_list,int,free_timer_list_max);
-						memset(free_timer_list + (free_timer_list_max - 256), 0, 256 * sizeof(int));
-					}
-					free_timer_list[free_timer_list_pos++] = tid;
-				break;
-				case TIMER_INTERVAL:
-					if( DIFF_TICK(timer_data[tid].tick, tick) < -1000 )
-						timer_data[tid].tick = tick + timer_data[tid].interval;
-					else
-						timer_data[tid].tick += timer_data[tid].interval;
-					push_timer_heap(tid);
-				break;
-			}
-		}
+		timer->update(tid, tick, false);
 	}
 
 	return (int)cap_value(diff, TIMER_MIN_INTERVAL, TIMER_MAX_INTERVAL);
@@ -974,6 +1001,8 @@ void timer_defaults(void)
 	timer->add = timer_add;
 	timer->add_interval = timer_add_interval;
 	timer->addtick = timer_addtick;
+	timer->get_server_tick = timer_get_server_tick;
+	timer->update = timer_update;
 
 #ifdef TIMER_USE_THREAD
 	tm = &timer_thread_s;

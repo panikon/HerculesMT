@@ -550,12 +550,12 @@ int main(int argc, char **argv)
 
 	console->final();
 
+	action->queue_final(); // Before do_final because action queues can use a collection from the server
 	retval = do_final();
 	HPM->final();
 	timer->final();
 	packets->final();
 	socket_io->final();
-	action->queue_final();
 
 	DB->final();
 	ers_final(MEMORYTYPE_SHARED);

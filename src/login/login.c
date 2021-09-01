@@ -2563,12 +2563,6 @@ int do_final(void)
 	mutex->destroy(login->online_db_mutex);
 	mutex->destroy(login->auth_db_mutex);
 
-	for(int i = 0; i < INDEX_MAP_LENGTH(g_char_server_list); i++) {
-		struct mmo_char_server *server = INDEX_MAP_INDEX(g_char_server_list, i);
-		if(!server)
-			continue;
-		lchrif->server_reset(server);
-	}
 	rwlock->destroy(g_char_server_list_lock);
 	g_char_server_list_lock = NULL;
 	INDEX_MAP_DESTROY(g_char_server_list);
@@ -2621,15 +2615,11 @@ static void do_shutdown_login(void)
 			if(!server)
 				continue;
 			lchrif->server_reset(server);
+			INDEX_MAP_REMOVE(g_char_server_list, i);
 		}
-		rwlock->destroy(g_char_server_list_lock);
-		g_char_server_list_lock = NULL;
-		INDEX_MAP_DESTROY(g_char_server_list);
 
 		core->runflag = CORE_ST_STOP;
 	}
-	ers_collection_destroy(login->ers_collection);
-	// action->queue_final destroys all queues
 }
 
 /**
