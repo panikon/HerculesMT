@@ -116,7 +116,7 @@ void action_enqueue(struct s_action_queue *queue, ActionFunc perform, void *data
 	act->data = data;
 	act->perform = perform;
 	QUEUE_ENQUEUE(queue->data, act, 10);
-
+	mutex->cond_signal(queue->dequeue);
 	mutex->unlock(queue->mutex);
 }
 
@@ -126,7 +126,7 @@ void action_enqueue(struct s_action_queue *queue, ActionFunc perform, void *data
  * @return Success (bool)
  * @mutex session->mutex
  **/
-bool action_queue_set(struct socket_data *session, int32_t queue_id)
+static bool action_queue_set(struct socket_data *session, int32_t queue_id)
 {
 	if(queue_id < 0)
 		return false;
@@ -140,7 +140,7 @@ bool action_queue_set(struct socket_data *session, int32_t queue_id)
  * Returns a random action queue
  * @return NULL No queues available
  **/
-struct s_action_queue *action_queue_get_random(void)
+static struct s_action_queue *action_queue_get_random(void)
 {
 	struct s_action_queue *queue = NULL;
 	int32_t empty_idx = INDEX_MAP_EMPTY(action_queue_list);
@@ -175,7 +175,7 @@ struct s_action_queue *action_queue_get_random(void)
  * @return Action queue
  * @retval NULL Failed to find appropriate queue
  **/
-struct s_action_queue *action_queue_get(const struct socket_data *session)
+static struct s_action_queue *action_queue_get(struct socket_data *session)
 {
 	if(session->action_queue_id < 0) {
 		struct s_action_queue *queue = action->queue_get_random();
@@ -194,7 +194,7 @@ struct s_action_queue *action_queue_get(const struct socket_data *session)
  * @return Action queue
  * @retval NULL Failed to find appropriate queue
  **/
-struct s_action_queue *action_queue_get_id(int32_t queue_id)
+static struct s_action_queue *action_queue_get_id(int32_t queue_id)
 {
 	if(queue_id < 0)
 		return NULL;
@@ -237,10 +237,12 @@ static void *action_worker(void *param)
 	thread->flag_set(THREADFLAG_ACTION);
 	InterlockedIncrement(&action_ready);
 
-	mutex->lock(queue->mutex);
 	while(queue->running) {
 		struct s_action_data *act;
+		mutex->lock(queue->mutex);
 		mutex->cond_wait(queue->dequeue, queue->mutex, -1); // Block until new action
+		mutex->unlock(queue->mutex);
+
 		if(!QUEUE_LENGTH(queue->data))
 			continue; // Probable shutdown
 
@@ -259,11 +261,10 @@ static void *action_worker(void *param)
 		mutex->unlock(queue->action_ers->cache_mutex);
 		rwlock->read_unlock(queue->action_ers->collection_lock);
 	}
-	mutex->unlock(queue->mutex);
 
 	InterlockedDecrement(&action_ready);
-	ShowInfo("action_worker(%ld): Shutting down!\n",
-		thread->get_tid());
+	ShowInfo("action_worker(%d): Shutting down! (thread id %d)\n",
+		queue->list_index, thread->get_tid());
 	return NULL;
 }
 
@@ -280,9 +281,13 @@ void action_queue_destroy(struct s_action_queue *queue)
 	INDEX_MAP_REMOVE(action_queue_list, queue->list_index);
 	mutex->unlock(action_queue_list_mutex);
 
+	ShowInfo("Action worker (%d) shutdown signal\n", queue->list_index);
+
 	mutex->lock(queue->mutex);
 	queue->running = false;
 	mutex->cond_signal(queue->dequeue);
+	mutex->unlock(queue->mutex);
+
 	thread->wait(queue->thread, NULL);
 
 	QUEUE_CLEAR_SHARED(queue->data);
@@ -305,6 +310,7 @@ void action_queue_destroy(struct s_action_queue *queue)
  * @return New queue
  * @retval NULL Failed to create new queue
  * Acquires collection lock
+ * The collection must remain valid until thread shutdown
  **/
 struct s_action_queue *action_queue_create(int initial_capacity, struct ers_collection_t *collection)
 {
@@ -332,7 +338,9 @@ struct s_action_queue *action_queue_create(int initial_capacity, struct ers_coll
 	INDEX_MAP_ADD(action_queue_list, queue, queue->list_index);
 	mutex->unlock(action_queue_list_mutex);
 	l_list_index = queue->list_index;
-	if(!thread->create("Action worker", action_worker, queue)) {
+	queue->running = true;
+	queue->thread = thread->create("Action worker", action_worker, queue);
+	if(!queue->thread) {
 		ShowError("action_queue_create: Failed to create new thread\n");
 		goto cleanup;
 	}
@@ -388,6 +396,7 @@ void action_defaults(void)
 	action->ready            = action_ready_get;
 	action->enqueue          = action_enqueue;
 	action->queue_set        = action_queue_set;
+	action->queue_index      = action_queue_index;
 	action->queue_get_random = action_queue_get_random;
 	action->queue_get        = action_queue_get;
 	action->queue_get_id     = action_queue_get_id;

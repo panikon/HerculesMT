@@ -38,7 +38,7 @@ struct action_interface {
 	void (*enqueue)(struct s_action_queue *queue, ActionFunc perform, void *data);
 	bool (*queue_set)(struct socket_data *session, int32_t queue_id);
 	struct s_action_queue *(*queue_get_random) (void);
-	struct s_action_queue *(*queue_get)(const struct socket_data *session);
+	struct s_action_queue *(*queue_get)(struct socket_data *session);
 	struct s_action_queue *(*queue_get_id)(int32_t queue_id);
 	uint32_t (*queue_get_index)(struct s_action_queue *queue);
 	int32 (*queue_index) (void);

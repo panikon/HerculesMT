@@ -320,6 +320,36 @@ static void session_disconnect_guard(struct socket_data *session)
 	mutex->unlock(session->mutex);
 }
 
+/**
+ * Verifies if provided session has timed out.
+ * Should be executed from the responsible action worker.
+ *
+ * @param tm   Timer interface.
+ * @param tid  Timer id.
+ * @param tick Current tick.
+ * @param id   0
+ * @param data session data.
+ * @see TimerFunc
+ **/
+static int session_timeout(struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data)
+{
+	struct socket_data *session = (struct socket_data*)data;
+	mutex->lock(session->mutex);
+	if(DIFF_TICK(timer->get_server_tick(), session->rdata_tick) > socket_io->stall_time) {
+		// Server doesn't timeout
+		if(session->flag.server) {
+			if(session->flag.ping != 2) // Only update if necessary, otherwise
+				session->flag.ping = 1; // it'd resend the ping unnecessarily
+		} else {
+			ShowInfo("Session #%d timed out\n", session->id);
+			socket_io->session_disconnect(session);
+			tm->delete(tid, session_timeout);
+		}
+	}
+	mutex->unlock(session->mutex);
+	return 0;
+}
+
 /*======================================
  * CORE : Session handling
  *--------------------------------------*/
@@ -383,6 +413,8 @@ static void delete_session(struct socket_data *session, bool remove_db)
 		mutex->unlock(session->mutex);
 		return;
 	}
+	if(session->timeout_id != -1)
+		timer->delete(session->timeout_id, socket_io->session_timeout);
 
 	rwlock->read_lock(ers_collection_lock(ers_socket_collection));
 	mutex->lock(ers_buffer_instance->cache_mutex);
@@ -460,10 +492,11 @@ static struct socket_data *create_session(SOCKET socket)
 
 	rwlock->read_unlock(ers_collection_lock(ers_socket_collection));
 
-
 	session->socket     = socket;
-	session->rdata_tick = timer->get_server_tick();
+	session->rdata_tick = timer->gettick_nocache();
 	session->parse      = default_func_parse;
+	session->timeout_id = -1;
+
 	/**
 	 * Lock before adding to session_db so we don't risk a data race in case
 	 * someone accesses the db after our addition and tries to handle this
@@ -474,9 +507,20 @@ static struct socket_data *create_session(SOCKET socket)
 	mutex->lock(session_db_mutex);
 	do {
 		session->id = rnd->value(1, INT32_MAX);
-	} while(!idb_exists(session_db, session->id));
+	} while(idb_exists(session_db, session->id));
 	idb_put(session_db, session->id, session);
 	mutex->unlock(session_db_mutex);
+
+	session->timeout_id = timer->add_sub(timer->gettick_nocache(),
+		socket_io->session_timeout,
+		0, (intptr_t)session,
+		(int)socket_io->stall_time, TIMER_INTERVAL,
+		TIMER_SESSION, session->id);
+	if(session->timeout_id == -1) {
+		ShowError("create_session: Failed to setup timeout timer\n");
+		delete_session(session, true); // Needs session->mutex previously locked
+		return NULL;
+	}
 
 	return session;
 }
@@ -529,7 +573,9 @@ static void socket_connection_lost(struct socket_data *session)
 		rwlock->read_unlock(ers_collection_lock(ers_socket_collection));
 		recv_action->session = session;
 		// ERS_OPT_CLEAN, post empty action
-		action->enqueue(action->queue_get(session),
+
+		struct s_action_queue *queue = action->queue_get(session);
+		action->enqueue(queue,
 			action_receive, recv_action);
 	}
 
@@ -594,7 +640,8 @@ static bool socket_iocp_post_send(struct socket_data *session,
 {
 	int retval;
 	DWORD flags = 0;
-	assert(!thread->flag_get()&THREADFLAG_IO && "Send should only be posted from action threads");
+	assert(!(thread->flag_get()&THREADFLAG_IO)
+		&& "Send should only be posted from action threads");
 
 	buffer_data->status = QT_WAITING_DEQUEUE;
 	buffer_data->operation = IO_SEND;
@@ -788,7 +835,7 @@ static void wfifoflush_act(struct s_send_action_data *act)
 	struct socket_data *session = act->session;
 	session->writes_remaining--;
 
-	if((session->flag.eof || session->flag.wait_removal)) {
+	if(session->flag.eof || session->flag.wait_removal) {
 		session_disconnect(session);
 	}
 
@@ -808,8 +855,6 @@ static void wfifoflush_act(struct s_send_action_data *act)
 	ers_free(ers_send_action_instance, act);
 	mutex->unlock(ers_receive_action_instance->cache_mutex);
 	rwlock->read_unlock(ers_collection_lock(ers_socket_collection));
-
-	linkdb_erase(&l_write_list, session);
 }
 
 /**
@@ -826,6 +871,7 @@ static void wfifoflush(struct socket_data *session)
 		return;
 	}
 	wfifoflush_act(act);
+	linkdb_erase(&l_write_list, session);
 }
 
 /**
@@ -835,14 +881,16 @@ static void wfifoflush(struct socket_data *session)
  * @see LinkDBFunc
  * @see wfifoflush_all
  * @see wfifoflush_act
+ * @return 1 - Delete item
  **/
-void wfifoflush_iterator(void *key, void *data, va_list args)
+int wfifoflush_iterator(void *key, void *data, va_list args)
 {
 	struct socket_data *session = key;
 	struct s_send_action_data *act = data;
 	mutex->lock(session->mutex);
 	wfifoflush_act(act);
 	mutex->unlock(session->mutex);
+	return 1;
 }
 
 /**
@@ -1026,6 +1074,8 @@ static bool wfifoset(struct socket_data *session, size_t len, bool validate)
 	}
 
 	act->wdata_size += len;
+	act->write_buffer->wsa_buffer[act->write_buffer_pos].len += len;
+
 #ifdef SHOW_SERVER_STATS
 	socket_data_qo += len;
 #endif  // SHOW_SERVER_STATS
@@ -1278,9 +1328,11 @@ static void socket_iocp_buffer_free_guard(struct s_iocp_buffer_data *buffer_data
 static void *socket_listen(void *param)
 {
 	SOCKET listen_socket = (SOCKET)param;
-	mutex->lock(socket_shutdown_mutex);
+
 	while(socket_run) {
+		mutex->lock(socket_shutdown_mutex);
 		mutex->cond_wait(socket_shutdown_event, socket_shutdown_mutex, 1);
+		mutex->unlock(socket_shutdown_mutex);
 		DWORD wait_multiple;
 		int wsa_ret;
 		WSANETWORKEVENTS wsa_events;
@@ -1309,7 +1361,6 @@ static void *socket_listen(void *param)
 				ShowError("socket_listen: Unknown error (%s)!\n", error_msg());
 		}
 	}
-	mutex->unlock(socket_shutdown_mutex);
 	ShowInfo("socket_listen: shutting down\n");
 	return NULL;
 }
@@ -1498,6 +1549,9 @@ static bool session_marked_removal(struct socket_data *session)
  **/
 static bool session_mark_removal(struct socket_data *session)
 {
+	if(session->flag.eof)
+		return true;
+
 	if(session->operations_remaining > 0
 	|| session->writes_remaining > 0
 	|| session->session_counter > 0
@@ -1536,41 +1590,30 @@ static void socket_operation_process(struct socket_data *session,
 	 **/
 	if(buffer_data->operation == IO_RECV) {
 		struct s_receive_action_data *recv_action;
+
 		rwlock->read_lock(ers_collection_lock(ers_socket_collection));
 		mutex->lock(ers_receive_action_instance->cache_mutex);
 		recv_action = ers_alloc(ers_receive_action_instance);
 		mutex->unlock(ers_receive_action_instance->cache_mutex);
 		rwlock->read_unlock(ers_collection_lock(ers_socket_collection));
+
+		// Prepare rdata (recv always occurs in one buffer)
 		recv_action->session = session;
+		recv_action->rdata = buffer_data->wsa_buffer[0].buf;
+		recv_action->rdata_size = bytes_transferred;
+		recv_action->max_rdata = FIFO_SIZE;
+		recv_action->rdata_pos = 0;
+		recv_action->read_buffer = buffer_data;
+		recv_action->validate = session->flag.validate;
 
-		// Timeout
-		if(session->rdata_tick && DIFF_TICK(socket_tick, session->rdata_tick) > socket_io->stall_time) {
-			if(session->flag.server) { // Server doesn't timeout
-				if(session->flag.ping != 2) // Only update if necessary, otherwise
-					session->flag.ping = 1; // it'd resend the ping unnecessarily
-			} else {
-				session_mark_removal(session); // Enqueue removal
-				ShowInfo("Session #%d timed out\n", session->id);
-			}
-			// recv_action is already 0 because of ERS_OPT_CLEAN
-		} else {
-			// Prepare rdata (recv always occurs in one buffer)
-			recv_action->rdata = buffer_data->wsa_buffer[0].buf;
-			recv_action->rdata_size = bytes_transferred;
-			recv_action->max_rdata = FIFO_SIZE;
-			recv_action->rdata_pos = 0;
-			recv_action->read_buffer = buffer_data;
-			recv_action->validate = session->flag.validate;
+		// Update tick
+		session->rdata_tick = timer->gettick_nocache();
+		// FIXME: Profile the number of bytes received vs the number of
+		// send requests made by the client. Each of these requests now
+		// uses a whole buffer of FIFO_SIZE (2*1024), so if there are
+		// several requests they could lead to a huge memory waste.
 
-			// Update tick
-			session->rdata_tick = timer->get_server_tick();
-			// FIXME: Profile the number of bytes received vs the number of
-			// send requests made by the client. Each of these requests now
-			// uses a whole buffer of FIFO_SIZE (2*1024), so if there are
-			// several requests they could lead to a huge memory waste.
-		}
-		action->enqueue(action->queue_get(session),
-			action_receive, recv_action);
+		action->enqueue(action->queue_get(session), action_receive, recv_action);
 		socket_iocp_post_recv(session, session_buffer_available(session));
 	} else {
 		/** IO_SEND
@@ -1596,9 +1639,11 @@ static void socket_operation_process(struct socket_data *session,
 static void *socket_worker(void *param)
 {
 	thread->flag_set(THREADFLAG_IO);
-	mutex->lock(socket_shutdown_mutex);
+
 	while(socket_run) {
+		mutex->lock(socket_shutdown_mutex);
 		mutex->cond_wait(socket_shutdown_event, socket_shutdown_mutex, 1);
+		mutex->unlock(socket_shutdown_mutex);
 		DWORD bytes_transferred = 0;
 
 		struct socket_data *session = NULL;
@@ -1673,7 +1718,6 @@ static void *socket_worker(void *param)
 #endif  // SHOW_SERVER_STATS
 
 	}
-	mutex->unlock(socket_shutdown_mutex);
 	ShowInfo("socket_worker(%d): shutting down\n", thread->get_tid());
 	return NULL;
 }
@@ -1850,6 +1894,7 @@ static void socket_init_wsa(void)
 	ers_send_action_instance = ers_new(ers_socket_collection,
 		sizeof(struct s_send_action_data), "socket::action:send",
 		ERS_OPT_CLEAN);
+	timer->add_func_list(socket_io->session_timeout, "socket_io->session_timeout");
 }
 
 /*======================================
@@ -2419,8 +2464,7 @@ static void socket_init(void)
 
 	socket_config_read(socket_io->SOCKET_CONF_FILENAME, false);
 
-
-	ShowInfo("Server uses '" CL_WHITE "select" CL_RESET "' as event dispatcher\n");
+	ShowInfo("Server uses '" CL_WHITE "Completion Ports" CL_RESET "' as event dispatcher\n");
 
 	// initialize last send-receive tick
 	socket_io->last_tick = time(NULL);
@@ -2715,6 +2759,9 @@ void socket_io_defaults(void)
 	socket_io->make_listen_bind = make_listen_bind;
 	socket_io->make_connection = make_connection;
 
+	socket_io->rfiforest = rfiforest;
+	socket_io->rfifoflush = rfifoflush;
+	socket_io->wfifop = wfifop;
 	socket_io->wfifoset = wfifoset;
 	socket_io->wfifohead = wfifohead;
 	socket_io->rfifoskip = rfifoskip;
@@ -2741,4 +2788,5 @@ void socket_io_defaults(void)
 	socket_io->session_disconnect_guard = session_disconnect_guard;
 	socket_io->session_from_id          = session_from_id;
 	socket_io->session_update_parse     = session_update_parse;
+	socket_io->session_timeout          = session_timeout;
 }

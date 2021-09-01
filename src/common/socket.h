@@ -273,6 +273,11 @@ struct socket_data {
 	int session_counter;
 
 	ActionParseFunc parse;
+	/**
+	 * Timer id of timeout function
+	 * @see session_timeout
+	 **/
+	int timeout_id;
 #else
 
 	uint8 *rdata, *wdata;
@@ -402,6 +407,7 @@ struct socket_io_interface {
 	void (*session_disconnect_guard) (struct socket_data *session);
 	struct socket_data *(*session_from_id) (int32_t id);
 	void (*session_update_parse) (struct socket_data *session, ActionParseFunc parse);
+	int (*session_timeout) (struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data);
 };
 
 #ifdef HERCULES_CORE
