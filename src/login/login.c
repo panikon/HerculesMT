@@ -292,7 +292,7 @@ static struct mmo_char_server *lchrif_server_find(struct socket_data *session)
 		return NULL;
 
 	server = INDEX_MAP_INDEX(g_char_server_list, sd->login_id1);
-	if(server->session != session)
+	if(!server || server->session != session)
 		return NULL;
 
 	return server;
@@ -1212,9 +1212,12 @@ static int login_parse_fromchar(struct s_receive_action_data *act)
 	if (!server)
 	{// not a char server
 		rwlock->read_unlock(g_char_server_list_lock);
-		ShowDebug("login_parse_fromchar: Disconnecting invalid session #%d (is not a char-server)\n",
-			act->session->id);
+		mutex->lock(act->session->mutex);
+		if(!socket_io->session_marked_removal(act->session))
+			ShowDebug("login_parse_fromchar: Disconnecting invalid session #%d (is not a char-server)\n",
+				act->session->id);
 		socket_io->session_disconnect_guard(act->session);
+		mutex->unlock(act->session->mutex);
 		return 0;
 	}
 

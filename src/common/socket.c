@@ -361,14 +361,14 @@ static int session_timeout(struct timer_interface *tm, int tid, int64 tick, int 
 static void session_buffer_available_grow(struct socket_data *session)
 {
 	struct s_iocp_buffer_data *buffer;
-	CREATE(buffer, struct s_iocp_buffer_data, IOCP_INITIAL_BUFFER_COUNT);
 
 	rwlock->read_lock(ers_collection_lock(ers_socket_collection));
 	mutex->lock(ers_buffer_instance->cache_mutex);
 	for(int i = 0; i < IOCP_INITIAL_BUFFER_COUNT; i++) {
-		CREATE(buffer[i].wsa_buffer, WSABUF, 1);
-		buffer[i].wsa_buffer->buf = ers_alloc(ers_buffer_instance);
-		VECTOR_PUSH(session->iocp_available_buffer, &buffer[i]);
+		buffer = aCalloc(1, sizeof(*buffer));
+		CREATE(buffer->wsa_buffer, WSABUF, 1);
+		buffer->wsa_buffer->buf = ers_alloc(ers_buffer_instance);
+		VECTOR_PUSH(session->iocp_available_buffer, buffer);
 	}
 	mutex->unlock(ers_buffer_instance->cache_mutex);
 	rwlock->read_unlock(ers_collection_lock(ers_socket_collection));
@@ -470,6 +470,7 @@ static struct socket_data *create_session(SOCKET socket)
 	session = ers_alloc(ers_session_instance);
 	mutex->unlock(ers_session_instance->cache_mutex);
 	session->mutex = mutex->create();
+
 	if(!session->mutex) {
 		ShowError("create_session: Failed to create new mutex\n");
 		mutex->lock(ers_session_instance->cache_mutex);
@@ -478,19 +479,10 @@ static struct socket_data *create_session(SOCKET socket)
 		rwlock->read_unlock(ers_collection_lock(ers_socket_collection));
 		return NULL;
 	}
-
-	struct s_iocp_buffer_data *buffer;
-	VECTOR_INIT_CAPACITY_SHARED(session->iocp_available_buffer, IOCP_INITIAL_BUFFER_COUNT);
-	CREATE(buffer, struct s_iocp_buffer_data, IOCP_INITIAL_BUFFER_COUNT);
-	mutex->lock(ers_buffer_instance->cache_mutex);
-	for(int i = 0; i < IOCP_INITIAL_BUFFER_COUNT; i++) {
-		CREATE(buffer[i].wsa_buffer, WSABUF, 1);
-		buffer[i].wsa_buffer->buf = ers_alloc(ers_buffer_instance);
-		VECTOR_PUSH(session->iocp_available_buffer, &buffer[i]);
-	}
-	mutex->unlock(ers_buffer_instance->cache_mutex);
-
 	rwlock->read_unlock(ers_collection_lock(ers_socket_collection));
+
+	VECTOR_INIT_CAPACITY_SHARED(session->iocp_available_buffer, IOCP_INITIAL_BUFFER_COUNT);
+	session_buffer_available_grow(session);
 
 	session->socket     = socket;
 	session->rdata_tick = timer->gettick_nocache();
@@ -671,8 +663,8 @@ static bool socket_iocp_post_send(struct socket_data *session,
 		 * to disconnect this session even if there are no more buffers to dequeue.
 		 **/
 		session_disconnect(session);
-		ShowError("socket_iocp_post_send(%ld): Failed to post send request, '%s'\n",
-			thread->get_tid(), sErr(sErrno));
+		ShowError("socket_iocp_post_send(%ld): Failed to post send request, %d: '%s'\n",
+			thread->get_tid(), WSAGetLastError(), sErr(sErrno));
 		buffer_data->status = QT_WAITING_QUEUE;
 		buffer_data->operation = IO_NONE;
 		VECTOR_PUSH(session->iocp_available_buffer, buffer_data);
@@ -1652,7 +1644,8 @@ static void *socket_worker(void *param)
 		if(session->flag.post_eof) {
 			close_session(session);
 			delete_session(session, true);
-			socket_iocp_buffer_free_guard(buffer_data);
+			assert(!buffer_data
+				&& "Posted EOF with valid buffer data");
 			continue;
 		}
 

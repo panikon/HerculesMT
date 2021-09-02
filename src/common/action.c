@@ -106,6 +106,10 @@ static int32_t action_ready_get(void)
 void action_enqueue(struct s_action_queue *queue, ActionFunc perform, void *data)
 {
 	struct s_action_data *act;
+	if(!queue) {
+		ShowDebug("action_enqueue: Invalid queue\n");
+		return;
+	}
 	mutex->lock(queue->mutex);
 
 	rwlock->read_lock(queue->action_ers->collection_lock);
@@ -253,7 +257,8 @@ static void *action_worker(void *param)
 		if(!act)
 			continue; // Shutdown?
 
-		act->perform(act->data);
+		if(act->perform)
+			act->perform(act->data);
 
 		rwlock->read_lock(queue->action_ers->collection_lock);
 		mutex->lock(queue->action_ers->cache_mutex);
