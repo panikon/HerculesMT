@@ -82,7 +82,20 @@
 
 #define ERS_BLOCK_ENTRIES 2048
 
+/**
+ * Use complete debug header for each entry.
+ *
+ * This increases the overhead per entry by sizeof(struct ers_header) bytes, and
+ * verifications in ers_obj_alloc_entry / ers_obj_free_entry.
+ * @see ers_obj_alloc_entry
+ **/
+#define ERS_USE_DEBUG_HEADER
 
+/**
+ * Pointer to linked list of memory to be reused
+ *
+ * A list pointer is included in all memory allocations performed by the system.
+ **/
 struct ers_list
 {
 	struct ers_list *Next;
@@ -102,7 +115,13 @@ typedef struct ers_cache
 	 **/
 	struct mutex_data *mutex;
 
-	// Allocated object size, including ers_list size
+	/**
+	 * Size of each allocated entry, this is always the sum of the provided size
+	 * and ERS_HEADER_LENGTH.
+	 *
+	 * @see ers_new
+	 * @see ERS_HEADER_SIZE
+	 **/
 	unsigned int ObjectSize;
 
 	// Number of ers_instances referencing this
@@ -151,7 +170,7 @@ struct ers_instance_t {
 	// Misc options
 	enum ERSOptions Options;
 
-	// Our cache
+	// Cache (manager)
 	ers_cache_t *Cache;
 
 	// Count of objects in use, used for detecting memory leaks
@@ -190,7 +209,7 @@ struct ers_collection_t {
 	 *
 	 * @writelock ers_collection_t::lock
 	 **/
-	enum memory_type type;  //< Memory management used in this collection
+	enum memory_type type;
 
 	/**
 	 * Doubly-linked list of active instances
@@ -220,6 +239,29 @@ struct ers_collection_t {
 	uint32_t pos;
 };
 
+#ifdef ERS_USE_DEBUG_HEADER
+
+#if !defined(sun) && (!defined(__NETBSD__) || __NetBSD_Version__ >= 600000000)
+// NetBSD 5 and Solaris don't like pragma pack but accept the packed attribute
+#pragma pack(push, 1)
+#endif
+
+struct ers_header {
+	struct ers_instance_t *instance;
+	ers_cache_t *cache;
+} __attribute__((packed));
+
+#if !defined(sun) && (!defined(__NETBSD__) || __NetBSD_Version__ >= 600000000)
+#pragma pack(pop)
+#endif
+
+#define ERS_HEADER_LENGTH (sizeof(struct ers_header) + sizeof(struct ers_list))
+
+#else
+#define ERS_HEADER_LENGTH (sizeof(struct ers_list))
+#endif
+
+
 /**
  * Global ERS
  *
@@ -239,6 +281,7 @@ static thread_local struct s_collection_list l_ers_list = INDEX_MAP_STATIC_INITI
 /**
  * Initial length of free index lists, the length of the lists is always
  * ers_list_free_length * 32
+ * @see ers_collection_create
  **/
 #define ERS_LIST_FREE_INITIAL 2
 #define ERS_CACHE_LIST_FREE_INITIAL 2
@@ -350,10 +393,10 @@ static void *ers_obj_alloc_entry(ERS *self)
 	enum memory_type memory_type =
 		(instance->Options&ERS_OPT_MEMORY_LOCAL)?MEMORYTYPE_LOCAL:MEMORYTYPE_SHARED;
 
-#define ERS_BLOCK_POS_TEMP (instance->Cache->Free * instance->Cache->ObjectSize + sizeof(struct ers_list))
+#define ERS_BLOCK_POS_TEMP (instance->Cache->Free * instance->Cache->ObjectSize + ERS_HEADER_LENGTH)
 
 	if (instance->Cache->ReuseList != NULL) {
-		ret = (void *)((unsigned char *)instance->Cache->ReuseList + sizeof(struct ers_list));
+		ret = (void *)((unsigned char *)instance->Cache->ReuseList + ERS_HEADER_LENGTH);
 		instance->Cache->ReuseList = instance->Cache->ReuseList->Next;
 	} else if (instance->Cache->Free > 0) {
 		instance->Cache->Free--;
@@ -382,6 +425,12 @@ static void *ers_obj_alloc_entry(ERS *self)
 		instance->Peak = instance->Count;
 #endif
 
+#ifdef ERS_USE_DEBUG_HEADER
+	struct ers_header *header = (struct ers_header*)((unsigned char*)ret - sizeof(struct ers_header));
+	header->instance = instance;
+	header->cache = instance->Cache;
+#endif
+
 	return ret;
 }
 
@@ -389,7 +438,7 @@ static void *ers_obj_alloc_entry(ERS *self)
 static void ers_obj_free_entry(ERS *self, void *entry)
 {
 	struct ers_instance_t *instance = (struct ers_instance_t *)self;
-	struct ers_list *reuse = (struct ers_list *)((unsigned char *)entry - sizeof(struct ers_list));
+	struct ers_list *reuse = (struct ers_list *)((unsigned char *)entry - ERS_HEADER_LENGTH);
 
 	if (instance == NULL) {
 		ShowError("ers_obj_free_entry: NULL object, aborting entry freeing.\n");
@@ -399,8 +448,31 @@ static void ers_obj_free_entry(ERS *self, void *entry)
 		return;
 	}
 
+#ifdef ERS_USE_DEBUG_HEADER
+	struct ers_header *header = (struct ers_header *)((unsigned char*)entry-sizeof(struct ers_header));
+	if(header->instance != instance) {
+		ShowDebug("ers_obj_free_entry: Trying to free an object of another instance.\n"
+		"\t owner: %s, freed: %s\n",
+			instance->Name, header->instance->Name);
+		return;
+	}
+	if(header->cache != instance->Cache) {
+		/**
+		 * Should never happen, this is a bug in the internal behavior of the ERS
+		 * and won't happen with misfreeing.
+		 **/
+		ShowDebug("ers_obj_free_entry: Trying to free an object of another cache.\n"
+		"\t Instance data: owner: %s, freed: %s\n",
+			instance->Name, header->instance->Name);
+		return;
+	}
+#endif
+	Assert_retv(instance->Count > 0 && instance->Cache->UsedObjs > 0
+	&& "ers_obj_free_entry: Counter underflow, freeing unowned object");
+
 	if( instance->Cache->Options & ERS_OPT_CLEAN )
-		memset((unsigned char*)reuse + sizeof(struct ers_list), 0, instance->Cache->ObjectSize - sizeof(struct ers_list));
+		memset((unsigned char*)reuse + ERS_HEADER_LENGTH,
+			0, instance->Cache->ObjectSize - ERS_HEADER_LENGTH);
 
 	reuse->Next = instance->Cache->ReuseList;
 	instance->Cache->ReuseList = reuse;
@@ -493,7 +565,7 @@ ERS *ers_new(struct ers_collection_t *collection, uint32 size, char *name,
 
 	CREATE_MEMORY(instance, struct ers_instance_t, 1, memory_type);
 
-	size += sizeof(struct ers_list);
+	size += ERS_HEADER_LENGTH;
 
 #if ERS_ALIGNED > 1 // If it's aligned to 1-byte boundaries, no need to bother.
 	if (size % ERS_ALIGNED)

@@ -43,6 +43,29 @@
 //
 
 /**
+ * Tests ERS debug mode
+ **/
+bool ers_unit_debug(void *not_used) {
+	struct ers_collection_t *collection;
+	collection = ers_collection_create(MEMORYTYPE_SHARED);
+	TEST_ASSERT(collection, "Failed to setup collection");
+
+	ERS *instance = ers_new(collection, 32, "ERS::DEBUG", ERS_OPT_NONE);
+	ERS *instance2 = ers_new(collection, 32, "ERS::DEBUG2", ERS_OPT_NONE);
+
+	void *ptr = ers_alloc(instance);
+	TEST_ASSERT(ptr, "Failed to allocate object\n");
+	ShowInfo("Expected failure to free from another instance\n");
+	instance2->free(instance2, ptr);
+	instance->free(instance, ptr);
+
+	ers_destroy(instance);
+
+	ers_collection_destroy(collection);
+	return true;
+}
+
+/**
  * ERS worker thread
  *
  * Creates a new ERS instance and destroys.
@@ -313,5 +336,6 @@ struct s_test_suite *test_ers_add(struct s_test_suite *test) {
 	test = test_add(test, ers_unit_leak_detection, "ERS leak detection", NULL);
 	test = test_add(test, ers_unit_concurrent_creation, "ERS concurrent", NULL);
 	test = test_add(test, ers_unit_report, "ERS report", NULL);
+	test = test_add(test, ers_unit_debug, "ERS Debug", NULL);
 	return test;
 }

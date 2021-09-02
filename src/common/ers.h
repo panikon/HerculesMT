@@ -176,6 +176,11 @@ typedef struct eri {
 	 *
 	 * @readlock collection_lock
 	 * @mutex cache_mutex
+	 * @remarks Every returned pointer has ERS_HEADER_LENGTH valid bytes allocated
+	 * before it, when ERS_USE_DEBUG_HEADER is set a complete debug header is prepended
+	 * otherwise only enough memory for a pointer to the linked list is. This
+	 * information is prepended so even if the allocated data is overrun we can still
+	 * try to debug.
 	 */
 	void *(*alloc)(struct eri *self);
 

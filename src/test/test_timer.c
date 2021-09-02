@@ -60,7 +60,7 @@ bool timer_unit_modification(void *not_used) {
 	int tid;
 	for(int i = 0; i < 100; i++) {
 		tid = timer->add_sub(timer->gettick(), timer_unit_mod, i, (intptr_t)&timer_executed,
-			(i+1)*100, TIMER_ONCE_AUTODEL);
+			(i+1)*100, TIMER_ONCE_AUTODEL, TIMER_THREAD, 0);
 		TEST_ASSERT(tid != INVALID_TIMER, "Failed to create timer");
 	}
 	// Idle
@@ -95,7 +95,7 @@ bool timer_unit_setup(void *not_used) {
 	bool data[10] = {0};
 	for(int i = 0; i < sizeof(data)/sizeof(*data); i++) {
 		tid = timer->add_sub(timer->gettick(), timer_unit_func, i, (intptr_t)&data,
-			(i+1)*100, TIMER_ONCE_AUTODEL);
+			(i+1)*100, TIMER_ONCE_AUTODEL, TIMER_THREAD, 0);
 		TEST_ASSERT(tid != INVALID_TIMER, "Failed to create timer");
 	}
 	// Idle

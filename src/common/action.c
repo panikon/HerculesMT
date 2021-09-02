@@ -32,6 +32,7 @@
 #include "common/socket.h"
 #include "common/random.h"
 #include "common/utils.h"
+#include "common/nullpo.h"
 
 #include <stdlib.h>
 
@@ -234,30 +235,29 @@ static int32 action_queue_index(void)
 static void *action_worker(void *param)
 {
 	struct s_action_queue *queue = param;
+	nullpo_retr(NULL, queue);
+
 	thread->flag_set(THREADFLAG_ACTION);
 	InterlockedIncrement(&action_ready);
 
 	while(queue->running) {
-		struct s_action_data *act;
+		struct s_action_data *act = NULL;
 		mutex->lock(queue->mutex);
 		mutex->cond_wait(queue->dequeue, queue->mutex, -1); // Block until new action
-		mutex->unlock(queue->mutex);
 
-		if(!QUEUE_LENGTH(queue->data))
-			continue; // Probable shutdown
-
-		act = QUEUE_FRONT(queue->data);
-		QUEUE_DEQUEUE(queue->data);
-		if(!act) {
-			ShowError("action_worker(%ld): Dequeued invalid action!\n",
-				thread->get_tid());
-			continue;
+		if(QUEUE_LENGTH(queue->data)) {
+			act = QUEUE_FRONT(queue->data);
+			QUEUE_DEQUEUE(queue->data);
 		}
+		mutex->unlock(queue->mutex);
+		if(!act)
+			continue; // Shutdown?
+
 		act->perform(act->data);
 
 		rwlock->read_lock(queue->action_ers->collection_lock);
 		mutex->lock(queue->action_ers->cache_mutex);
-		ers_free(queue->action_ers, action);
+		ers_free(queue->action_ers, act);
 		mutex->unlock(queue->action_ers->cache_mutex);
 		rwlock->read_unlock(queue->action_ers->collection_lock);
 	}
