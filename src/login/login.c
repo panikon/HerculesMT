@@ -1222,10 +1222,9 @@ static int login_parse_fromchar(struct s_receive_action_data *act)
 	if( socket_io->session_marked_removal(act->session) )
 	{
 		rwlock->read_unlock(g_char_server_list_lock);
+		lchrif->on_disconnect(server);
 		socket_io->session_disconnect(act->session);
 		mutex->unlock(act->session->mutex);
-
-		lchrif->on_disconnect(server);
 		return 0;
 	}
 	mutex->unlock(act->session->mutex);
@@ -1244,7 +1243,7 @@ static int login_parse_fromchar(struct s_receive_action_data *act)
 				continue;
 
 			if (result == 2)
-				return 0;
+				goto unlock_list_return;
 		}
 
 		switch (command) {
@@ -1377,9 +1376,7 @@ static int login_parse_fromchar(struct s_receive_action_data *act)
 			goto unlock_list_return;
 		} // switch
 	} // while
-
-	return 0;
-
+	// Fall-through
 unlock_list_return:
 	rwlock->read_unlock(g_char_server_list_lock);
 	return 0;
@@ -1964,8 +1961,8 @@ static void login_parse_request_connection(struct s_receive_action_data *act, st
 		login->char_server_connection_status(act->session, sd, CCA_INVALID_ACC_ID);
 		return;
 	}
-	rwlock->read_lock(g_char_server_list_lock);
 
+	rwlock->read_lock(g_char_server_list_lock);
 	struct mmo_char_server *server;
 	int pos = -1;
 	for(int i = 0; i < INDEX_MAP_LENGTH(g_char_server_list); i++) {
@@ -1980,6 +1977,7 @@ static void login_parse_request_connection(struct s_receive_action_data *act, st
 		}
 	}
 	rwlock->read_unlock(g_char_server_list_lock);
+
 	if(pos != -1) {
 		ShowNotice("Connection of the char-server '%s' REFUSED "
 			"(This char account is already connected!).\n", server_name);

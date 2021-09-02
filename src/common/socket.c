@@ -551,7 +551,9 @@ static void close_session(struct socket_data *session)
 }
 
 /**
- * Called upon perceived disconnection
+ * Called upon perceived disconnection.
+ * If session is ready for removal posts an empty receive action so the server
+ * can do proper session cleanup before we do socket_data cleanup.
  *
  * Acquires session->mutex
  **/
@@ -574,8 +576,7 @@ static void socket_connection_lost(struct socket_data *session)
 		recv_action->session = session;
 		// ERS_OPT_CLEAN, post empty action
 
-		struct s_action_queue *queue = action->queue_get(session);
-		action->enqueue(queue,
+		action->enqueue(action->queue_get(session),
 			action_receive, recv_action);
 	}
 
@@ -1188,12 +1189,6 @@ static void action_receive(void *data)
 {
 	struct s_receive_action_data *act = data;
 	mutex->lock(act->session->mutex);
-	if(act->session->flag.eof) {
-		// Stop action processing
-		session_disconnect(act->session);
-		mutex->unlock(act->session->mutex);
-		return;
-	}
 	act->session->session_counter++;
 	mutex->unlock(act->session->mutex);
 
@@ -1479,37 +1474,6 @@ static struct socket_data *make_connection(uint32 ip, uint16 port, struct hSockO
 }
 
 /**
- * Closes sockets and tries to delete session
- *
- * When there are operations remaining marks as 'wait_removal' so the remaining
- * buffers on queue can be freed properly.
- * It's not safe to use the session pointer after calling this function.
- *
- * @param id Session id
- * Acquires session->mutex (either releases or deletes)
- * Acquires session_db_mutex
- **/
-static void socket_close(int id)
-{
-	mutex->lock(session_db_mutex);
-	struct socket_data *session = idb_get(session_db, id);
-	mutex->unlock(session_db_mutex);
-	if(!session)
-		return;
-
-	mutex->lock(session->mutex);
-
-	if(session_mark_removal(session)) {
-		// Ready for closing
-		close_session(session);
-		delete_session(session, true); // Unlocks / deletes the mutex
-		return;
-	}
-
-	mutex->unlock(session->mutex);
-}
-
-/**
  * Updates parse function for provided session
  * @mutex session->mutex
  **/
@@ -1612,7 +1576,6 @@ static void socket_operation_process(struct socket_data *session,
 		// send requests made by the client. Each of these requests now
 		// uses a whole buffer of FIFO_SIZE (2*1024), so if there are
 		// several requests they could lead to a huge memory waste.
-
 		action->enqueue(action->queue_get(session), action_receive, recv_action);
 		socket_iocp_post_recv(session, session_buffer_available(session));
 	} else {
@@ -1682,6 +1645,14 @@ static void *socket_worker(void *param)
 				thread->get_tid(), bytes_transferred);
 			if(buffer_data)
 				socket_iocp_buffer_free_guard(buffer_data);
+			continue;
+		}
+
+		// Server already cleaned up session_data
+		if(session->flag.post_eof) {
+			close_session(session);
+			delete_session(session, true);
+			socket_iocp_buffer_free_guard(buffer_data);
 			continue;
 		}
 
@@ -1806,7 +1777,8 @@ static void socket_final_thread_pool(void)
 	mutex->cond_broadcast(socket_shutdown_event);
 	mutex->unlock(socket_shutdown_mutex);
 	thread->wait_multiple(socket_thread, socket_thread_count, NULL);
-	thread->wait(socket_listen_thread, NULL);
+	if(socket_listen_thread)
+		thread->wait(socket_listen_thread, NULL);
 	mutex->destroy(socket_shutdown_mutex);
 
 	aFree(socket_thread);
@@ -2765,11 +2737,10 @@ void socket_io_defaults(void)
 	socket_io->wfifoset = wfifoset;
 	socket_io->wfifohead = wfifohead;
 	socket_io->rfifoskip = rfifoskip;
-	socket_io->close = socket_close;
 
 	/* */
-	socket_io->flush = wfifoflush;
-	socket_io->flush_fifos = wfifoflush_all;
+	socket_io->wfifoflush = wfifoflush;
+	socket_io->wfifoflush_all = wfifoflush_all;
 	socket_io->set_defaultparse = set_defaultparse;
 	socket_io->host2ip = host2ip;
 	socket_io->ip2str = ip2str;

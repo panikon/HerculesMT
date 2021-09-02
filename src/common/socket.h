@@ -364,12 +364,11 @@ struct socket_io_interface {
 	void *(*wfifop)(struct socket_data *session, int pos);
 	void (*wfifohead)(struct socket_data *session, size_t len, bool get_mutex);
 	void (*wfifoflush)(struct socket_data *session);
+	void (*wfifoflush_all)(void);
 
 	/* */
 	void (*init) (void);
 	void (*final) (void);
-	/* */
-	int (*perform) (int next);
 
 	/* */
 	bool (*make_listen_bind) (uint32 ip, uint16 port);
@@ -384,8 +383,6 @@ struct socket_io_interface {
 
 
 	/* */
-	void (*eof) (int fd);
-
 	uint32 (*lan_subnet_check) (uint32 ip, struct s_subnet *info);
 	bool (*allowed_ip_check) (uint32 ip);
 	bool (*trusted_ip_check) (uint32 ip);
