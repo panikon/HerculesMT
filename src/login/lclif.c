@@ -396,6 +396,15 @@ static void lclif_parse(struct s_receive_action_data *act)
 		mutex->unlock(act->session->mutex);
 		return;
 	}
+	if(act->rdata == NULL) {
+		// Dequeued receive action without rdata without removal flag
+		ShowDebug("lclif_parse: Dequeued receive action without rdata!\n");
+		ShowInfo("Closed connection from '"CL_WHITE"%s"CL_RESET"'.\n",
+			socket_io->ip2str(ipl, NULL));
+		socket_io->session_disconnect(act->session);
+		mutex->unlock(act->session->mutex);
+		return;
+	}
 
 	if(act->session->session_data == NULL) { // First contact with login-server
 		// Perform ip-ban check

@@ -828,13 +828,7 @@ static void wfifoflush_act(struct s_send_action_data *act)
 	struct socket_data *session = act->session;
 	session->writes_remaining--;
 
-	if(session->flag.eof || session->flag.wait_removal) {
-		session_disconnect(session);
-	}
-
-	if(! (session->flag.eof || session->flag.wait_removal) // Don't send if EOF or waiting for removal
-	&& socket_iocp_post_send(session, act->write_buffer, act->write_buffer_pos+1)
-	) {
+	if(socket_iocp_post_send(session, act->write_buffer, act->write_buffer_pos+1)) {
 #ifdef SHOW_SERVER_STATS
 		socket_data_o += len;
 		socket_data_qo -= len;
@@ -843,6 +837,12 @@ static void wfifoflush_act(struct s_send_action_data *act)
 #endif  // SHOW_SERVER_STATS
 		session->wdata_tick = timer->get_server_tick();
 	}
+
+	// Disconnect only after sending remaining operations
+	if(session->flag.eof || session->flag.wait_removal) {
+		session_disconnect(session);
+	}
+
 	rwlock->read_lock(ers_collection_lock(ers_socket_collection));
 	mutex->lock(ers_receive_action_instance->cache_mutex);
 	ers_free(ers_send_action_instance, act);

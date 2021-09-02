@@ -486,7 +486,7 @@ static void login_fromchar_parse_auth(struct s_receive_action_data *act, struct 
 	uint32 login_id1 = RFIFOL(act,6);
 	uint32 login_id2 = RFIFOL(act,10);
 	uint8 sex = RFIFOB(act,14);
-	uint32 ip = ntohl(RFIFOL(act,15));
+	uint32 ipl = ntohl(RFIFOL(act,15));
 	int request_id = RFIFOL(act,19);
 	RFIFOSKIP(act,23);
 
@@ -500,10 +500,10 @@ static void login_fromchar_parse_auth(struct s_receive_action_data *act, struct 
 		node->login_id1  == login_id1 &&
 		node->login_id2  == login_id2 &&
 		node->sex        == sex_num2str(sex) &&
-		node->ip         == ip )
+		node->ip         == ipl )
 	{// found
-		//ShowStatus("Char-server '%s': authentication of the account %d accepted (ip: %s).\n",
-		//	server->name, account_id, ip);
+		ShowStatus("Char-server '%s': authentication of the account %d accepted (ip: %s).\n",
+			server->name, account_id, socket_io->ip2str(ipl, NULL));
 
 		// send ack
 		login->fromchar_auth_ack(act->session, account_id, login_id1, login_id2, sex, request_id, node);
@@ -515,7 +515,7 @@ static void login_fromchar_parse_auth(struct s_receive_action_data *act, struct 
 	else
 	{// authentication not found
 		ShowStatus("Char-server '%s': authentication of the account %d REFUSED (ip: %s).\n",
-			server->name, account_id, ip);
+			server->name, account_id, socket_io->ip2str(ipl, NULL));
 		login->fromchar_auth_ack(act->session, account_id, login_id1, login_id2, sex, request_id, NULL);
 	}
 }
@@ -1698,7 +1698,14 @@ static void login_auth_ok(struct login_session_data *sd)
 	if( data )
 	{// account is already marked as online!
 		switch(data->char_server) {
-			case ACC_WAIT_TIMEOUT: // client has authed but did not access char-server yet
+			// Client already authenticated but did not access char-server yet
+			case ACC_WAIT_TIMEOUT:
+				// Do not let a new connection until auth_db timeout, this could be an attack.
+				ShowNotice("User '%s' still waiting authentication timeout - Rejected\n",
+					sd->userid);
+				lclif->connection_error(sd->session, NBE_RECOGNIZES);
+				return;
+#if 0
 				// wipe previous session
 				mutex->lock(login->auth_db_mutex);
 				idb_remove(login->auth_db, sd->account_id);
@@ -1707,6 +1714,7 @@ static void login_auth_ok(struct login_session_data *sd)
 				login->remove_online_user(sd->account_id);
 				data = NULL;
 				break;
+#endif
 			case ACC_DISCONNECTED:
 			case ACC_CHAR_VALID:
 			default: // Request char servers to kick this account out. [Skotlex]
@@ -1717,7 +1725,7 @@ static void login_auth_ok(struct login_session_data *sd)
 					data->waiting_disconnect = timer->add(timer->gettick()+AUTH_TIMEOUT,
 						login->waiting_disconnect_timer, sd->account_id, 0);
 
-				lclif->connection_error(sd->session, NBE_RECOGNIZES); // Server still recognizes your last login
+				lclif->connection_error(sd->session, NBE_DUPLICATE_ID);
 				return;
 		}
 	}
