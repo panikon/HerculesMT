@@ -331,6 +331,7 @@ static void lchrif_server_destroy(struct mmo_char_server *server)
  * and then frees all data related to that server.
  *
  * Tries to acquire write lock (lchrif->server_destroy)
+ * Tries to acquire session->mutex
  **/
 static void lchrif_server_reset(struct mmo_char_server *server)
 {
@@ -357,6 +358,7 @@ static void lchrif_server_reset(struct mmo_char_server *server)
  * Called upon char-server disconnection
  *
  * Tries to acquire write lock (lchrif->server_destroy)
+ * Tries to acquire session->mutex (lchrif->server_reset)
  **/
 static void lchrif_on_disconnect(struct mmo_char_server *server)
 {
@@ -1216,7 +1218,7 @@ static int login_parse_fromchar(struct s_receive_action_data *act)
 		if(!socket_io->session_marked_removal(act->session))
 			ShowDebug("login_parse_fromchar: Disconnecting invalid session #%d (is not a char-server)\n",
 				act->session->id);
-		socket_io->session_disconnect_guard(act->session);
+		socket_io->session_disconnect(act->session);
 		mutex->unlock(act->session->mutex);
 		return 0;
 	}
@@ -1225,9 +1227,8 @@ static int login_parse_fromchar(struct s_receive_action_data *act)
 	if( socket_io->session_marked_removal(act->session) )
 	{
 		rwlock->read_unlock(g_char_server_list_lock);
-		lchrif->on_disconnect(server);
-		socket_io->session_disconnect(act->session);
 		mutex->unlock(act->session->mutex);
+		lchrif->on_disconnect(server);
 		return 0;
 	}
 	mutex->unlock(act->session->mutex);

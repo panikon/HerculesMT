@@ -398,6 +398,9 @@ uint32_t find_first_set(uint32_t v) {
  * @retval -1 not found
  **/
 int32_t find_first_set_array(uint32_t *v, uint32_t length, bool clear_bit) {
+	if(!length)
+		return -1;
+
 	uint32_t result = 0;
 	for(uint32_t i = 0; i < length; i++, result += 32) {
 		uint32_t found_bit = find_first_set(v[i]);

@@ -667,7 +667,10 @@ static bool socket_iocp_post_send(struct socket_data *session,
 			thread->get_tid(), WSAGetLastError(), sErr(sErrno));
 		buffer_data->status = QT_WAITING_QUEUE;
 		buffer_data->operation = IO_NONE;
-		VECTOR_PUSH(session->iocp_available_buffer, buffer_data);
+		if(VECTOR_CAPACITY(session->iocp_available_buffer))
+			VECTOR_PUSH(session->iocp_available_buffer, buffer_data);
+		else
+			socket_iocp_buffer_free(buffer_data);
 		return false;
 	}
 	// WSASend always send the whole buffer
@@ -1641,11 +1644,10 @@ static void *socket_worker(void *param)
 		}
 
 		// Server already cleaned up session_data
-		if(session->flag.post_eof) {
+		if(session->flag.post_eof && !buffer_data) {
+			mutex->lock(session->mutex);
 			close_session(session);
 			delete_session(session, true);
-			assert(!buffer_data
-				&& "Posted EOF with valid buffer data");
 			continue;
 		}
 
