@@ -548,7 +548,7 @@ static void login_fromchar_parse_update_users(struct s_receive_action_data *act,
  * Changes e-mail of provided account
  *
  * TODO: This packet is not implemented in the char-server, implement an ack as well.
- *       The ip that's being reported as being of the account is the ip of the car-server.
+ *       The ip that's being reported as being of the account is the ip of the char-server.
  **/
 static void login_fromchar_parse_request_change_email(struct s_receive_action_data *act,
 	struct mmo_char_server *server, const char *const ip
@@ -1701,6 +1701,7 @@ static void login_auth_ok(struct login_session_data *sd)
 		switch(data->char_server) {
 			// Client already authenticated but did not access char-server yet
 			case ACC_WAIT_TIMEOUT:
+				mutex->unlock(login->online_db_mutex);
 				// Do not let a new connection until auth_db timeout, this could be an attack.
 				ShowNotice("User '%s' still waiting authentication timeout - Rejected\n",
 					sd->userid);

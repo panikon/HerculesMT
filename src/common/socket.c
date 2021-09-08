@@ -42,6 +42,7 @@
 #include "common/sysinfo.h" // cpucores
 #include "common/random.h"
 #include "common/action.h"
+#include "common/utils.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -364,10 +365,13 @@ static void session_buffer_available_grow(struct socket_data *session)
 
 	rwlock->read_lock(ers_collection_lock(ers_socket_collection));
 	mutex->lock(ers_buffer_instance->cache_mutex);
+	VECTOR_ENSURE(session->iocp_available_buffer,
+		IOCP_INITIAL_BUFFER_COUNT, IOCP_INITIAL_BUFFER_COUNT);
 	for(int i = 0; i < IOCP_INITIAL_BUFFER_COUNT; i++) {
 		buffer = aCalloc(1, sizeof(*buffer));
 		CREATE(buffer->wsa_buffer, WSABUF, 1);
 		buffer->wsa_buffer->buf = ers_alloc(ers_buffer_instance);
+		assert(buffer->wsa_buffer->buf);
 		VECTOR_PUSH(session->iocp_available_buffer, buffer);
 	}
 	mutex->unlock(ers_buffer_instance->cache_mutex);
@@ -449,7 +453,7 @@ static void delete_session(struct socket_data *session, bool remove_db)
  * @param func_parse Parse function
  * @return Session
  * @retval NULL Failure
- * @warning The mutex of the created session is LOCKED and should be freed by the caller!
+ * @warning The mutex of the created session is LOCKED and should be unlocked by the caller!
  *
  * @remarks Why *Func are not being set? In the traditional socket approach all types
  * of sockets were created with a session associated, so for the listen socket there was
@@ -547,32 +551,29 @@ static void close_session(struct socket_data *session)
  * If session is ready for removal posts an empty receive action so the server
  * can do proper session cleanup before we do socket_data cleanup.
  *
- * Acquires session->mutex
+ * @mutex session->mutex
  **/
 static void socket_connection_lost(struct socket_data *session)
 {
 	nullpo_retv(session);
 
-	mutex->lock(session->mutex);
-
 	session->operations_remaining--;
-	if(session_mark_removal(session)) {
-		// Advance next parsing call so the session EOF can be handled by
-		// server-specific functions.
-		struct s_receive_action_data *recv_action;
-		rwlock->read_lock(ers_collection_lock(ers_socket_collection));
-		mutex->lock(ers_receive_action_instance->cache_mutex);
-		recv_action = ers_alloc(ers_receive_action_instance);
-		mutex->unlock(ers_receive_action_instance->cache_mutex);
-		rwlock->read_unlock(ers_collection_lock(ers_socket_collection));
-		recv_action->session = session;
-		// ERS_OPT_CLEAN, post empty action
+	if(!session_mark_removal(session))
+		return;
 
-		action->enqueue(action->queue_get(session),
-			action_receive, recv_action);
-	}
+	// Advance next parsing call so the session EOF can be handled by
+	// server-specific functions.
+	struct s_receive_action_data *recv_action;
+	rwlock->read_lock(ers_collection_lock(ers_socket_collection));
+	mutex->lock(ers_receive_action_instance->cache_mutex);
+	recv_action = ers_alloc(ers_receive_action_instance);
+	mutex->unlock(ers_receive_action_instance->cache_mutex);
+	rwlock->read_unlock(ers_collection_lock(ers_socket_collection));
+	recv_action->session = session;
+	// ERS_OPT_CLEAN, post empty action
 
-	mutex->unlock(session->mutex);
+	action->enqueue(action->queue_get(session),
+		action_receive, recv_action);
 }
 
 /**
@@ -638,6 +639,9 @@ static bool socket_iocp_post_send(struct socket_data *session,
 
 	buffer_data->status = QT_WAITING_DEQUEUE;
 	buffer_data->operation = IO_SEND;
+
+	//for(size_t i = 0; i < buffer_count; i++)
+	//	ShowDump(buffer_data->wsa_buffer[i].buf, buffer_data->wsa_buffer[i].len);
 
 	session->operations_remaining++;
 	retval = WSASend(session->socket,
@@ -1502,6 +1506,18 @@ static bool session_marked_removal(struct socket_data *session)
 }
 
 /**
+ * Are there any reference counters still 'filled' in this session?
+ * @mutex session->mutex
+ **/
+static bool session_references_remaining(struct socket_data *session)
+{
+	return (session->operations_remaining > 0
+	     || session->writes_remaining > 0
+	     || session->session_counter > 0
+	);
+}
+
+/**
  * Marks session for removal
  * @mutex session->mutex
  * @return true No operations remaining (can be removed)
@@ -1511,10 +1527,7 @@ static bool session_mark_removal(struct socket_data *session)
 	if(session->flag.eof)
 		return true;
 
-	if(session->operations_remaining > 0
-	|| session->writes_remaining > 0
-	|| session->session_counter > 0
-	) {
+	if(session_references_remaining(session)) {
 		session->flag.wait_removal = 1;
 		return false;
 	}
@@ -1533,14 +1546,12 @@ static bool session_mark_removal(struct socket_data *session)
  * @param buffer_data       Buffer information to process (Not safe to be used after calling)
  * @param bytes_transferred Number of bytes transferred in the operation
  * @param socket_tick       Server tick
- * Acquires session->mutex
+ * @mutex session->mutex
  **/
 static void socket_operation_process(struct socket_data *session,
 	struct s_iocp_buffer_data *buffer_data, DWORD bytes_transferred,
 	time_t socket_tick
 ) {
-	mutex->lock(session->mutex);
-
 	session->operations_remaining--;
 
 	/**
@@ -1585,7 +1596,6 @@ static void socket_operation_process(struct socket_data *session,
 		socket_iocp_buffer_clear(buffer_data);
 		VECTOR_PUSH(session->iocp_available_buffer, buffer_data);
 	}
-	mutex->unlock(session->mutex);
 }
 
 /**
@@ -1624,8 +1634,11 @@ static void *socket_worker(void *param)
 				thread->get_tid(), GetLastError());
 			// If a failed I/O operation yields a completion key it should be handled
 			// properly as if the connection was lost
-			if(session)
+			if(session) {
+				mutex->lock(session->mutex);
 				socket_connection_lost(session);
+				mutex->unlock(session->mutex);
+			}
 			socket_iocp_buffer_free_guard(buffer_data);
 			continue;
 		}
@@ -1643,12 +1656,21 @@ static void *socket_worker(void *param)
 			continue;
 		}
 
+		mutex->lock(session->mutex);
+
 		// Server already cleaned up session_data
 		if(session->flag.post_eof && !buffer_data) {
-			mutex->lock(session->mutex);
-			close_session(session);
-			delete_session(session, true);
-			continue;
+			if(session_references_remaining(session)) {
+				// There was a data-race and there's still data that we can't free
+				// Post another disconnection status (same as session_disconnect)
+				PostQueuedCompletionStatus(io_completion_port, 0,
+					(ULONG_PTR)session, NULL);
+				// Continue processing of this packet
+			} else {
+				close_session(session);
+				delete_session(session, true);
+				continue;
+			}
 		}
 
 		// Client connection gone
@@ -1657,6 +1679,7 @@ static void *socket_worker(void *param)
 			// Even if no bytes are transferred the attached buffer data is still available
 			// and should be handled properly
 			socket_iocp_buffer_free_guard(buffer_data);
+			mutex->unlock(session->mutex);
 			continue;
 		}
 
@@ -1666,6 +1689,7 @@ static void *socket_worker(void *param)
 
 		socket_operation_process(session, buffer_data, bytes_transferred,
 			timer->gettick_nocache());
+		mutex->unlock(session->mutex);
 #ifdef SHOW_SERVER_STATS
 	if (socket_io->last_tick != socket_data_last_tick)
 	{

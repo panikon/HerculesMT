@@ -223,7 +223,7 @@ static void mutex_destroy(struct mutex_data *m)
 bool mutex_can_lock(struct mutex_data *m) {
 	bool retval = true;
 	EnterCriticalSection(&m->hMutex_debug);
-	if(m->owner_tid == thread->get_tid()) {
+	if(m->owner_tid == thread->get_tid() && m->owner_tid != -1) {
 		ShowDebug("mutex_lock: Trying to re-enter a mutex (TID %d)\n",
 			thread->get_tid());
 		ShowInfo("mutex_lock: Ignored previous operation\n");
