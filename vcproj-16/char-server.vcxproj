@@ -55,7 +55,7 @@
     <ClCompile>
       <Optimization>Disabled</Optimization>
       <AdditionalIncludeDirectories>..\src;..\3rdparty;..\3rdparty\mariadb\include;..\3rdparty\zlib\include;..\3rdparty\msinttypes\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>WIN32;_WIN32;__WIN32;_DEBUG;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;FD_SETSIZE=4096;LIBCONFIG_STATIC;YY_USE_CONST;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>ENABLE_PERFORMANCE_COUNTER;WIN32;_WIN32;__WIN32;_DEBUG;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;FD_SETSIZE=4096;LIBCONFIG_STATIC;YY_USE_CONST;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessToFile>false</PreprocessToFile>
       <PreprocessSuppressLineNumbers>false</PreprocessSuppressLineNumbers>
       <ExceptionHandling>
@@ -160,6 +160,7 @@
     <ClInclude Include="..\src\common\mutex.h" />
     <ClInclude Include="..\src\common\nullpo.h" />
     <ClInclude Include="..\src\common\random.h" />
+    <ClInclude Include="..\src\common\rwlock.h" />
     <ClInclude Include="..\src\common\showmsg.h" />
     <ClInclude Include="..\src\common\socket.h" />
     <ClInclude Include="..\src\common\spinlock.h" />
@@ -218,6 +219,7 @@
     <ClCompile Include="..\src\common\mutex.c" />
     <ClCompile Include="..\src\common\nullpo.c" />
     <ClCompile Include="..\src\common\random.c" />
+    <ClCompile Include="..\src\common\rwlock.c" />
     <ClCompile Include="..\src\common\showmsg.c" />
     <ClCompile Include="..\src\common\socket.c" />
     <ClCompile Include="..\src\common\sql.c" />

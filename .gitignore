@@ -119,3 +119,5 @@ Thumbs.db
 /vcproj-*/map-server
 /vcproj-*/mapcache
 /vcproj-*/plugin-*/
+/vcproj-16/test-common
+/vcproj-16/.vs

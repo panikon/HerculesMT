@@ -148,6 +148,9 @@
     <ClCompile Include="..\src\char\int_rodex.c">
       <Filter>char</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\common\rwlock.c">
+      <Filter>common</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\common\cbasetypes.h">
@@ -341,6 +344,9 @@
     </ClInclude>
     <ClInclude Include="..\src\char\int_rodex.h">
       <Filter>char</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\common\rwlock.h">
+      <Filter>common</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

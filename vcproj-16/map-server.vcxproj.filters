@@ -223,6 +223,9 @@
     <ClCompile Include="..\src\map\refine.c">
       <Filter>map</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\common\rwlock.c">
+      <Filter>common</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\map\achievement.h">
@@ -509,6 +512,9 @@
     </ClInclude>
     <ClInclude Include="..\src\map\refine.h">
       <Filter>map</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\common\rwlock.h">
+      <Filter>common</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

@@ -11,8 +11,8 @@
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{D356871D-58E1-450B-967A-E6E9646175AF}</ProjectGuid>
-    <RootNamespace>map-server</RootNamespace>
+    <ProjectGuid>{FC2B9A93-E77E-4F09-AAA5-CF1E8051B004}</ProjectGuid>
+    <RootNamespace>test-common</RootNamespace>
     <Keyword>Win32Proj</Keyword>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
@@ -47,8 +47,8 @@
     <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">..\</OutDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(ProjectName)\$(Configuration)\</IntDir>
     <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</LinkIncremental>
-    <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">map-server</TargetName>
-    <TargetName Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">map-server</TargetName>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">test-common</TargetName>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">test-common</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -85,6 +85,7 @@
       </DataExecutionPrevention>
       <TargetMachine>MachineX86</TargetMachine>
       <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
+      <Profile>true</Profile>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -137,6 +138,7 @@
     <ClInclude Include="..\3rdparty\libconfig\strbuf.h" />
     <ClInclude Include="..\3rdparty\libconfig\wincompat.h" />
     <ClInclude Include="..\3rdparty\mt19937ar\mt19937ar.h" />
+    <ClInclude Include="..\src\common\action.h" />
     <ClInclude Include="..\src\common\atomic.h" />
     <ClInclude Include="..\src\common\cbasetypes.h" />
     <ClInclude Include="..\src\common\conf.h" />
@@ -169,62 +171,8 @@
     <ClInclude Include="..\src\common\timer.h" />
     <ClInclude Include="..\src\common\utils.h" />
     <ClInclude Include="..\src\common\winapi.h" />
-    <ClInclude Include="..\src\map\achievement.h" />
-    <ClInclude Include="..\src\map\atcommand.h" />
-    <ClInclude Include="..\src\map\battle.h" />
-    <ClInclude Include="..\src\map\battleground.h" />
-    <ClInclude Include="..\src\map\buyingstore.h" />
-    <ClInclude Include="..\src\map\channel.h" />
-    <ClInclude Include="..\src\map\chat.h" />
-    <ClInclude Include="..\src\map\chrif.h" />
-    <ClInclude Include="..\src\map\clan.h" />
-    <ClInclude Include="..\src\map\clif.h" />
-    <ClInclude Include="..\src\map\date.h" />
-    <ClInclude Include="..\src\map\duel.h" />
-    <ClInclude Include="..\src\map\elemental.h" />
-    <ClInclude Include="..\src\map\guild.h" />
-    <ClInclude Include="..\src\map\intif.h" />
-    <ClInclude Include="..\src\map\irc-bot.h" />
-    <ClInclude Include="..\src\map\itemdb.h" />
-    <ClInclude Include="..\src\map\log.h" />
-    <ClInclude Include="..\src\map\mail.h" />
-    <ClInclude Include="..\src\map\map.h" />
-    <ClInclude Include="..\src\map\mapreg.h" />
-    <ClInclude Include="..\src\map\homunculus.h" />
-    <ClInclude Include="..\src\map\HPMmap.h" />
-    <ClInclude Include="..\src\map\instance.h" />
-    <ClInclude Include="..\src\map\mercenary.h" />
-    <ClInclude Include="..\src\map\mob.h" />
-    <ClInclude Include="..\src\map\npc.h" />
-    <ClInclude Include="..\src\map\packets.h" />
-    <ClInclude Include="..\src\map\packets_keys_main.h" />
-    <ClInclude Include="..\src\map\packets_keys_zero.h" />
-    <ClInclude Include="..\src\map\packets_shuffle_main.h" />
-    <ClInclude Include="..\src\map\packets_shuffle_zero.h" />
-    <ClInclude Include="..\src\map\packets_struct.h" />
-    <ClInclude Include="..\src\map\party.h" />
-    <ClInclude Include="..\src\map\path.h" />
-    <ClInclude Include="..\src\map\pc.h" />
-    <ClInclude Include="..\src\map\pc_groups.h" />
-    <ClInclude Include="..\src\map\pet.h" />
-    <ClInclude Include="..\src\map\quest.h" />
-    <ClInclude Include="..\src\config\const.h" />
-    <ClInclude Include="..\src\config\core.h" />
-    <ClInclude Include="..\src\config\renewal.h" />
-    <ClInclude Include="..\src\config\secure.h" />
-    <ClInclude Include="..\src\config\classes\general.h" />
-    <ClInclude Include="..\src\map\refine.h" />
-    <ClInclude Include="..\src\map\refine.p.h" />
-    <ClInclude Include="..\src\map\rodex.h" />
-    <ClInclude Include="..\src\map\script.h" />
-    <ClInclude Include="..\src\map\searchstore.h" />
-    <ClInclude Include="..\src\map\skill.h" />
-    <ClInclude Include="..\src\map\status.h" />
-    <ClInclude Include="..\src\map\storage.h" />
-    <ClInclude Include="..\src\map\stylist.h" />
-    <ClInclude Include="..\src\map\trade.h" />
-    <ClInclude Include="..\src\map\unit.h" />
-    <ClInclude Include="..\src\map\vending.h" />
+    <ClInclude Include="..\src\test\test_db\xxhash.h" />
+    <ClInclude Include="..\src\test\test_entry.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\3rdparty\libconfig\grammar.c" />
@@ -233,6 +181,7 @@
     <ClCompile Include="..\3rdparty\libconfig\scanner.c" />
     <ClCompile Include="..\3rdparty\libconfig\strbuf.c" />
     <ClCompile Include="..\3rdparty\mt19937ar\mt19937ar.c" />
+    <ClCompile Include="..\src\common\action.c" />
     <ClCompile Include="..\src\common\conf.c" />
     <ClCompile Include="..\src\common\core.c" />
     <ClCompile Include="..\src\common\packets.c" />
@@ -251,70 +200,22 @@
     <ClCompile Include="..\src\common\rwlock.c" />
     <ClCompile Include="..\src\common\showmsg.c" />
     <ClCompile Include="..\src\common\socket.c" />
+    <ClCompile Include="..\src\common\socket_win.c" />
     <ClCompile Include="..\src\common\sql.c" />
     <ClCompile Include="..\src\common\strlib.c" />
     <ClCompile Include="..\src\common\sysinfo.c" />
     <ClCompile Include="..\src\common\thread.c" />
     <ClCompile Include="..\src\common\timer.c" />
     <ClCompile Include="..\src\common\utils.c" />
-    <ClCompile Include="..\src\map\achievement.c" />
-    <ClCompile Include="..\src\map\atcommand.c" />
-    <ClCompile Include="..\src\map\battle.c" />
-    <ClCompile Include="..\src\map\battleground.c" />
-    <ClCompile Include="..\src\map\buyingstore.c" />
-    <ClCompile Include="..\src\map\channel.c" />
-    <ClCompile Include="..\src\map\chat.c" />
-    <ClCompile Include="..\src\map\chrif.c" />
-    <ClCompile Include="..\src\map\clan.c" />
-    <ClCompile Include="..\src\map\clif.c" />
-    <ClCompile Include="..\src\map\date.c" />
-    <ClCompile Include="..\src\map\duel.c" />
-    <ClCompile Include="..\src\map\elemental.c" />
-    <ClCompile Include="..\src\map\guild.c" />
-    <ClCompile Include="..\src\map\intif.c" />
-    <ClCompile Include="..\src\map\irc-bot.c" />
-    <ClCompile Include="..\src\map\itemdb.c" />
-    <ClCompile Include="..\src\map\log.c" />
-    <ClCompile Include="..\src\map\mail.c" />
-    <ClCompile Include="..\src\map\map.c" />
-    <ClCompile Include="..\src\map\mapreg_sql.c" />
-    <ClCompile Include="..\src\map\homunculus.c" />
-    <ClCompile Include="..\src\map\HPMmap.c" />
-    <ClCompile Include="..\src\map\instance.c" />
-    <ClCompile Include="..\src\map\mercenary.c" />
-    <ClCompile Include="..\src\map\mob.c" />
-    <ClCompile Include="..\src\map\npc.c" />
-    <ClCompile Include="..\src\map\npc_chat.c" />
-    <ClCompile Include="..\src\map\party.c" />
-    <ClCompile Include="..\src\map\path.c" />
-    <ClCompile Include="..\src\map\pc.c" />
-    <ClCompile Include="..\src\map\pc_groups.c" />
-    <ClCompile Include="..\src\map\pet.c" />
-    <ClCompile Include="..\src\map\quest.c" />
-    <ClCompile Include="..\src\map\refine.c" />
-    <ClCompile Include="..\src\map\rodex.c" />
-    <ClCompile Include="..\src\map\script.c" />
-    <ClCompile Include="..\src\map\searchstore.c" />
-    <ClCompile Include="..\src\map\skill.c" />
-    <ClCompile Include="..\src\map\status.c" />
-    <ClCompile Include="..\src\map\storage.c" />
-    <ClCompile Include="..\src\map\stylist.c" />
-    <ClCompile Include="..\src\map\trade.c" />
-    <ClCompile Include="..\src\map\unit.c" />
-    <ClCompile Include="..\src\map\vending.c" />
+    <ClCompile Include="..\src\test\test_db.c" />
+    <ClCompile Include="..\src\test\test_db\xxhash.c" />
+    <ClCompile Include="..\src\test\test_entry.c" />
+    <ClCompile Include="..\src\test\test_ers.c" />
+    <ClCompile Include="..\src\test\test_misc.c" />
+    <ClCompile Include="..\src\test\test_rwlock.c" />
+    <ClCompile Include="..\src\test\test_timer.c" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
-  <Target Name="AfterBuild">
-    <Copy SourceFiles="..\conf\import-tmpl\battle.conf" DestinationFolder="..\conf\import\" ContinueOnError="true" Condition="!Exists('..\conf\import\battle.conf')" />
-    <Copy SourceFiles="..\conf\import-tmpl\char-server.conf" DestinationFolder="..\conf\import\" ContinueOnError="true" Condition="!Exists('..\conf\import\char-server.conf')" />
-    <Copy SourceFiles="..\conf\import-tmpl\inter-server.conf" DestinationFolder="..\conf\import\" ContinueOnError="true" Condition="!Exists('..\conf\import\inter-server.conf')" />
-    <Copy SourceFiles="..\conf\import-tmpl\logs.conf" DestinationFolder="..\conf\import\" ContinueOnError="true" Condition="!Exists('..\conf\import\logs.conf')" />
-    <Copy SourceFiles="..\conf\import-tmpl\login-server.conf" DestinationFolder="..\conf\import\" ContinueOnError="true" Condition="!Exists('..\conf\import\login-server.conf')" />
-    <Copy SourceFiles="..\conf\import-tmpl\map-server.conf" DestinationFolder="..\conf\import\" ContinueOnError="true" Condition="!Exists('..\conf\import\map-server.conf')" />
-    <Copy SourceFiles="..\conf\import-tmpl\msg_conf.txt" DestinationFolder="..\conf\import\" ContinueOnError="true" Condition="!Exists('..\conf\import\msg_conf.txt')" />
-    <Copy SourceFiles="..\conf\import-tmpl\socket.conf" DestinationFolder="..\conf\import\" ContinueOnError="true" Condition="!Exists('..\conf\import\socket.conf')" />
-    <Copy SourceFiles="..\conf\import-tmpl\script.conf" DestinationFolder="..\conf\import\" ContinueOnError="true" Condition="!Exists('..\conf\import\script.conf')" />
-  </Target>
 </Project>

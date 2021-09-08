@@ -1,24 +1,6 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <ClCompile Include="..\src\login\account.c">
-      <Filter>login</Filter>
-    </ClCompile>
-    <ClCompile Include="..\src\login\HPMlogin.c">
-      <Filter>login</Filter>
-    </ClCompile>
-    <ClCompile Include="..\src\login\ipban.c">
-      <Filter>login</Filter>
-    </ClCompile>
-    <ClCompile Include="..\src\login\login.c">
-      <Filter>login</Filter>
-    </ClCompile>
-    <ClCompile Include="..\src\login\loginlog.c">
-      <Filter>login</Filter>
-    </ClCompile>
-    <ClCompile Include="..\src\common\conf.c">
-      <Filter>common</Filter>
-    </ClCompile>
     <ClCompile Include="..\src\common\core.c">
       <Filter>common</Filter>
     </ClCompile>
@@ -26,6 +8,9 @@
       <Filter>common</Filter>
     </ClCompile>
     <ClCompile Include="..\src\common\console.c">
+      <Filter>common</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\common\des.c">
       <Filter>common</Filter>
     </ClCompile>
     <ClCompile Include="..\src\common\db.c">
@@ -43,6 +28,9 @@
     <ClCompile Include="..\src\common\memmgr.c">
       <Filter>common</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\common\mapindex.c">
+      <Filter>common</Filter>
+    </ClCompile>
     <ClCompile Include="..\src\common\md5calc.c">
       <Filter>common</Filter>
     </ClCompile>
@@ -50,9 +38,6 @@
       <Filter>common</Filter>
     </ClCompile>
     <ClCompile Include="..\src\common\random.c">
-      <Filter>common</Filter>
-    </ClCompile>
-    <ClCompile Include="..\src\common\showmsg.c">
       <Filter>common</Filter>
     </ClCompile>
     <ClCompile Include="..\src\common\socket.c">
@@ -71,6 +56,12 @@
       <Filter>common</Filter>
     </ClCompile>
     <ClCompile Include="..\src\common\utils.c">
+      <Filter>common</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\common\conf.c">
+      <Filter>common</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\common\showmsg.c">
       <Filter>common</Filter>
     </ClCompile>
     <ClCompile Include="..\3rdparty\mt19937ar\mt19937ar.c">
@@ -97,39 +88,27 @@
     <ClCompile Include="..\src\common\mutex.c">
       <Filter>common</Filter>
     </ClCompile>
-    <ClCompile Include="..\src\common\des.c">
-      <Filter>common</Filter>
-    </ClCompile>
-    <ClCompile Include="..\src\login\lclif.c">
-      <Filter>login</Filter>
-    </ClCompile>
     <ClCompile Include="..\src\common\rwlock.c">
       <Filter>common</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\test\test_rwlock.c" />
+    <ClCompile Include="..\src\test\test_entry.c" />
+    <ClCompile Include="..\src\test\test_ers.c" />
+    <ClCompile Include="..\src\test\test_timer.c" />
+    <ClCompile Include="..\src\test\test_misc.c" />
+    <ClCompile Include="..\src\common\socket_win.c">
+      <Filter>common</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\test\test_db.c" />
+    <ClCompile Include="..\src\test\test_db\xxhash.c">
+      <Filter>test_db</Filter>
     </ClCompile>
     <ClCompile Include="..\src\common\action.c">
       <Filter>common</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\src\login\account.h">
-      <Filter>login</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\login\HPMlogin.h">
-      <Filter>login</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\login\ipban.h">
-      <Filter>login</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\login\loginlog.h">
-      <Filter>login</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\login\login.h">
-      <Filter>login</Filter>
-    </ClInclude>
     <ClInclude Include="..\src\common\cbasetypes.h">
-      <Filter>common</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\common\conf.h">
       <Filter>common</Filter>
     </ClInclude>
     <ClInclude Include="..\src\common\core.h">
@@ -139,6 +118,9 @@
       <Filter>common</Filter>
     </ClInclude>
     <ClInclude Include="..\src\common\db.h">
+      <Filter>common</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\common\des.h">
       <Filter>common</Filter>
     </ClInclude>
     <ClInclude Include="..\src\common\ers.h">
@@ -156,6 +138,9 @@
     <ClInclude Include="..\src\common\memmgr.h">
       <Filter>common</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\common\mapindex.h">
+      <Filter>common</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\common\md5calc.h">
       <Filter>common</Filter>
     </ClInclude>
@@ -166,9 +151,6 @@
       <Filter>common</Filter>
     </ClInclude>
     <ClInclude Include="..\src\common\random.h">
-      <Filter>common</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\common\showmsg.h">
       <Filter>common</Filter>
     </ClInclude>
     <ClInclude Include="..\src\common\socket.h">
@@ -187,6 +169,12 @@
       <Filter>common</Filter>
     </ClInclude>
     <ClInclude Include="..\src\common\utils.h">
+      <Filter>common</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\common\conf.h">
+      <Filter>common</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\common\showmsg.h">
       <Filter>common</Filter>
     </ClInclude>
     <ClInclude Include="..\3rdparty\mt19937ar\mt19937ar.h">
@@ -225,9 +213,6 @@
     <ClInclude Include="..\src\common\atomic.h">
       <Filter>common</Filter>
     </ClInclude>
-    <ClInclude Include="..\src\common\des.h">
-      <Filter>common</Filter>
-    </ClInclude>
     <ClInclude Include="..\src\common\hercules.h">
       <Filter>common</Filter>
     </ClInclude>
@@ -240,61 +225,35 @@
     <ClInclude Include="..\src\common\spinlock.h">
       <Filter>common</Filter>
     </ClInclude>
-    <ClInclude Include="..\src\config\const.h">
-      <Filter>config</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\config\core.h">
-      <Filter>config</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\config\renewal.h">
-      <Filter>config</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\config\secure.h">
-      <Filter>config</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\config\classes\general.h">
-      <Filter>config</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\login\lclif.h">
-      <Filter>login</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\login\lclif.p.h">
-      <Filter>login</Filter>
-    </ClInclude>
     <ClInclude Include="..\src\common\rwlock.h">
       <Filter>common</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\test\test_entry.h" />
+    <ClInclude Include="..\src\test\test_db\xxhash.h">
+      <Filter>test_db</Filter>
     </ClInclude>
     <ClInclude Include="..\src\common\action.h">
       <Filter>common</Filter>
     </ClInclude>
-    <ClInclude Include="..\src\login\packets_ac_struct.h">
-      <Filter>login\packets</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\login\packets_ca_struct.h">
-      <Filter>login\packets</Filter>
-    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="common">
-      <UniqueIdentifier>{b50ee803-e71d-4d41-8f7d-2dad5839df50}</UniqueIdentifier>
+      <UniqueIdentifier>{3a137217-ebf7-44ee-95d9-3d7c51d2a199}</UniqueIdentifier>
     </Filter>
     <Filter Include="3rdparty">
-      <UniqueIdentifier>{ab5c90ec-923d-4847-a214-45b40818211e}</UniqueIdentifier>
+      <UniqueIdentifier>{c4845ea8-bcc7-411b-af29-e3842adb6714}</UniqueIdentifier>
     </Filter>
     <Filter Include="3rdparty\mt19937ar">
-      <UniqueIdentifier>{68e3bcee-28d9-4b2d-8701-614d50f32999}</UniqueIdentifier>
+      <UniqueIdentifier>{fcf23386-ddba-4a72-9b41-62f8e2d0e6c0}</UniqueIdentifier>
     </Filter>
     <Filter Include="3rdparty\libconfig">
-      <UniqueIdentifier>{779e8145-9bb2-4a88-9149-60586ab0bdd4}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="login">
-      <UniqueIdentifier>{8eea96ed-d379-4694-ae2e-ffb0be95170c}</UniqueIdentifier>
+      <UniqueIdentifier>{9caf40b7-c4d1-43b4-bd1f-0376b4f920e7}</UniqueIdentifier>
     </Filter>
     <Filter Include="config">
-      <UniqueIdentifier>{d8fb6ac7-c87d-4d6b-aea4-98a0ea800666}</UniqueIdentifier>
+      <UniqueIdentifier>{d7d16c66-c973-45d7-b47f-a1f80a898b9b}</UniqueIdentifier>
     </Filter>
-    <Filter Include="login\packets">
-      <UniqueIdentifier>{601ce42d-67b9-4ccd-87d1-b2ce351d1dee}</UniqueIdentifier>
+    <Filter Include="test_db">
+      <UniqueIdentifier>{ae258531-6b1e-46d7-acd9-c2c1d85e7bc0}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>
