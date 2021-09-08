@@ -35,6 +35,7 @@
 #include "common/mutex.h"
 #include "common/action.h"
 #include "common/socket.h"
+#include "common/db.h"
 #endif
 
 #ifdef WIN32
@@ -58,12 +59,14 @@ struct timer_interface *timer;
  * This is a copy of timer_s but without any of the
  * *_thread functions.
  * All functions in this interface do not try to
- * reacquire any locks.
+ * reacquire timer_perform_mutex
  **/
 static struct timer_interface timer_thread_s;
 #endif
 /**
  * Pointer to interface that's passed to timer functions
+ * None of the functions in this interface acquires timer_perfom_mutex
+ *
  * When TIMER_USE_THREAD is set this is a pointer to timer_thread_s,
  * otherwise this is the same as timer.
  **/
@@ -74,25 +77,54 @@ struct timer_interface *tm;
 #define TIMER_MIN_INTERVAL 50
 #define TIMER_MAX_INTERVAL 1000
 
-// timers (array)
+/**
+ * Timer list
+ * Each index is a timer id.
+ **/
 static struct TimerData* timer_data = NULL;
-static int timer_data_max = 0;
-static int timer_data_num = 1;
+static int timer_data_max = 0;  //< Length of timer_data
+static int timer_data_num = -1; //< Last timer added
 
-// free timers (array)
-static int *free_timer_list = NULL;
-static int free_timer_list_max = 0;
-static int free_timer_list_pos = 0;
-
-// Thread state
+/**
+ * Thread state
+ **/
 #ifdef TIMER_USE_THREAD
-struct thread_handle *timer_thread_handle = NULL;
-struct mutex_data *timer_perform_mutex = NULL;
-struct mutex_data *timer_shutdown_mutex = NULL;
-struct cond_data *timer_shutdown_event = NULL;
-bool timer_run = true;
-#endif
+static struct thread_handle *timer_thread_handle = NULL;
+static struct mutex_data *timer_perform_mutex = NULL;
 
+/**
+ * Timer thread run state
+ **/
+static struct mutex_data *timer_shutdown_mutex = NULL;
+static struct cond_data *timer_shutdown_event = NULL;
+static bool timer_run = true;
+
+/**
+ * Timer queue
+ *
+ * This queue is used so we can safely acquire mutexes inside TimerFuncs even
+ * if they're being executed from the timer thread. Avoiding possible deadlocks.
+ *
+ * @see timer_action_enqueue
+ * @see timer_action_dequeue_all
+ * @see timer_queue
+ **/
+struct s_timer_action {
+	enum {
+		TIMERFUNC_ADD,     //< timer->add_sub
+		TIMERFUNC_DELETE,  //< timer->delete
+		TIMERFUNC_TICK,    //< timer->settick
+	} type;
+	int tid; //< Timer id (target)
+	union {
+		struct TimerData *data; //< TimerData (for TIMERFUNC_ADD)
+		int64 tick; //< Tick used in TIMERFUNC_TICK
+		TimerFunc func; //< Function in TIMERFUNC_DELETE
+	} u;
+};
+static QUEUE_DECL(struct s_timer_action) timer_queue = QUEUE_STATIC_INITIALIZER;
+static struct mutex_data *timer_action_mutex = NULL;
+#endif // TIMER_USE_THREAD
 
 /// Comparator for the timer heap. (minimum tick at top)
 /// Returns negative if tid1's tick is smaller, positive if tid2's tick is smaller, 0 if equal.
@@ -341,38 +373,306 @@ static void push_timer_heap(int tid)
  *--------------------------*/
 
 /**
- * Returns a free timer id.
- * @mutex timer_perform_mutex
+ * Timer ID bitfields
+ *
+ * These bitfields are used in order to keep track of reserved IDs and free IDs
  **/
-static int acquire_timer(void)
+struct s_timer_bitfield {
+	uint32_t *bitfield;      //< Bitfield of TIDs
+	int32_t bitfield_length; //< Length of bitfield array
+	int start_tid;           //< TID corresponding to the first bit
+	int count;               //< Number of reserved TID at any given moment
+} timer_reserved =
 {
-	int tid;
+	.bitfield = NULL,
+	.bitfield_length = 0,
+	.start_tid = -1,
+	.count = 0,
+}, timer_free =
+{
+	.bitfield = NULL,
+	.bitfield_length = 0,
+	.start_tid = 0,
+	.count = 0,
+};
+struct mutex_data *timer_bitfield_mutex = NULL;
 
-	// select a free timer
-	if (free_timer_list_pos) {
-		do {
-			tid = free_timer_list[--free_timer_list_pos];
-		} while(tid >= timer_data_num && free_timer_list_pos > 0);
-	} else
-		tid = timer_data_num;
+/**
+ * Frees a bitfield list
+ **/
+static void timer_bitfield_free(struct s_timer_bitfield *list)
+{
+	if(list->bitfield)
+		aFree(list->bitfield);
+	list->bitfield = NULL;
+	list->bitfield_length = 0;
+	list->start_tid = 0;
+	list->count = 0;
+}
 
-	// check available space
-	if( tid >= timer_data_num )
-		// possible timer_data null pointer
-		for (tid = timer_data_num; tid < timer_data_max && timer_data[tid].type; tid++);
-	if (tid >= timer_data_num && tid >= timer_data_max)
-	{// expand timer array
-		timer_data_max += 256;
-		if( timer_data )
-			RECREATE(timer_data, struct TimerData, timer_data_max);
+/**
+ * Returns corresponding TID of bit position
+ *
+ * @retval -1 Invalid position
+ * @return Corresponding TID
+ * @mutex timer_bitfield_mutex
+ **/
+static int timer_bitfield_get(struct s_timer_bitfield *list, int tid_bit)
+{
+	if(!list->count)
+		return -1;
+
+	if(tid_bit > list->bitfield_length*32)
+		return -1;
+
+	return tid_bit + list->start_tid;
+}
+
+/**
+ * Verifies if a TID is in the provided bitfield
+ *
+ * @return True if TID is set in the bitfield.
+ * @mutex timer_bitfield_mutex
+ **/
+static bool timer_bitfield_check(struct s_timer_bitfield *list, int tid)
+{
+	if(!list->count)
+		return false;
+
+	int tid_relative = tid - list->start_tid;
+	if(tid_relative < 0)
+		return false;
+
+	int expected_pos = tid_relative/32;
+	int tid_bit = tid_relative - (expected_pos*32);
+	if(tid_bit > list->bitfield_length*32)
+		return false;
+
+	return BIT_CHECK(list->bitfield[expected_pos], tid_bit);
+}
+
+/**
+ * Sets bit that corresponds to the provided TID in a bitfield
+ * @mutex timer_bitfield_mutex
+ **/
+static void timer_bitfield_set(struct s_timer_bitfield *list, int tid)
+{
+	if(list->start_tid == -1)
+		list->start_tid = tid;
+
+	int tid_relative = tid - list->start_tid;
+
+	// This should not happen, only TIDs greater than the start_tid
+	// can be reserved, otherwise this would mean that the system is trying
+	// to reserve ids out of sync. If this is ever needed it can be implemented.
+	assert(tid_relative >= 0);
+
+	int expected_pos = tid_relative/32;
+	if(!list->bitfield_length || tid > list->bitfield_length*32) {
+		if(!expected_pos)
+			expected_pos = 1;
+		if(list->bitfield_length)
+			RECREATE(list->bitfield, uint32_t, expected_pos);
 		else
-			CREATE(timer_data, struct TimerData, timer_data_max);
-		memset(timer_data + (timer_data_max - 256), 0, sizeof(struct TimerData)*256);
+			CREATE(list->bitfield, uint32_t, expected_pos);
+		list->bitfield_length = expected_pos;
 	}
 
-	if( tid >= timer_data_num )
-		timer_data_num = tid + 1;
+	int tid_bit = tid_relative - (expected_pos*32); // expected_pos is floored
+	BIT_SET(list->bitfield[expected_pos], tid_bit);
+	list->count++;
+}
 
+/**
+ * Clears bit that corresponds to the provided TID in a bitfield
+ * @mutex timer_bitfield_mutex
+ **/
+static void timer_bitfield_clear(struct s_timer_bitfield *list, int tid)
+{
+	if(list->start_tid == -1 || !list->count)
+		return;
+
+	int tid_relative = tid - list->start_tid;
+
+	if(tid_relative < 0)
+		return;
+
+	int expected_pos = tid_relative/32;
+	int tid_bit = tid_relative - (expected_pos*32);
+	if(tid_bit > list->bitfield_length*32)
+		return;
+	BIT_CLEAR(list->bitfield[expected_pos], tid_bit);
+	list->count--;
+}
+
+/**
+ * Gets next valid TID from list and clears its bit.
+ *
+ * @retval -1 No TID in list
+ * @mutex timer_bitfield_mutex
+ **/
+static int timer_bitfield_get_next(struct s_timer_bitfield *list)
+{
+	int tid = -1;
+	int32_t free_pos = find_first_set_array(timer_free.bitfield,
+		timer_free.bitfield_length, false);
+	if(free_pos != -1) {
+		tid = timer_bitfield_get(&timer_free, free_pos);
+		assert(tid != -1 && "Invalid bit from find_first_set_array");
+		timer_bitfield_clear(&timer_free, tid);
+	}
+	return tid;
+}
+
+/*======================================
+ * CORE : Timer Action Queue
+ *--------------------------------------*/
+
+/**
+ * Enqueues a function into timer action queue
+ *
+ * @param type Type of function to be added (@see s_timer_action::type)
+ * @param tid  Timer to be changed (When adding a new timer must be a valid id)
+ * @param data TIMERFUNC_ADD copied
+ *             TIMERFUNC_TICK only tick is used
+ *             TIMER_DELETE func is used
+ *
+ * Acquires timer_action_mutex
+ **/
+static void timer_action_enqueue(unsigned char type, int tid, struct TimerData *data)
+{
+	struct s_timer_action act;
+
+	act.type = type;
+	switch(act.type) {
+		case TIMERFUNC_ADD:
+			act.tid = tid;
+			act.u.data = aMalloc(sizeof(*act.u.data));
+			memcpy(act.u.data, data, sizeof(*act.u.data));
+			break;
+		case TIMERFUNC_DELETE:
+			act.tid = tid;
+			act.u.func = data->func;
+			break;
+		case TIMERFUNC_TICK:
+			act.tid = tid;
+			act.u.tick = data->tick;
+			break;
+		default:
+			ShowError("timer_action_enqueue: Unknown action type %d\n",
+				act.type);
+			return;
+	}
+	mutex->lock(timer_action_mutex);
+	QUEUE_ENQUEUE(timer_queue, act, 5);
+	mutex->unlock(timer_action_mutex);
+}
+
+/**
+ * Dequeues and executes all functions in timer action queue
+ *
+ * Acquires timer_action_mutex and timer_bitfield_mutex
+ * @mutex timer_perform_mutex
+ **/
+static void timer_action_dequeue_all(void)
+{
+	mutex->lock(timer_action_mutex);
+
+	struct s_timer_action *act = NULL;
+	while(QUEUE_LENGTH(timer_queue)) {
+		act = &QUEUE_FRONT(timer_queue);
+		switch(act->type) {
+			case TIMERFUNC_ADD:
+				if(!timer_data) {
+					CREATE(timer_data, struct TimerData, 256);
+					timer_data_max = 256;
+				}
+				timer_data[act->tid].tick          = act->u.data->tick;
+				timer_data[act->tid].func          = act->u.data->func;
+				timer_data[act->tid].id            = act->u.data->id;
+				timer_data[act->tid].data          = act->u.data->data;
+				timer_data[act->tid].type          = act->u.data->type;
+				timer_data[act->tid].interval      = act->u.data->interval;
+				timer_data[act->tid].timer_target  = act->u.data->timer_target;
+				timer_data[act->tid].target_id     = act->u.data->target_id;
+				push_timer_heap(act->tid);
+				aFree(act->u.data);
+
+				mutex->lock(timer_bitfield_mutex);
+				timer_bitfield_clear(&timer_reserved, act->tid);
+				mutex->unlock(timer_bitfield_mutex);
+				break;
+			case TIMERFUNC_DELETE:
+				if(tm->delete(act->tid, act->u.func) < 0)
+					ShowError("timer_action_dequeue_all: Failed to delete timer in action (TID %d)\n",
+						act->tid);
+				break;
+			case TIMERFUNC_TICK:
+				if(tm->settick(act->tid, act->u.tick) == -1)
+					ShowError("timer_action_dequeue_all: Failed to set tick in dequeued action (TID %d)\n",
+						act->tid);
+				break;
+			default:
+				ShowError("timer_action_dequeue_all: Unknown action type %d\n",
+					act->type);
+				break;
+		}
+		QUEUE_DEQUEUE(timer_queue);
+	}
+
+	mutex->unlock(timer_action_mutex);
+}
+
+/**
+ * Returns a free timer id.
+ *
+ * @param timer_perform_mutex_got Set to true if timer_perform_mutex is locked.
+ *                                When this mutex is not locked the timer list
+ *                                is not grown and instead a TID is reserved
+ *                                and returned instead.
+ * Acquires timer_bitfield_mutex
+ **/
+static int acquire_timer(bool timer_perform_mutex_got)
+{
+	int tid = -1;
+
+	mutex->lock(timer_bitfield_mutex);
+	// Search free timer list for a valid TID
+	tid = timer_bitfield_get_next(&timer_free);
+	if(tid != -1)
+		goto unlock_return_tid;
+
+	// Check available space
+	do {
+		tid = timer_data_num+1;
+	} while(timer_bitfield_check(&timer_reserved, tid));
+	timer_data_num = tid;
+
+	if(timer_perform_mutex_got) {
+		// Grow timer list
+		if(tid >= timer_data_max) {
+			if(timer_reserved.count >= 256)
+				timer_data_max += ((int)ceil((double)timer_reserved.count/256)+1) * 256;
+			else
+				timer_data_max += 256;
+			if(timer_data)
+				RECREATE(timer_data, struct TimerData, timer_data_max);
+			else
+				CREATE(timer_data, struct TimerData, timer_data_max);
+
+			// Fill reserved timers
+			int reserved_tid = -1;
+			while((reserved_tid = timer_bitfield_get_next(&timer_reserved)) != -1)
+				timer_data[reserved_tid].type = TIMER_RESERVED;
+			if(reserved_tid != -1 && reserved_tid > timer_data_num)
+				timer_data_num = reserved_tid;
+		}
+	} else {
+		timer_bitfield_set(&timer_reserved, tid);
+	}
+
+unlock_return_tid:
+	mutex->unlock(timer_bitfield_mutex);
 	return tid;
 }
 
@@ -403,7 +703,7 @@ static int timer_add_sub(int64 tick, TimerFunc func, int id,
 		return INVALID_TIMER;
 	}
 
-	tid = acquire_timer();
+	tid = acquire_timer(true);
 	if (timer_data[tid].type != 0 && timer_data[tid].type != TIMER_REMOVE_HEAP)
 	{
 		ShowError("timer_add_sub: wrong tid type: %d, [%d]%p(%s) -> %p(%s)\n",
@@ -439,7 +739,7 @@ static int timer_add_sub(int64 tick, TimerFunc func, int id,
  * @param data     General purpose storage.
  * @return Timer id
  * @retval INVALID_TIMER in failure
- * @see timer_add_sub
+ * @see timer->add_sub
  **/
 static int timer_add(int64 tick, TimerFunc func, int id, intptr_t data)
 {
@@ -456,7 +756,7 @@ static int timer_add(int64 tick, TimerFunc func, int id, intptr_t data)
  * @param interval Timer interval
  * @return Timer id
  * @retval INVALID_TIMER in failure
- * @see timer_add_sub
+ * @see timer->add_sub
  **/
 static int timer_add_interval(int64 tick, TimerFunc func, int id, intptr_t data, int interval)
 {
@@ -495,7 +795,7 @@ static int timer_do_delete(int tid, TimerFunc func)
 {
 	nullpo_retr(-2, func);
 
-	if (tid < 1 || tid >= timer_data_num) {
+	if (tid < 1 || tid > timer_data_num) {
 		ShowError("timer_do_delete error : no such timer [%d](%p(%s))\n",
 			tid, func, search_timer_func_list(func));
 		Assert_retr(-1, 0);
@@ -528,7 +828,7 @@ static int timer_do_delete(int tid, TimerFunc func)
  * Adjusts a timer's expiration time.
  *
  * @return New tick value, or -1 if it fails.
- * @see timer_settick
+ * @see timer->settick
  **/
 static int64 timer_addtick(int tid, int64 tick)
 {
@@ -586,29 +886,6 @@ static int64 timer_settick(int tid, int64 tick)
 }
 
 #ifdef TIMER_USE_THREAD
-// @copydoc timer_add_func_list
-static void timer_add_func_list_guard(TimerFunc func, char *name)
-{
-	mutex->lock(timer_perform_mutex);
-	timer_add_func_list(func, name);
-	mutex->unlock(timer_perform_mutex);
-}
-
-/**
- * @copydoc timer_add_sub
- * @remarks Adds mutex guards to timer_add_sub calls
- **/
-static int timer_add_sub_guard(int64 tick, TimerFunc func, int id,
-	intptr_t data, int interval, unsigned char type, unsigned char target,
-	int32_t target_id
-) {
-	int tid;
-	mutex->lock(timer_perform_mutex);
-	tid = timer_add_sub(tick, func, id, data, interval, type, target, target_id);
-	mutex->unlock(timer_perform_mutex);
-	return tid;
-}
-
 /**
  * @copydoc timer_addtick
  * @remarks Instead of using timer as the interface uses tm
@@ -641,17 +918,12 @@ static int timer_add_interval_tm(int64 tick, TimerFunc func, int id, intptr_t da
 	return tm->add_sub(tick, func, id, data, interval, TIMER_INTERVAL, TIMER_THREAD, 0);
 }
 
-/**
- * @copydoc timer_do_delete
- * @remarks Adds mutex guards
- **/
-static int timer_do_delete_guard(int tid, TimerFunc func)
+// @copydoc timer_add_func_list
+static void timer_add_func_list_guard(TimerFunc func, char *name)
 {
-	int ret;
 	mutex->lock(timer_perform_mutex);
-	ret = timer_do_delete(tid, func);
+	timer_add_func_list(func, name);
 	mutex->unlock(timer_perform_mutex);
-	return ret;
 }
 
 /**
@@ -669,15 +941,51 @@ static const struct TimerData timer_get_guard(int tid)
 
 /**
  * @copydoc timer_add_sub
- * @remarks Adds mutex guards to timer_settick calls
+ * @remarks Enqueues the function
  **/
-static int64 timer_settick_guard(int tid, int64 tick)
-{
-	int64 ret;
-	mutex->lock(timer_perform_mutex);
-	ret = timer_settick(tid, tick);
-	mutex->unlock(timer_perform_mutex);
+static int timer_add_sub_enqueue(int64 tick, TimerFunc func, int id,
+	intptr_t data, int interval, unsigned char type, unsigned char target,
+	int32_t target_id
+) {
+	int tid = acquire_timer(false);
+	struct TimerData timer_data = {
+		.tick = tick,
+		.func = func,
+		.type = type,
+		.interval = interval,
+		.timer_target = target,
+		.target_id = target_id,
+		.id = id,
+		.data = data,
+	};
+	timer_action_enqueue(TIMERFUNC_ADD, tid, &timer_data);
 	return tid;
+}
+
+/**
+ * @copydoc timer_do_delete
+ * @remarks Enqueues the function (always succeeds)
+ **/
+static int timer_do_delete_enqueue(int tid, TimerFunc func)
+{
+	struct TimerData data = {
+		.func = func,
+	};
+	timer_action_enqueue(TIMERFUNC_DELETE, tid, &data);
+	return 0;
+}
+
+/**
+ * @copydoc timer_add_sub
+ * @remarks Enqueues the function (always succeeds)
+ **/
+static int64 timer_settick_enqueue(int tid, int64 tick)
+{
+	struct TimerData data = {
+		.tick = tick,
+	};
+	timer_action_enqueue(TIMERFUNC_TICK, tid, &data);
+	return 0;
 }
 
 #endif
@@ -703,14 +1011,11 @@ static void timer_update(int tid, int64 tick, bool acquire_lock)
 	switch( timer_data[tid].type ) {
 		default:
 		case TIMER_ONCE_AUTODEL:
-			timer_data[tid].type = 0;
+			timer_data[tid].type = TIMER_NOT_SET;
 			timer_data[tid].func = NULL;
-			if (free_timer_list_pos >= free_timer_list_max) {
-				free_timer_list_max += 256;
-				RECREATE(free_timer_list,int,free_timer_list_max);
-				memset(free_timer_list + (free_timer_list_max - 256), 0, 256 * sizeof(int));
-			}
-			free_timer_list[free_timer_list_pos++] = tid;
+			mutex->lock(timer_bitfield_mutex);
+			timer_bitfield_set(&timer_free, tid);
+			mutex->unlock(timer_bitfield_mutex);
 		break;
 		case TIMER_INTERVAL:
 			if( DIFF_TICK(timer_data[tid].tick, tick) < -1000 )
@@ -736,6 +1041,16 @@ static struct mutex_data *timer_get_mutex(void)
 #endif
 }
 
+/**
+ * Action object used when enqueueing actions to an Action Thread
+ *
+ * These objects are generated when a timer is popped from the
+ * heap in do_timer and timer_target is TIMER_ACTION or TIMER_SESSION.
+ * Then upon dequeual by the action thread the function is executed.
+ * @see enum timer_target
+ * @see action_timer
+ * @see do_timer
+ **/
 struct s_timer_action_data {
 	int tid;
 	int64 tick;
@@ -764,12 +1079,16 @@ static void action_timer(void *data)
  * Executes all expired timers.
  *
  * @param tick The current tick.
- * @return The value of the smallest non-expired timer (or 1 second if there aren't any).
+ * @return The value of the smallest non-expired timer. 
+ * @retval TIMER_MAX_INTERVAL no non-expired timer.
  * @mutex timer_perform_mutex
  */
 static int do_timer(int64 tick)
 {
-	int64 diff = TIMER_MAX_INTERVAL; // return value
+	int64 diff = TIMER_MAX_INTERVAL;
+
+	// Execute pending timer actions
+	timer_action_dequeue_all();
 
 	// process all timers one by one
 	while (BHEAP_LENGTH(timer_heap) > 0) {
@@ -873,6 +1192,10 @@ void *timer_thread(void *not_used)
  **/
 static void timer_thread_cleanup(void)
 {
+	if(timer_action_mutex)
+		mutex->destroy(timer_action_mutex);
+	if(timer_bitfield_mutex)
+		mutex->destroy(timer_bitfield_mutex);
 	if(timer_shutdown_mutex)
 		mutex->destroy(timer_shutdown_mutex);
 	if(timer_perform_mutex)
@@ -880,6 +1203,11 @@ static void timer_thread_cleanup(void)
 	if(timer_shutdown_event)
 		mutex->cond_destroy(timer_shutdown_event);
 
+	QUEUE_CLEAR(timer_queue);
+	timer_bitfield_free(&timer_reserved);
+
+	timer_action_mutex   = NULL;
+	timer_bitfield_mutex = NULL;
 	timer_perform_mutex  = NULL;
 	timer_shutdown_mutex = NULL;
 	timer_shutdown_event = NULL;
@@ -906,13 +1234,19 @@ static void timer_thread_shutdown(void)
  **/
 static void timer_thread_init(void)
 {
+	timer_action_mutex = mutex->create();
+	timer_bitfield_mutex = mutex->create();
 	timer_perform_mutex = mutex->create();
 	timer_shutdown_mutex = mutex->create();
 	timer_shutdown_event = mutex->cond_create();
-	if(!timer_perform_mutex || !timer_shutdown_mutex || !timer_shutdown_event) {
+	if(!timer_perform_mutex || !timer_shutdown_mutex || !timer_shutdown_event
+	|| !timer_action_mutex || !timer_bitfield_mutex
+	) {
 		ShowFatalError("timer_thread_init: Failed to setup thread state!\n");
 		exit(EXIT_FAILURE);
 	}
+	QUEUE_INIT_CAPACITY_SHARED(timer_queue, 256);
+
 	timer_thread_handle = thread->create("Timer", timer_thread, NULL);
 	if(!timer_thread_handle) {
 		ShowFatalError("timer_thread_init: Could not begin timer_thread!\n");
@@ -953,7 +1287,7 @@ static void timer_final(void)
 
 	if (timer_data) aFree(timer_data);
 	BHEAP_CLEAR(timer_heap);
-	if (free_timer_list) aFree(free_timer_list);
+	timer_bitfield_free(&timer_free);
 
 #ifdef TIMER_USE_THREAD
 	mutex->unlock(timer_perform_mutex);
@@ -980,15 +1314,15 @@ void timer_defaults(void)
 	timer->get_mutex = timer_get_mutex;
 	/**
 	 * Functions with time heap access
-	 * The functions that aren't replaced by the *_guard alternatives are the
+	 * The functions that aren't replaced by the *_guard/_enqueue alternatives are the
 	 * ones that internally make calls directly to the timer-> interface. They're
 	 * also the ones that need *_tm replacements in order to change their
 	 * behavior when calling them from the unguarded interface.
 	 **/
 #ifdef TIMER_USE_THREAD
-	timer->delete  = timer_do_delete_guard;
-	timer->settick = timer_settick_guard;
-	timer->add_sub = timer_add_sub_guard;
+	timer->delete  = timer_do_delete_enqueue;
+	timer->settick = timer_settick_enqueue;
+	timer->add_sub = timer_add_sub_enqueue;
 	timer->add_func_list = timer_add_func_list_guard;
 	timer->get = timer_get_guard;
 #else

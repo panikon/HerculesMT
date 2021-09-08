@@ -38,8 +38,10 @@
 
 // timer flags
 enum {
+	TIMER_NOT_SET = 0x0,
 	TIMER_ONCE_AUTODEL = 0x01,
 	TIMER_INTERVAL = 0x02,
+	TIMER_RESERVED = 0x04,
 	TIMER_REMOVE_HEAP = 0x10,
 };
 
