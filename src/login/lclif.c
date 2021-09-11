@@ -381,7 +381,7 @@ static void lclif_send_coding_key(struct socket_data *session, struct login_sess
 }
 
 /// @copydoc lclif_interface::parse()
-static void lclif_parse(struct s_receive_action_data *act)
+static enum parsefunc_rcode lclif_parse(struct s_receive_action_data *act)
 {
 	struct login_session_data *sd = NULL;
 	int i;
@@ -394,7 +394,7 @@ static void lclif_parse(struct s_receive_action_data *act)
 			socket_io->ip2str(ipl, NULL));
 		socket_io->session_disconnect(act->session);
 		mutex->unlock(act->session->mutex);
-		return;
+		return PACKET_VALID;
 	}
 	if(act->act_type == ACTTYPE_EMPTY) {
 		/**
@@ -404,7 +404,7 @@ static void lclif_parse(struct s_receive_action_data *act)
 		ShowDebug("lclif_parse: termination of session %d was canceled (empty action "
 			"dequeued).\n", act->session->id);
 		mutex->unlock(act->session->mutex);
-		return;
+		return PACKET_VALID;
 	}
 	if(act->rdata == NULL) {
 		// Dequeued receive action without rdata without removal flag
@@ -413,7 +413,7 @@ static void lclif_parse(struct s_receive_action_data *act)
 			socket_io->ip2str(ipl, NULL));
 		socket_io->session_disconnect(act->session);
 		mutex->unlock(act->session->mutex);
-		return;
+		return PACKET_VALID;
 	}
 
 	if(act->session->session_data == NULL) { // First contact with login-server
@@ -425,7 +425,7 @@ static void lclif_parse(struct s_receive_action_data *act)
 			lclif->login_error(act->session, 3); // 3 = Rejected from Server
 			socket_io->session_disconnect(act->session);
 			mutex->unlock(act->session->mutex);
-			return;
+			return PACKET_VALID;
 		}
 
 		// create a session for this new connection
@@ -441,7 +441,7 @@ static void lclif_parse(struct s_receive_action_data *act)
 		int packet_len = (int)RFIFOREST(act);
 
 		if (packet_len < 2)
-			return;
+			return PACKET_VALID;
 
 		result = lclif->p->parse_sub(act, sd);
 
@@ -450,8 +450,9 @@ static void lclif_parse(struct s_receive_action_data *act)
 		case PACKET_SKIP:
 			continue;
 		case PACKET_INCOMPLETE:
+			return PACKET_INCOMPLETE;
 		case PACKET_STOPPARSE:
-			return;
+			return PACKET_STOPPARSE;
 		case PACKET_UNKNOWN:
 			ShowWarning("lclif_parse: Received unsupported packet (packet 0x%04x, "
 				"%d bytes received), disconnecting session #%d.\n",
@@ -460,7 +461,7 @@ static void lclif_parse(struct s_receive_action_data *act)
 			ShowDump(RFIFOP(fd, 0), RFIFOREST(fd));
 #endif
 			socket_io->session_disconnect_guard(act->session);
-			return;
+			return PACKET_UNKNOWN;
 		case PACKET_INVALIDLENGTH:
 			ShowWarning("lclif_parse: Received packet 0x%04x specifies invalid "
 				"packet_len (%d), disconnecting session #%d.\n",
@@ -469,10 +470,10 @@ static void lclif_parse(struct s_receive_action_data *act)
 			ShowDump(RFIFOP(fd, 0), RFIFOREST(fd));
 #endif
 			socket_io->session_disconnect_guard(act->session);
-			return;
+			return PACKET_INVALIDLENGTH;
 		}
 	}
-	return;
+	return PACKET_VALID;
 }
 
 /// @copydoc lclif_interface_private::parse_sub()

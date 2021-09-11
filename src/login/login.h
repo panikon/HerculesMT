@@ -360,7 +360,7 @@ struct login_interface {
 	void (*fromchar_parse_change_pincode) (struct s_receive_action_data *act);
 	bool (*fromchar_parse_wrong_pincode) (struct s_receive_action_data *act);
 	void (*fromchar_parse_accinfo) (struct s_receive_action_data *act);
-	int (*parse_fromchar) (struct s_receive_action_data *act);
+	enum parsefunc_rcode (*parse_fromchar) (struct s_receive_action_data *act);
 
 	void (*kick) (struct login_session_data* sd);
 	void (*auth_ok) (struct login_session_data* sd);

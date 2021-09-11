@@ -32,7 +32,7 @@
 /* Definitions and macros */
 /// Maximum amount of packets processed at once from the same client
 #ifndef MAX_PROCESSED_PACKETS
-#define MAX_PROCESSED_PACKETS (3)
+#define MAX_PROCESSED_PACKETS (10)
 #endif
 
 // Packet DB

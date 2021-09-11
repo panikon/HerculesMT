@@ -44,6 +44,18 @@ struct config_setting_t;
 #define FIFOSIZE_SERVERLINK 256*1024
 
 /**
+ * Parse function return code
+ **/
+enum parsefunc_rcode {
+	PACKET_VALID         =  1,
+	PACKET_INCOMPLETE    =  0,
+	PACKET_UNKNOWN       = -1,
+	PACKET_INVALIDLENGTH = -2,
+	PACKET_STOPPARSE     = -3,
+	PACKET_SKIP          = -4, //< internal parser will skip this packet and go
+};                             //  parse another, meant for plugins. [hemagx]
+
+/**
  * Data passed to the default_action_parse after IO_RECV dequeual
  * @see set_default_parse_action
  * @see socket_operation_process
@@ -53,7 +65,12 @@ struct s_receive_action_data {
 	uint8_t *rdata;
 	size_t max_rdata, rdata_size, rdata_pos;
 	bool validate; // flag.validate
-	// Last received buffer (the same data as rdata)
+	/**
+	 * Last received buffer
+	 * Initially rdata points to the first buffer of this data, but when there
+	 * are incomplete packets rdata can be pointed to another memory location.
+	 * @see action_receive
+	 **/
 	struct s_iocp_buffer_data *read_buffer;
 
 	enum {
@@ -204,7 +221,7 @@ struct s_iocp_buffer_data {
 typedef int (*RecvFunc)(int fd);
 typedef int (*SendFunc)(int fd);
 typedef int (*ParseFunc)(int fd);
-typedef void (*ActionParseFunc)(struct s_receive_action_data *act); 
+typedef enum parsefunc_rcode (*ActionParseFunc)(struct s_receive_action_data *act); 
 
 struct socket_data {
 	struct {
@@ -285,6 +302,21 @@ struct socket_data {
 	 * @see session_timeout
 	 **/
 	int timeout_id;
+
+	/**
+	 * Incomplete packet data.
+	 * This is only set after a the parse function returns PACKET_INCOMPLETE,
+	 * all the received packets of a given session are processed by the same
+	 * worker so there won't be any data-races with this data.
+	 * So we can keep this property it's paramount that all incomplete data
+	 * is processed by the current worker thread before attaching this session
+	 * to another.
+	 * @see action_receive
+	 **/
+	struct {
+		uint8_t *data;
+		size_t length;
+	} incomplete_packet;
 #else
 
 	uint8 *rdata, *wdata;

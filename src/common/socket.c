@@ -308,9 +308,9 @@ static int socket_getips(uint32 *ips, int max);
  * CORE : Default processing functions
  *--------------------------------------*/
 
-static void null_parse(struct s_receive_action_data *act)
+static enum parsefunc_rcode null_parse(struct s_receive_action_data *act)
 {
-	return;
+	return PACKET_VALID;
 }
 
 static ActionParseFunc default_func_parse = null_parse;
@@ -959,7 +959,7 @@ static void wfifoflush_all(void)
  * @param act          Valid memory to be set up
  * @param write_buffer Cleared s_iocp_buffer_data
  **/
-static void socket_wfifohead_act_setup(const struct socket_data *session,
+static void socket_wfifohead_act_setup(struct socket_data *session,
 	struct s_send_action_data *act, struct s_iocp_buffer_data *write_buffer)
 {
 	act->write_buffer = write_buffer;
@@ -970,6 +970,7 @@ static void socket_wfifohead_act_setup(const struct socket_data *session,
 	act->session = session;
 	act->max_wdata = FIFO_SIZE;
 	act->wdata = act->write_buffer->wsa_buffer[0].buf;
+	act->write_buffer->wsa_buffer[0].len = 0;
 	act->wdata_size = 0;
 	act->last_head_size = 0;
 	act->write_buffer_pos = 0;
@@ -1016,12 +1017,13 @@ static void wfifohead(struct socket_data *session, size_t len, bool get_mutex)
 	assert(act->session_id == session->id);
 
 	act->last_head_size = len;
-	if(act->wdata_size + len > act->max_wdata) {
+	if(act->wdata_size + len >= act->max_wdata) {
 		act->write_buffer->wsa_buffer[act->write_buffer_pos].len = act->wdata_size;
 		if(++act->write_buffer_pos > act->write_buffer->buffer_count)
 			socket_iocp_buffer_grow(act->write_buffer);
 
 		act->wdata = act->write_buffer->wsa_buffer[act->write_buffer_pos].buf;
+		act->write_buffer->wsa_buffer[act->write_buffer_pos].len = 0;
 		act->wdata_size = 0;
 	}
 }
@@ -1262,39 +1264,66 @@ void rfifoflush(struct s_receive_action_data *act)
 static void action_receive(void *data)
 {
 	struct s_receive_action_data *act = data;
-	mutex->lock(act->session->mutex);
-	if(act->session->id != act->session_id) {
+	struct socket_data *session = act->session;
+
+	mutex->lock(session->mutex);
+	if(session->id != act->session_id) {
 		/**
 		 * The session was destroyed while there was still an action queued, and
 		 * its entry was reused for another session. Ignore this action.
 		 **/
 		ShowDebug("action_receive: session %d was destroyed with an action still pending!\n",
 			act->session_id);
-		mutex->unlock(act->session->mutex);
+		mutex->unlock(session->mutex);
 		return;
 	}
-	act->session->session_counter++;
-	mutex->unlock(act->session->mutex);
+	// Prepend incomplete packet to received data
+	if(session->incomplete_packet.data) {
+		size_t expected_length = session->incomplete_packet.length + act->rdata_size;
+		if(expected_length >= act->max_rdata) {
+			uint8_t *buffer = aMalloc(expected_length);
+			memcpy(buffer, act->rdata, act->rdata_size);
+			act->max_rdata = expected_length;
+			act->rdata = buffer;
+		}
+		memcpy(&act->rdata[act->rdata_size],
+			session->incomplete_packet.data,
+			session->incomplete_packet.length);
+		act->rdata_size += session->incomplete_packet.length;
 
-	act->session->parse(act);
+		aFree(session->incomplete_packet.data);
+		session->incomplete_packet.data = NULL;
+		session->incomplete_packet.length = 0;
+	}
+	session->session_counter++;
+	mutex->unlock(session->mutex);
 
-	mutex->lock(act->session->mutex);
-	act->session->session_counter--;
-	mutex->unlock(act->session->mutex);
+	enum parsefunc_rcode retcode;
+	retcode = session->parse(act);
+
+	mutex->lock(session->mutex);
+	if(retcode == PACKET_INCOMPLETE) {
+		ShowDebug("incomplete packet\n");
+		size_t expected_length = act->rdata_size - act->rdata_pos;
+		session->incomplete_packet.data = aMalloc(expected_length);
+		session->incomplete_packet.length = expected_length;
+		memcpy(session->incomplete_packet.data,
+			&act->rdata[act->rdata_pos], expected_length);
+	}
+	if(act->read_buffer) {
+		// Clear and reinsert into available list
+		socket_iocp_buffer_clear(act->read_buffer);
+		VECTOR_PUSH(session->iocp_available_buffer, act->read_buffer);
+	}
+	session->session_counter--;
+	mutex->unlock(session->mutex);
+
+	// Dynamic rdata because of a previous incomplete packet
+	if(act->max_rdata != FIFO_SIZE)
+		aFree(act->rdata);
 
 	wfifoflush_all(); // Disconnects if necessary
-	
-	/**
-	 * [Packet]
-	 * WFIFOHEAD
-	 * WFIFO*
-	 * ...
-	 * WFIFOSET -> verifies length and validates, adds to shortlist
-	 *             If there's a certain length flushes (sSend), 
-	 *             otherwise the data is sent after all parsing.
-	 * #define WFIFOSET(fd, len)  (socket_io->wfifoset(fd, len, true))
-	 * #define WFIFOP(fd,pos) ((void *)(socket_io->session[fd]->wdata + socket_io->session[fd]->wdata_size + (pos)))
-	 **/
+
 	/**
 	 * [I/O Worker]
 	 *  Dequeue receive (socket_worker)
@@ -1306,11 +1335,6 @@ static void action_receive(void *data)
 	 *           |
 	 *      default_func_parse -> <server specific functions>
 	 *  Flush all write FIFO
-	 **/
-	/**
-	 * Separate session mutex from "session_data" mutex, so we don't block I/O
-	 * operations while handling player data.
-	 * session_data should be a rwlock, I/O worker locks read
 	 **/
 }
 
@@ -1339,6 +1363,7 @@ static void socket_iocp_buffer_grow(struct s_iocp_buffer_data *buffer_data)
 	rwlock->read_lock(ers_buffer_instance->collection_lock);
 	mutex->lock(ers_buffer_instance->cache_mutex);
 	buffer_data->wsa_buffer[buffer_data->buffer_count].buf = ers_alloc(ers_buffer_instance);
+	buffer_data->wsa_buffer[buffer_data->buffer_count].len = 0;
 	mutex->unlock(ers_buffer_instance->cache_mutex);
 	rwlock->read_unlock(ers_buffer_instance->collection_lock);
 	buffer_data->buffer_count++;
@@ -1358,8 +1383,10 @@ static void socket_iocp_buffer_clear(struct s_iocp_buffer_data *buffer_data)
 	 * https://msdn.microsoft.com/en-us/library/windows/desktop/ms684342(v=vs.85).aspx
 	 **/
 	memset(&buffer_data->overlapped, 0, sizeof(buffer_data->overlapped));
-	for(int i = 0; i < buffer_data->buffer_count; i++)
+	for(int i = 0; i < buffer_data->buffer_count; i++) {
 		memset(buffer_data->wsa_buffer[i].buf, 0, FIFO_SIZE);
+		buffer_data->wsa_buffer[i].len = 0;
+	}
 	buffer_data->status = QT_OUTSIDE;
 }
 

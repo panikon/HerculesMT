@@ -470,7 +470,7 @@ static void timer_bitfield_set(struct s_timer_bitfield *list, int tid)
 	int expected_pos = tid_relative/32;
 	if(!list->bitfield_length || tid_relative > list->bitfield_length*32) {
 		int minimum_length = (!expected_pos)?1:expected_pos+1;
-		if(list->bitfield_length)
+		if(list->bitfield)
 			RECREATE(list->bitfield, uint32_t, minimum_length);
 		else
 			CREATE(list->bitfield, uint32_t, minimum_length);

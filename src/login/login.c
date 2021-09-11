@@ -1206,7 +1206,7 @@ static void login_fromchar_parse_accinfo(struct s_receive_action_data *act)
  *
  * A connection only uses this parser after PACKET_CA_CHARSERVERCONNECT
  **/
-static int login_parse_fromchar(struct s_receive_action_data *act)
+static enum parsefunc_rcode login_parse_fromchar(struct s_receive_action_data *act)
 {
 	rwlock->read_lock(g_char_server_list_lock);
 	struct mmo_char_server *server = lchrif->server_find(act->session);
@@ -1220,7 +1220,7 @@ static int login_parse_fromchar(struct s_receive_action_data *act)
 				act->session->id);
 		socket_io->session_disconnect(act->session);
 		mutex->unlock(act->session->mutex);
-		return 0;
+		return PACKET_VALID;
 	}
 
 	mutex->lock(act->session->mutex);
@@ -1229,7 +1229,7 @@ static int login_parse_fromchar(struct s_receive_action_data *act)
 		rwlock->read_unlock(g_char_server_list_lock);
 		mutex->unlock(act->session->mutex);
 		lchrif->on_disconnect(server);
-		return 0;
+		return PACKET_VALID;
 	}
 	mutex->unlock(act->session->mutex);
 
@@ -1247,20 +1247,20 @@ static int login_parse_fromchar(struct s_receive_action_data *act)
 				continue;
 
 			if (result == 2)
-				goto unlock_list_return;
+				goto unlock_list_return_incomplete;
 		}
 
 		switch (command) {
 
 		case 0x2712: // request from char-server to authenticate an account
 			if( RFIFOREST(act) < 23 )
-				goto unlock_list_return;
+				goto unlock_list_return_incomplete;
 			login->fromchar_parse_auth(act, server);
 			break;
 
 		case 0x2714:
 			if( RFIFOREST(act) < 6 )
-				goto unlock_list_return;
+				goto unlock_list_return_incomplete;
 			rwlock->read_unlock(g_char_server_list_lock);
 			login->fromchar_parse_update_users(act, server);
 			rwlock->read_lock(g_char_server_list_lock);
@@ -1268,13 +1268,13 @@ static int login_parse_fromchar(struct s_receive_action_data *act)
 
 		case 0x2715: // request from char server to change e-email from default "a@a.com"
 			if (RFIFOREST(act) < 46)
-				goto unlock_list_return;
+				goto unlock_list_return_incomplete;
 			login->fromchar_parse_request_change_email(act, server, ip);
 			break;
 
 		case 0x2716: // request account data
 			if( RFIFOREST(act) < 6 )
-				goto unlock_list_return;
+				goto unlock_list_return_incomplete;
 			login->fromchar_parse_account_data(act, server, ip);
 			break;
 
@@ -1285,68 +1285,68 @@ static int login_parse_fromchar(struct s_receive_action_data *act)
 		// Map server send information to change an email of an account via char-server
 		case 0x2722: // 0x2722 <account_id>.L <actual_e-mail>.40B <new_e-mail>.40B
 			if (RFIFOREST(act) < 86)
-				goto unlock_list_return;
+				goto unlock_list_return_incomplete;
 			login->fromchar_parse_change_email(act, server, ip);
 			break;
 
 		case 0x2724: // Receiving an account state update request from a map-server (relayed via char-server)
 			if (RFIFOREST(act) < 10)
-				goto unlock_list_return;
+				goto unlock_list_return_incomplete;
 			login->fromchar_parse_account_update(act, server, ip);
 			break;
 
 		case 0x2725: // Receiving of map-server via char-server a ban request
 			if (RFIFOREST(act) < 18)
-				goto unlock_list_return;
+				goto unlock_list_return_incomplete;
 			login->fromchar_parse_ban(act, server, ip);
 			break;
 
 		case 0x2727: // Change of sex (sex is reversed)
 			if( RFIFOREST(act) < 6 )
-				goto unlock_list_return;
+				goto unlock_list_return_incomplete;
 			login->fromchar_parse_change_sex(act, server, ip);
 			break;
 
 		case 0x2728: // We receive account_reg2 from a char-server, and we send them to other map-servers.
 			if( RFIFOREST(act) < 4 || RFIFOREST(act) < RFIFOW(act,2) )
-				goto unlock_list_return;
+				goto unlock_list_return_incomplete;
 			login->fromchar_parse_account_reg2(act, server, ip);
 			break;
 
 		case 0x272a: // Receiving of map-server via char-server an unban request
 			if( RFIFOREST(act) < 6 )
-				goto unlock_list_return;
+				goto unlock_list_return_incomplete;
 			login->fromchar_parse_unban(act, server, ip);
 			break;
 
 		case 0x272b:    // Set account_id to online [Wizputer]
 			if( RFIFOREST(act) < 6 )
-				goto unlock_list_return;
+				goto unlock_list_return_incomplete;
 			login->fromchar_parse_account_online(act, server);
 			break;
 
 		case 0x272c:   // Set account_id to offline [Wizputer]
 			if( RFIFOREST(act) < 6 )
-				goto unlock_list_return;
+				goto unlock_list_return_incomplete;
 			login->fromchar_parse_account_offline(act);
 			break;
 
 		case 0x272d: // Receive list of all online accounts. [Skotlex]
 			if (RFIFOREST(act) < 4 || RFIFOREST(act) < RFIFOW(act,2))
-				goto unlock_list_return;
+				goto unlock_list_return_incomplete;
 			login->fromchar_parse_online_accounts(act, server);
 			RFIFOSKIP(act,RFIFOW(act,2));
 		break;
 
 		case 0x272e: //Request account_reg2 for a character.
 			if (RFIFOREST(act) < 10)
-				goto unlock_list_return;
+				goto unlock_list_return_incomplete;
 			login->fromchar_parse_request_account_reg2(act);
 			break;
 
 		case 0x2736: // WAN IP update from char-server
 			if( RFIFOREST(act) < 6 )
-				goto unlock_list_return;
+				goto unlock_list_return_incomplete;
 			rwlock->read_unlock(g_char_server_list_lock);
 			login->fromchar_parse_update_wan_ip(act, server);
 			rwlock->read_lock(g_char_server_list_lock);
@@ -1358,20 +1358,20 @@ static int login_parse_fromchar(struct s_receive_action_data *act)
 
 		case 0x2738: //Change PIN Code for a account
 			if( RFIFOREST(act) < 11 )
-				goto unlock_list_return;
+				goto unlock_list_return_incomplete;
 			login->fromchar_parse_change_pincode(act);
 			break;
 
 		case 0x2739: // PIN Code was entered wrong too often
 			if( RFIFOREST(act) < 6 )
-				goto unlock_list_return;
+				goto unlock_list_return_incomplete;
 			if(login->fromchar_parse_wrong_pincode(act))
 				goto unlock_list_return;
 			break;
 
 		case 0x2740: // Accinfo request forwarded by charserver on mapserver's account
 			if( RFIFOREST(act) < 22 )
-				goto unlock_list_return;
+				goto unlock_list_return_incomplete;
 			login->fromchar_parse_accinfo(act);
 			break;
 		default:
@@ -1383,7 +1383,11 @@ static int login_parse_fromchar(struct s_receive_action_data *act)
 	// Fall-through
 unlock_list_return:
 	rwlock->read_unlock(g_char_server_list_lock);
-	return 0;
+	return PACKET_VALID;
+
+unlock_list_return_incomplete:
+	rwlock->read_unlock(g_char_server_list_lock);
+	return PACKET_INCOMPLETE;
 }
 
 
