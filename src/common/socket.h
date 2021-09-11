@@ -55,6 +55,13 @@ struct s_receive_action_data {
 	bool validate; // flag.validate
 	// Last received buffer (the same data as rdata)
 	struct s_iocp_buffer_data *read_buffer;
+
+	enum {
+		ACTTYPE_NOT_QUEUED = 0, //< Non initialized action
+		ACTTYPE_EMPTY = 30,     //< Purposefully empty action
+		ACTTYPE_RECV = 32,      //< Properly filled action
+	} act_type;
+	int session_id;
 };
 
 /**

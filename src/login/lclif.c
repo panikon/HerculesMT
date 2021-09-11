@@ -396,6 +396,16 @@ static void lclif_parse(struct s_receive_action_data *act)
 		mutex->unlock(act->session->mutex);
 		return;
 	}
+	if(act->act_type == ACTTYPE_EMPTY) {
+		/**
+		 * This action was enqueued when the connection was marked for removal
+		 * but it was unmarked before dequeual, ignore this action.
+		 **/
+		ShowDebug("lclif_parse: termination of session %d was canceled (empty action "
+			"dequeued).\n", act->session->id);
+		mutex->unlock(act->session->mutex);
+		return;
+	}
 	if(act->rdata == NULL) {
 		// Dequeued receive action without rdata without removal flag
 		ShowDebug("lclif_parse: Dequeued receive action without rdata!\n");

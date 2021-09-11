@@ -121,7 +121,7 @@ void action_enqueue(struct s_action_queue *queue, ActionFunc perform, void *data
 	act->data = data;
 	act->perform = perform;
 	QUEUE_ENQUEUE(queue->data, act, 10);
-	mutex->cond_signal(queue->dequeue);
+	mutex->cond_broadcast(queue->dequeue);
 	mutex->unlock(queue->mutex);
 }
 
@@ -243,30 +243,52 @@ static void *action_worker(void *param)
 
 	thread->flag_set(THREADFLAG_ACTION);
 	InterlockedIncrement(&action_ready);
+	VECTOR_DECL(struct s_action_data *) action_vector = VECTOR_STATIC_INITIALIZER;
+	VECTOR_ENSURE_LOCAL(action_vector, QUEUE_CAPACITY(queue->data), 1);
 
 	while(queue->running) {
 		struct s_action_data *act = NULL;
 		mutex->lock(queue->mutex);
-		mutex->cond_wait(queue->dequeue, queue->mutex, -1); // Block until new action
+		if(!QUEUE_LENGTH(queue->data))
+			mutex->cond_wait(queue->dequeue, queue->mutex, -1); // Block until new action
 
-		if(QUEUE_LENGTH(queue->data)) {
+		while(QUEUE_LENGTH(queue->data)) {
 			act = QUEUE_FRONT(queue->data);
 			QUEUE_DEQUEUE(queue->data);
+			if(!act)
+				continue;
+			/**
+			 * Copy data to a private vector in order not to lock the queue for
+			 * too long and also to minimize mutex calls when freeing each of the
+			 * actions.
+			 **/
+			VECTOR_ENSURE_LOCAL(action_vector, 1, 5);
+			VECTOR_PUSH(action_vector, act);
 		}
-		mutex->unlock(queue->mutex);
-		if(!act)
-			continue; // Shutdown?
 
-		if(act->perform)
-			act->perform(act->data);
+		mutex->unlock(queue->mutex);
+		if(!VECTOR_LENGTH(action_vector))
+			continue; // Shutdown or mis-signal
+
+		for(int i = 0; i < VECTOR_LENGTH(action_vector); i++) {
+			act = VECTOR_INDEX(action_vector, i);
+			if(act->perform)
+				act->perform(act->data);
+		}
 
 		rwlock->read_lock(queue->action_ers->collection_lock);
 		mutex->lock(queue->action_ers->cache_mutex);
-		ers_free(queue->action_ers, act);
+		for(int i = 0; i < VECTOR_LENGTH(action_vector); i++) {
+			act = VECTOR_INDEX(action_vector, i);
+			ers_free(queue->action_ers, act);
+		}
 		mutex->unlock(queue->action_ers->cache_mutex);
 		rwlock->read_unlock(queue->action_ers->collection_lock);
+
+		VECTOR_TRUNCATE(action_vector);
 	}
 
+	VECTOR_CLEAR_LOCAL(action_vector);
 	InterlockedDecrement(&action_ready);
 	ShowInfo("action_worker(%d): Shutting down! (thread id %d)\n",
 		queue->list_index, thread->get_tid());

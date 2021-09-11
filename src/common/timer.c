@@ -468,14 +468,13 @@ static void timer_bitfield_set(struct s_timer_bitfield *list, int tid)
 	assert(tid_relative >= 0);
 
 	int expected_pos = tid_relative/32;
-	if(!list->bitfield_length || tid > list->bitfield_length*32) {
-		if(!expected_pos)
-			expected_pos = 1;
+	if(!list->bitfield_length || tid_relative > list->bitfield_length*32) {
+		int minimum_length = (!expected_pos)?1:expected_pos+1;
 		if(list->bitfield_length)
-			RECREATE(list->bitfield, uint32_t, expected_pos);
+			RECREATE(list->bitfield, uint32_t, minimum_length);
 		else
-			CREATE(list->bitfield, uint32_t, expected_pos);
-		list->bitfield_length = expected_pos;
+			CREATE(list->bitfield, uint32_t, minimum_length);
+		list->bitfield_length = minimum_length;
 	}
 
 	int tid_bit = tid_relative - (expected_pos*32); // expected_pos is floored
@@ -514,12 +513,12 @@ static void timer_bitfield_clear(struct s_timer_bitfield *list, int tid)
 static int timer_bitfield_get_next(struct s_timer_bitfield *list)
 {
 	int tid = -1;
-	int32_t free_pos = find_first_set_array(timer_free.bitfield,
-		timer_free.bitfield_length, false);
+	int32_t free_pos = find_first_set_array(list->bitfield,
+		list->bitfield_length, false);
 	if(free_pos != -1) {
-		tid = timer_bitfield_get(&timer_free, free_pos);
+		tid = timer_bitfield_get(list, free_pos);
 		assert(tid != -1 && "Invalid bit from find_first_set_array");
-		timer_bitfield_clear(&timer_free, tid);
+		timer_bitfield_clear(list, tid);
 	}
 	return tid;
 }

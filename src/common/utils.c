@@ -398,7 +398,7 @@ uint32_t find_first_set(uint32_t v) {
  * @retval -1 not found
  **/
 int32_t find_first_set_array(uint32_t *v, uint32_t length, bool clear_bit) {
-	if(!length)
+	if(!length || !v)
 		return -1;
 
 	uint32_t result = 0;
