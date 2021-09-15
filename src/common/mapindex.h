@@ -21,14 +21,10 @@
 #ifndef COMMON_MAPINDEX_H
 #define COMMON_MAPINDEX_H
 
+#include "common/db.h"
 #include "common/conf.h"
 #include "common/hercules.h"
 #include "common/mmo.h"
-
-/* Forward Declarations */
-struct DBMap; // common/db.h
-
-#define MAX_MAPINDEX 2000
 
 /* wohoo, someone look at all those |: map_default could (or *should*) be a char-server.conf */
 
@@ -77,27 +73,28 @@ struct DBMap; // common/db.h
 #define MAP_ECLAGE_IN "ecl_in01"
 
 #define mapindex_id2name(n) mapindex->id2name((n),__FILE__, __LINE__, __func__)
-#define mapindex_exists(n) ( mapindex->list[(n)].name[0] != '\0' )
+#define mapindex_exists(n) ( VECTOR_INDEX(mapindex->list,(n)).name[0] != '\0' )
 
 /**
  * mapindex.c interface
  **/
 struct mapindex_interface {
 	char config_file[80];
+	struct rwlock_data *lock;
+
 	/* mapname (str) -> index (int) */
 	struct DBMap *db;
-	/* number of entries in the index table */
-	int num;
+
 	/* default map name */
 	char *default_map;
 	/* default x on map */
 	int default_x;
 	/* default y on map */
 	int default_y;
-	/* index list -- since map server map count is *unlimited* this should be too */
-	struct {
-		char name[MAP_NAME_LENGTH];
-	} list[MAX_MAPINDEX];
+
+	// Map index list (ids are sequential)
+	VECTOR_DECL(struct { char name[MAP_NAME_LENGTH]; }) list;
+
 	/* */
 	bool (*config_read_dbpath) (const char *filename, const struct config_t *config);
 	bool (*config_read) (void);
@@ -105,14 +102,13 @@ struct mapindex_interface {
 	int (*init) (void);
 	void (*final) (void);
 	/* */
-	int (*addmap) (int index, const char* name);
+	bool (*addmap) (int index, const char* name);
 	void (*removemap) (int index);
 	const char* (*getmapname) (const char* string, char* output);
 	/* TODO: server shouldn't be handling the extension, game client automatically adds .gat/.rsw/.whatever
 	 * and there are official map names taking advantage of it that we cant support due to the .gat room being saved */
 	const char* (*getmapname_ext) (const char* string, char* output);
-	/* TODO: Hello World! make up your mind, this thing is int on some places and unsigned short on others */
-	unsigned short (*name2id) (const char*);
+	unsigned int (*name2id) (const char*);
 	const char * (*id2name) (uint16 id, const char *file, int line, const char *func);
 	bool (*check_default) (void);
 };

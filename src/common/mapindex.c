@@ -28,7 +28,9 @@
 #include "common/mmo.h"
 #include "common/nullpo.h"
 #include "common/showmsg.h"
+#include "common/memmgr.h"
 #include "common/strlib.h"
+#include "common/rwlock.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,8 +39,10 @@
 static struct mapindex_interface mapindex_s;
 struct mapindex_interface *mapindex;
 
-/// Retrieves the map name from 'string' (removing .gat extension if present).
-/// Result gets placed either into 'buf' or in a static local buffer.
+/**
+ * Retrieves the map name from 'string' (removing .gat extension if present).
+ * Result gets placed either into 'buf' or in a static local buffer.
+ **/
 static const char *mapindex_getmapname(const char *string, char *output)
 {
 	static char buf[MAP_NAME_LENGTH];
@@ -48,7 +52,7 @@ static const char *mapindex_getmapname(const char *string, char *output)
 	nullpo_retr(buf, string);
 	len = strnlen(string, MAP_NAME_LENGTH_EXT);
 	if (len == MAP_NAME_LENGTH_EXT) {
-		ShowWarning("(mapindex_normalize_name) Map name '%*s' is too long!\n", 2*MAP_NAME_LENGTH_EXT, string);
+		ShowWarning("mapindex_normalize_name: Map name '%*s' is too long!\n", 2*MAP_NAME_LENGTH_EXT, string);
 		len--;
 	}
 	if (len >= 4 && stricmp(&string[len-4], ".gat") == 0)
@@ -61,8 +65,10 @@ static const char *mapindex_getmapname(const char *string, char *output)
 	return dest;
 }
 
-/// Retrieves the map name from 'string' (adding .gat extension if not already present).
-/// Result gets placed either into 'buf' or in a static local buffer.
+/**
+ * Retrieves the map name from 'string' (adding .gat extension if not already present).
+ * Result gets placed either into 'buf' or in a static local buffer.
+ **/
 static const char *mapindex_getmapname_ext(const char *string, char *output)
 {
 	static char buf[MAP_NAME_LENGTH_EXT];
@@ -78,7 +84,7 @@ static const char *mapindex_getmapname_ext(const char *string, char *output)
 	len = safestrnlen(buf, MAP_NAME_LENGTH);
 
 	if (len == MAP_NAME_LENGTH) {
-		ShowWarning("(mapindex_normalize_name) Map name '%s' is too long!\n", buf);
+		ShowWarning("mapindex_normalize_name: Map name '%s' is too long!\n", buf);
 		len--;
 	}
 	safestrncpy(dest, buf, len+1);
@@ -93,52 +99,59 @@ static const char *mapindex_getmapname_ext(const char *string, char *output)
 	return dest;
 }
 
-/// Adds a map to the specified index
-/// Returns 1 if successful, 0 otherwise
-static int mapindex_addmap(int index, const char *name)
+/**
+ * Adds a map to the specified index
+ *
+ * @param index  Index of the name, when -1 finds the next valid position
+ * @return success
+ **/
+static bool mapindex_addmap(int index, const char *name)
 {
 	char map_name[MAP_NAME_LENGTH];
 
-	if (index == -1){
-		for (index = 1; index < mapindex->num; index++) {
-			if (mapindex->list[index].name[0] == '\0')
+	if(index == -1) {
+		for(index = 1; index < VECTOR_CAPACITY(mapindex->list); index++) {
+			if(VECTOR_INDEX(mapindex->list, index).name[0] == '\0')
 				break;
 		}
 	}
-
-	if (index < 0 || index >= MAX_MAPINDEX) {
-		ShowError("(mapindex_add) Map index (%d) for \"%s\" out of range (max is %d)\n", index, name, MAX_MAPINDEX);
-		return 0;
-	}
+	if(index >= VECTOR_CAPACITY(mapindex->list))
+		VECTOR_ENSURE(mapindex->list, index-VECTOR_CAPACITY(mapindex->list), 10);
 
 	mapindex->getmapname(name, map_name);
 
-	if (map_name[0] == '\0') {
-		ShowError("(mapindex_add) Cannot add maps with no name.\n");
-		return 0;
+	if(map_name[0] == '\0') {
+		ShowError("mapindex_add: Cannot add maps with no name.\n");
+		return false;
 	}
 
 	size_t map_name_len = strlen(map_name);
-	if (map_name_len >= MAP_NAME_LENGTH) {
-		ShowError("(mapindex_add) Map name %s is too long. Maps are limited to %d characters.\n", map_name, MAP_NAME_LENGTH);
-		return 0;
+	if(map_name_len >= MAP_NAME_LENGTH) {
+		ShowError("mapindex_add: Map name %s is too long. Maps are limited to "
+			"%d characters.\n", map_name, MAP_NAME_LENGTH);
+		return false;
 	}
 
-	if (mapindex_exists(index)) {
-		ShowWarning("(mapindex_add) Overriding index %d: map \"%s\" -> \"%s\"\n", index, mapindex->list[index].name, map_name);
-		strdb_remove(mapindex->db, mapindex->list[index].name, map_name_len);
+	if(mapindex_exists(index)) {
+		ShowWarning("mapindex_add: Overriding index %d: map \"%s\" -> \"%s\"\n",
+			index, VECTOR_INDEX(mapindex->list, index).name, map_name);
+		strdb_remove(mapindex->db, VECTOR_INDEX(mapindex->list, index).name,
+			map_name_len);
 	}
 
-	safestrncpy(mapindex->list[index].name, map_name, MAP_NAME_LENGTH);
+	VECTOR_INSERTCOPY(mapindex->list, index, map_name);
+	//safestrncpy(VECTOR_INDEX(mapindex->list, index).name, map_name, MAP_NAME_LENGTH);
 	strdb_iput(mapindex->db, map_name, map_name_len, index);
-
-	if (mapindex->num <= index)
-		mapindex->num = index+1;
 
 	return index;
 }
 
-static unsigned short mapindex_name2id(const char *name)
+/**
+ * Returns the id associated with the provided name.
+ *
+ * @retval 0 Failed to find map
+ **/
+static int mapindex_name2id(const char *name)
 {
 	int i;
 	char map_name[MAP_NAME_LENGTH];
@@ -152,17 +165,22 @@ static unsigned short mapindex_name2id(const char *name)
 	return 0;
 }
 
+/**
+ * Returns the name associated with the provided id.
+ **/
 static const char *mapindex_id2name_sub(uint16 id, const char *file, int line, const char *func)
 {
-	if (id >= MAX_MAPINDEX || !mapindex_exists(id)) {
-		ShowDebug("mapindex_id2name: Requested name for non-existant map index [%d] in cache. %s:%s:%d\n", id,file,func,line);
-		return mapindex->list[0].name; // dummy empty string so that the callee doesn't crash
+	if(id >= VECTOR_LENGTH(mapindex->list) || !mapindex_exists(id)) {
+		ShowDebug("mapindex_id2name: Requested name for non-existant map index [%d] "
+			"in cache. %s:%s:%d\n", id,file,func,line);
+		return VECTOR_INDEX(mapindex->list, 0).name; // dummy empty string so that the callee doesn't crash
 	}
-	return mapindex->list[id].name;
+	return VECTOR_INDEX(mapindex->list, id).name;
 }
 
 /**
  * Reads the db_path config of mapindex configuration file
+ *
  * @param filename File being read (used when displaying errors)
  * @param config Config structure being read
  * @returns true if it read the all the configs, false otherwise
@@ -174,16 +192,20 @@ static bool mapindex_config_read_dbpath(const char *filename, const struct confi
 	const struct config_setting_t *setting = NULL;
 
 	if ((setting = libconfig->lookup(config, "mapindex_configuration")) == NULL) {
-		ShowError("mapindex_config_read: mapindex_configuration was not found in %s!\n", filename);
+		ShowError("mapindex_config_read: mapindex_configuration was not found in %s!\n",
+			filename);
 		return false;
 	}
 
 	// mapindex_configuration/file_path
-	if (libconfig->setting_lookup_mutable_string(setting, "file_path", mapindex->config_file, sizeof(mapindex->config_file)) == CONFIG_TRUE) {
+	if (libconfig->setting_lookup_mutable_string(setting, "file_path",
+		mapindex->config_file, sizeof(mapindex->config_file)) == CONFIG_TRUE
+	) {
 		ShowInfo("map_index file %s\n", mapindex->config_file);
 	} else {
 		ShowInfo("Failed to load map_index path, defaulting to db/map_index.txt\n");
-		safestrncpy(mapindex->config_file, "db/map_index.txt", sizeof(mapindex->config_file));
+		safestrncpy(mapindex->config_file, "db/map_index.txt",
+			sizeof(mapindex->config_file));
 	}
 
 	return true;
@@ -211,8 +233,19 @@ static bool mapindex_config_read(void)
 	return true;
 }
 
+/**
+ * Does initial configuration parsing and then initializes the map index.
+ *
+ * @return Number of indexed maps
+ **/
 static int mapindex_init(void)
 {
+	mapindex->lock = rwlock->create();
+	if(!mapindex->lock) {
+		ShowError("mapindex_init: Failed to create mapindex lock!\n");
+		exit(EXIT_FAILURE);
+	}
+
 	if (!mapindex_config_read())
 		ShowError("Failed to load map_index configuration. Continuing with default values...\n");
 
@@ -228,6 +261,18 @@ static int mapindex_init(void)
 	}
 
 	mapindex->db = strdb_alloc(DB_OPT_DUP_KEY, MAP_NAME_LENGTH);
+
+	/**
+	 * Two passes in mapindex configuration should be faster than reallocating
+	 * mapindex->list several times.
+	 **/
+	int expected_length = 0;
+	while(fgets(line, sizeof(line), fp)) {
+		if(line[0] == '/' && line[1] == '/')
+			continue;
+		expected_length++;
+	}
+	VECTOR_ENSURE(mapindex->list, expected_length, 1);
 
 	while(fgets(line, sizeof(line), fp)) {
 		if(line[0] == '/' && line[1] == '/')
@@ -264,14 +309,16 @@ static bool mapindex_check_default(void)
 
 static void mapindex_removemap(int index)
 {
-	Assert_retv(index < MAX_MAPINDEX);
-	strdb_remove(mapindex->db, mapindex->list[index].name, 0);
-	mapindex->list[index].name[0] = '\0';
+	Assert_retv(index < VECTOR_CAPACITY(mapindex->list));
+	strdb_remove(mapindex->db, VECTOR_INDEX(mapindex->list,index).name, 0);
+	VECTOR_INDEX(mapindex->list,index).name[0] = '\0';
 }
 
 static void mapindex_final(void)
 {
 	db_destroy(mapindex->db);
+	VECTOR_CLEAR(mapindex->list);
+	rwlock->destroy(mapindex->lock);
 }
 
 void mapindex_defaults(void)
@@ -282,11 +329,10 @@ void mapindex_defaults(void)
 	snprintf(mapindex->config_file, sizeof(mapindex->config_file), "%s","db/map_index.txt");
 	/* */
 	mapindex->db = NULL;
-	mapindex->num = 0;
 	mapindex->default_map = MAP_DEFAULT;
 	mapindex->default_x = MAP_DEFAULT_X;
 	mapindex->default_y = MAP_DEFAULT_Y;
-	memset (&mapindex->list, 0, sizeof (mapindex->list));
+	VECTOR_INIT(mapindex->list);
 
 	/* */
 	mapindex->config_read = mapindex_config_read;
