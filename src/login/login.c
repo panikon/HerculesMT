@@ -48,6 +48,7 @@
 #include "common/action.h"
 
 #include "common/packets_wa_struct.h"
+#include "common/packets_aw_struct.h"
 #include "common/mutex.h"
 #include "common/rwlock.h"
 
@@ -342,15 +343,6 @@ static void lchrif_server_reset(struct mmo_char_server *server)
 	login->online_db->foreach(login->online_db, login->online_db_setoffline, sd->account_id);
 	mutex->unlock(login->online_db_mutex);
 
-	mutex->lock(server->session->mutex);
-	// Let char-server know that we're shutting down
-	WFIFOHEAD(server->session, 3, false);
-	WFIFOW(server->session, 0) = 0x2742; // AW_SET_ALL_OFFLINE (TODO in char-server)
-	WFIFOB(server->session, 2) = true;
-	WFIFOSET(server->session, 3);
-	socket_io->wfifoflush(server->session); // Send everything before destruction
-	mutex->unlock(server->session->mutex);
-
 	lchrif->server_destroy(server);
 }
 
@@ -438,7 +430,7 @@ static int login_sync_ip_addresses(struct timer_interface *tm, int tid, int64 ti
 {
 	uint8 buf[2];
 	ShowInfo("IP Sync in progress...\n");
-	WBUFW(buf,0) = 0x2735;
+	WBUFW(buf,0) = HEADER_AW_IP_UPDATE;
 	charif_sendallwos(NULL, buf, 2);
 	return 0;
 }
@@ -512,7 +504,7 @@ static void login_fromchar_auth_ack(struct socket_data *session,
 	int request_id, struct login_auth_node *node
 ) {
 	WFIFOHEAD(session,33, true);
-	WFIFOW(session,0) = 0x2713;
+	WFIFOW(session,0) = HEADER_AW_AUTH_ACK;
 	WFIFOL(session,2) = account_id;
 	WFIFOL(session,6) = login_id1;
 	WFIFOL(session,10) = login_id2;
@@ -658,7 +650,7 @@ static void login_fromchar_account(struct socket_data *session,
 	int account_id, struct mmo_account *acc
 ) {
 	WFIFOHEAD(session, 72, true);
-	WFIFOW(session, 0) = 0x2717;
+	WFIFOW(session, 0) = HEADER_AW_REQUEST_ACCOUNT_ACK;
 	WFIFOL(session, 2) = account_id;
 	if (acc)
 	{
@@ -727,7 +719,7 @@ static void login_fromchar_parse_account_data(struct s_receive_action_data *act,
 static void login_fromchar_pong(struct socket_data *session)
 {
 	WFIFOHEAD(session, 2, true);
-	WFIFOW(session,0) = 0x2718;
+	WFIFOW(session,0) = HEADER_AW_PONG;
 	WFIFOSET(session,2);
 }
 
@@ -825,7 +817,7 @@ static void login_fromchar_account_update_state(int account_id, unsigned char fl
 			"for character update, login-server can only ask for account updates!\n");
 		return;
 	}
-	WBUFW(buf,0) = 0x2731;
+	WBUFW(buf,0) = HEADER_AW_UPDATE_STATE;
 	WBUFL(buf,2) = account_id;
 	WBUFB(buf,6) = flag;
 	WBUFL(buf,7) = state;
@@ -942,7 +934,7 @@ static void login_fromchar_parse_ban(struct s_receive_action_data *act,
 static void login_fromchar_change_sex_other(int account_id, char sex)
 {
 	unsigned char buf[7];
-	WBUFW(buf,0) = 0x2723;
+	WBUFW(buf,0) = HEADER_AW_SEX_BROADCAST;
 	WBUFL(buf,2) = account_id;
 	WBUFB(buf,6) = sex_str2num(sex);
 	charif_sendallwos(NULL, buf, 7);
@@ -1182,69 +1174,41 @@ static void login_fromchar_parse_wrong_pincode(struct s_receive_action_data *act
 	login->remove_online_user(acc.account_id);
 }
 
-#if !defined(sun) && (!defined(__NETBSD__) || __NetBSD_Version__ >= 600000000)
-#pragma pack(push, 1)
-#endif
-struct PACKET_AW_ACCOUNT_INFO {
-	int16 packet_id;   ///< Packet ID (#0x2743/0x2744)
-	int32 map_id;
-	int32 u_fd;
-	int32 u_aid;
-	int32 account_id;
-	struct {
-		char userid[NAME_LENGTH];
-		char email[40];
-		char last_ip[16];
-		int32 group_id;
-		char last_login[24];
-		uint32 login_count;
-		uint32 state;
-		char birthdate[11];
-	} target_data;
-} __attribute__((packed));
-#if !defined(sun) && (!defined(__NETBSD__) || __NetBSD_Version__ >= 600000000)
-#pragma pack(pop)
-#endif
+static void login_fromchar_accinfo_failure(struct socket_data *session,
+	int u_fd, int u_aid, int map_id
+) {
+	WFIFOHEAD(session, sizeof(struct PACKET_AW_ACCOUNT_INFO_FAILURE), true);
+	WFIFOW(session, 0) = HEADER_AW_ACCOUNT_INFO_FAILURE;
+	WFIFOL(session, 2) = map_id;
+	WFIFOL(session, 6) = u_fd;
+	WFIFOL(session, 10) = u_aid;
+	WFIFOSET(session, sizeof(struct PACKET_AW_ACCOUNT_INFO_FAILURE));
+}
 
-/**
- * 0x2743 AW_ACCOUNT_INFO_SUCCESS
- * 0x2744 AW_ACCOUNT_INFO_FAILURE
- * Sends account information to char-server, answer to 
- **/
-static void login_fromchar_accinfo(struct socket_data *session, int account_id,
+static void login_fromchar_accinfo_success(struct socket_data *session, int account_id,
 	int u_fd, int u_aid, int u_group, int map_id, struct mmo_account *acc
 ) {
-	struct PACKET_AW_ACCOUNT_INFO accinfo_packet;
-	accinfo_packet.map_id     = map_id;
-	accinfo_packet.u_fd       = u_fd;
-	accinfo_packet.u_aid      = u_aid;
-	accinfo_packet.account_id = account_id;
-	if(!acc) {
-		size_t expected_size = sizeof(accinfo_packet)-sizeof(accinfo_packet.target_data);
-		WFIFOHEAD(session, expected_size, true);
-		accinfo_packet.packet_id = 0x2744;
-		memcpy(WFIFOP(session, 0), &accinfo_packet, expected_size);
-		WFIFOSET(session, expected_size);
-		return;
-	}
+	size_t cur = 0;
+	WFIFOHEAD(session, sizeof(struct PACKET_AW_ACCOUNT_INFO_SUCCESS), true);
+	cur += sizeof((WFIFOW(session, cur) = HEADER_AW_ACCOUNT_INFO_SUCCESS));
+	cur += sizeof((WFIFOL(session, cur) = map_id));
+	cur += sizeof((WFIFOL(session, cur) = u_fd));
+	cur += sizeof((WFIFOL(session, cur) = u_aid));
+	cur += sizeof((WFIFOL(session, cur) = account_id));
 
-	WFIFOHEAD(session, sizeof(accinfo_packet), true);
-	accinfo_packet.packet_id = 0x2743;
-	memcpy(&accinfo_packet.target_data.userid,
-		acc->userid, NAME_LENGTH);
-	memcpy(&accinfo_packet.target_data.email,
-		acc->email, sizeof(acc->email));
-	memcpy(&accinfo_packet.target_data.last_ip,
-		acc->last_ip, sizeof(acc->last_ip));
-	accinfo_packet.target_data.group_id = acc->group_id;
-	memcpy(&accinfo_packet.target_data.last_login,
-		acc->lastlogin, sizeof(acc->lastlogin));
-	accinfo_packet.target_data.login_count = acc->logincount;
-	accinfo_packet.target_data.state = acc->state;
-	memcpy(&accinfo_packet.target_data.birthdate,
-		acc->birthdate, sizeof(acc->birthdate));
-	memcpy(WFIFOP(session, 0), &accinfo_packet, sizeof(accinfo_packet));
-	WFIFOSET(session, sizeof(accinfo_packet));
+	memcpy(WFIFOP(session, cur), acc->userid, NAME_LENGTH);
+	cur += NAME_LENGTH;
+	memcpy(WFIFOP(session, cur), acc->email, sizeof(acc->email));
+	cur += sizeof(acc->email);
+	cur += sizeof((WFIFOL(session, cur) = acc->group_id));
+	memcpy(WFIFOP(session, cur), acc->lastlogin, sizeof(acc->lastlogin));
+	cur += sizeof(acc->lastlogin);
+	cur += sizeof((WFIFOL(session, cur) = acc->logincount));
+	cur += sizeof((WFIFOL(session, cur) = acc->state));
+	memcpy(WFIFOP(session, cur), acc->birthdate, sizeof(acc->birthdate));
+	cur += sizeof(acc->birthdate);
+
+	WFIFOSET(session, sizeof(struct PACKET_AW_ACCOUNT_INFO_SUCCESS));
 }
 
 /**
@@ -1252,7 +1216,7 @@ static void login_fromchar_accinfo(struct socket_data *session, int account_id,
  * Account info request from map server (relayed through char-server)
  * [Map]   0x3007 ZW_ACCINFO_REQUEST
  * [Char]  0x2740 WA_ACCOUNT_INFO_REQUEST
- * [Login] 0x2743 (success) / 0x2744 (failed)
+ * [Login] AW_ACCOUNT_INFO_SUCCESS / AW_ACCOUNT_INFO_FAILURE
  * [Char]  0x3807 WZ_MSG_TO_FD
  **/
 static void login_fromchar_parse_accinfo(struct s_receive_action_data *act,
@@ -1265,9 +1229,9 @@ static void login_fromchar_parse_accinfo(struct s_receive_action_data *act,
 	int32_t u_group    = RFIFOL(act, 14);
 	int32_t map_fd     = RFIFOL(act, 18);
 	if (login->account_load(account_id, &acc)) {
-		login->fromchar_accinfo(act->session, account_id, u_fd, u_aid, u_group, map_fd, &acc);
+		login->fromchar_accinfo_success(act->session, account_id, u_fd, u_aid, u_group, map_fd, &acc);
 	} else {
-		login->fromchar_accinfo(act->session, account_id, u_fd, u_aid, u_group, map_fd, NULL);
+		login->fromchar_accinfo_failure(act->session, u_fd, u_aid, map_fd);
 	}
 }
 
@@ -1606,7 +1570,7 @@ static void login_kick(struct login_session_data *sd)
 {
 	uint8 buf[6];
 	nullpo_retv(sd);
-	WBUFW(buf,0) = 0x2734;
+	WBUFW(buf,0) = HEADER_AW_KICK;
 	WBUFL(buf,2) = sd->account_id;
 	charif_sendallwos(NULL, buf, 6);
 }
@@ -1849,7 +1813,7 @@ static void login_client_login_mobile_otp_request(struct socket_data *session, s
 }
 
 /**
- * PACKET_AC_CHARSERVERCONNECT_ACK
+ * PACKET_AW_CHARSERVERCONNECT_ACK
  * Acknowledgment of connect-to-loginserver request
  * @see enum ac_charserverconnect_ack_status
  **/
@@ -1857,7 +1821,7 @@ static void login_char_server_connection_status(struct socket_data *session, str
 static void login_char_server_connection_status(struct socket_data *session, struct login_session_data* sd, uint8 status)
 {
 	WFIFOHEAD(session, 3, true);
-	WFIFOW(session, 0) = 0x2711;
+	WFIFOW(session, 0) = HEADER_AW_CHARSERVERCONNECT_ACK;
 	WFIFOB(session, 2) = status;
 	WFIFOSET2(session, 3);
 }
@@ -2801,7 +2765,8 @@ void login_defaults(void)
 	login->account_load = login_account_load;
 
 	login->fromchar_auth_ack = login_fromchar_auth_ack;
-	login->fromchar_accinfo = login_fromchar_accinfo;
+	login->fromchar_accinfo_failure = login_fromchar_accinfo_failure;
+	login->fromchar_accinfo_success = login_fromchar_accinfo_success;
 	login->fromchar_account = login_fromchar_account;
 	login->fromchar_account_update_state = login_fromchar_account_update_state;
 	login->fromchar_change_sex_other = login_fromchar_change_sex_other;

@@ -149,6 +149,8 @@
     <ClInclude Include="..\src\common\HPMDataCheck.h" />
     <ClInclude Include="..\src\common\HPMSymbols.inc.h" />
     <ClInclude Include="..\src\common\mutex.h" />
+    <ClInclude Include="..\src\common\packets_aw_struct.h" />
+    <ClInclude Include="..\src\common\packets_wa_struct.h" />
     <ClInclude Include="..\src\common\rwlock.h" />
     <ClInclude Include="..\src\common\spinlock.h" />
     <ClInclude Include="..\src\common\thread.h" />

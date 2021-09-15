@@ -35,6 +35,8 @@
 #include "common/strlib.h"
 #include "common/mutex.h"
 
+#include "common/packets_aw_struct.h"
+
 #include <stdlib.h>
 
 /// global defines
@@ -650,6 +652,7 @@ static struct Sql *account_db_sql_up(AccountDB *self)
 /**
  * 0x2728 WA_ACCOUNT_REG2
  * Parses account reg packet with new registry information and saves to db
+ * @see struct PACKET_WA_ACCOUNT_REG2
  **/
 static void account_mmo_save_accreg2(AccountDB *self, struct s_receive_action_data *act, int account_id, int char_id)
 {
@@ -717,12 +720,12 @@ static void account_mmo_save_accreg2(AccountDB *self, struct s_receive_action_da
 }
 
 /**
- * Sends all account-specific registry information (0x3804)
+ * Sends all account-specific registry information (0x3804 AW_ACCOUNT_REG2)
  *  At least one packet per type is sent, and if either has more than 6000bytes it's broken into
  *  more packets.
  *  The last packet has <is complete> marked.
- * 0x3804 <account_id>.L <char_id>.L <is complete>.B <var type>.B <count>.W {vessel type}
  * This is the same packet as inter_accreg_fromsql
+ * @see struct PACKET_AW_ACCOUNT_REG2
  **/
 static void account_mmo_send_accreg2(AccountDB *self, struct socket_data *session, int account_id, int char_id)
 {
@@ -741,7 +744,7 @@ static void account_mmo_send_accreg2(AccountDB *self, struct socket_data *sessio
 		Sql_ShowDebug(sql_handle);
 
 	WFIFOHEAD(session, 60000 + 300, true);
-	WFIFOW(session, 0) = 0x3804;
+	WFIFOW(session, 0) = HEADER_AW_ACCOUNT_REG2;
 	/* 0x2 = length, set prior to being sent */
 	WFIFOL(session, 4) = account_id;
 	WFIFOL(session, 8) = char_id;
@@ -788,7 +791,7 @@ static void account_mmo_send_accreg2(AccountDB *self, struct socket_data *sessio
 
 			/* prepare follow up */
 			WFIFOHEAD(session, 60000 + 300, true);
-			WFIFOW(session, 0) = 0x3804;
+			WFIFOW(session, 0) = HEADER_AW_ACCOUNT_REG2;
 			/* 0x2 = length, set prior to being sent */
 			WFIFOL(session, 4) = account_id;
 			WFIFOL(session, 8) = char_id;
@@ -812,7 +815,7 @@ static void account_mmo_send_accreg2(AccountDB *self, struct socket_data *sessio
 		Sql_ShowDebug(sql_handle);
 
 	WFIFOHEAD(session, 60000 + 300, true);
-	WFIFOW(session, 0) = 0x3804;
+	WFIFOW(session, 0) = HEADER_AW_ACCOUNT_REG2;
 	/* 0x2 = length, set prior to being sent */
 	WFIFOL(session, 4) = account_id;
 	WFIFOL(session, 8) = char_id;
@@ -855,7 +858,7 @@ static void account_mmo_send_accreg2(AccountDB *self, struct socket_data *sessio
 
 			/* prepare follow up */
 			WFIFOHEAD(session, 60000 + 300, true);
-			WFIFOW(session, 0) = 0x3804;
+			WFIFOW(session, 0) = HEADER_AW_ACCOUNT_REG2;
 			/* 0x2 = length, set prior to being sent */
 			WFIFOL(session, 4) = account_id;
 			WFIFOL(session, 8) = char_id;

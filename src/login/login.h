@@ -264,7 +264,9 @@ struct login_interface {
 	bool (*check_password) (const char* md5key, int passwdenc, const char* passwd, const char* refpass);
 	uint32 (*lan_subnet_check) (uint32 ip);
 
-	void (*fromchar_accinfo) (struct socket_data *session, int account_id, int u_fd, int u_aid, int u_group, int map_fd, struct mmo_account *acc);
+	void (*fromchar_accinfo_failure) (struct socket_data *session, int u_fd, int u_aid, int map_id);
+	void (*fromchar_accinfo_success) (struct socket_data *session, int account_id, int u_fd, int u_aid, int u_group, int map_id, struct mmo_account *acc);
+
 	void (*fromchar_account) (struct socket_data *session, int account_id, struct mmo_account *acc);
 	void (*fromchar_account_update_state) (int account_id, unsigned char flag, unsigned int state);
 	void (*fromchar_auth_ack) (struct socket_data *session, int account_id, uint32 login_id1, uint32 login_id2, uint8 sex, int request_id, struct login_auth_node* node);

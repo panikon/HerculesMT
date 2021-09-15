@@ -57,7 +57,15 @@ enum inter_packet_wa_id {
 #endif // not NetBSD < 6 / Solaris
 
 /**
- * @copydoc login_fromchar_parse_auth
+ * Char-server account authentication request
+ *
+ * @param account_id      Account id
+ * @param login_id1       id1 provided by the client @see login_session_data::login_id1
+ * @param login_id2       id2 provided by the client @see login_session_data::login_id2
+ * @param sex             Account sex (@see login_session_data::sex)
+ * @param ipl             Client ip
+ * @param request_id      Identifier of this authentication request
+ * @see login_fromchar_parse_auth
  * @see struct login_auth_node
  **/
 struct PACKET_WA_AUTH {
@@ -113,7 +121,11 @@ struct PACKET_WA_REQUEST_CHANGE_EMAIL {
 } __attribute__((packed));
 
 /**
- * @copydoc login_fromchar_parse_account_update
+ * Update state request.
+ *
+ * @param state New account state @see mmo_account::state
+ * @see login_fromchar_parse_account_update
+ * @see struct mmo_account
  **/
 struct PACKET_WA_UPDATE_STATE {
 	int16 packet_id;
@@ -144,7 +156,13 @@ struct PACKET_WA_SEX_CHANGE {
 } __attribute__((packed));
 
 /**
- * @copydoc login_fromchar_parse_account_reg2
+ * Account re2 new information.
+ *
+ * @param account_id Account id
+ * @param char_id    Character id
+ * @param count      Number of entries to be altered
+ * @param entry      Entry data
+ * @see login_fromchar_parse_account_reg2
  * @see account->mmo_save_accreg2
  **/
 struct PACKET_WA_ACCOUNT_REG2 {
@@ -153,9 +171,18 @@ struct PACKET_WA_ACCOUNT_REG2 {
 	int32 account_id;
 	int32 char_id;
 	int16 count;
+	/**
+	 * Entry data
+	 *
+	 * @param key_len Length of key (maximum value SCRIPT_VARNAME_LENGTH + 1)
+	 * @param key     Key to be altered
+	 * @param index   Index in db
+	 * @param flag    Operation flag (0: Replace int, 1: Delete int, 2: Replace string, 3: Delete string)
+	 * @param val     Entry value, in deletion operations this is not sent
+	 **/
 	struct {
-		int16 len;
-		uint8 key[SCRIPT_VARNAME_LENGTH + 1];
+		int16 key_len;
+		uint8 *key; // key[key_len]
 		int32 index;
 		/**
 		 * Operation flag
@@ -165,8 +192,12 @@ struct PACKET_WA_ACCOUNT_REG2 {
 		 * 3 Delete string
 		 **/
 		uint8 flag;
+		union {
+			int32 integer;
+			uint8 *string;
+			void *empty;
+		} val;
 	} *entry;
-
 } __attribute__((packed));
 
 /**
