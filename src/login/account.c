@@ -722,6 +722,7 @@ static void account_mmo_save_accreg2(AccountDB *self, struct s_receive_action_da
  *  more packets.
  *  The last packet has <is complete> marked.
  * 0x3804 <account_id>.L <char_id>.L <is complete>.B <var type>.B <count>.W {vessel type}
+ * This is the same packet as inter_accreg_fromsql
  **/
 static void account_mmo_send_accreg2(AccountDB *self, struct socket_data *session, int account_id, int char_id)
 {

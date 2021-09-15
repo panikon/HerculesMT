@@ -128,74 +128,6 @@ enum notify_ban_errorcode {
 	NBE_LAST = 255
 };
 
-/**
- * AC_REFUSE_LOGIN error code list
- * @see struct HEADER_AC_REFUSE_LOGIN / _R2 / R3
- * @see lclif_send_auth_failed
- * @see login_auth_failed
- * @see login_mmo_auth
- **/
-enum accept_login_errorcode {
-	/**
-	 * These codes should hold the negative value of the equivalent code in
-	 * notify_ban_error_code (PACKET_SC_NOTIFY_BAN)
-	 **/
-	ALE_BRUTE_FORCE = -109,				// Brute force attempt (NBE_BRUTE_FORCE)
-	ALE_DUPLICATE_ID = -2,				// Already logged in   (NBE_DUPLICATE_ID)
-
-	ALE_OK = -1,						// Authentication successful
-	// Valid error codes for AC_REFUSE_LOGIN
-	ALE_UNREGISTERED = 0,				// "Unregistered account"
-	ALE_INCORRECT_PASS = 1,				// "Incorrect password"
-	ALE_EXPIRED_ID = 2,					// "This ID is expired"
-	ALE_REJECTED = 3,					// "Rejected from Server"
-	ALE_LOGIN_UNAVAILABLE,				// "Login is currently unavailable"
-	ALE_INVALID_VERSION,				// Invalid client version
-	ALE_PROHIBITED,						// "Your are Prohibited to log in until %s"
-	ALE_JAMMED,							// "Server is jammed due to overpopulation"
-	ALE_SAKRAY,							// "You cannot access sakray with this user account"
-	MSI_REFUSE_BAN_BY_DBA,				// "MSI_REFUSE_BAN_BY_DBA (9)"
-	MSI_REFUSE_EMAIL_NOT_CONFIRMED,		// "MSI_REFUSE_EMAIL_NOT_CONFIRMED (10)"
-	MSI_REFUSE_BAN_BY_GM,				// "MSI_REFUSE_BAN_BY_GM (11)"
-	MSI_REFUSE_TEMP_BAN_FOR_DBWORK,		// "MSI_REFUSE_TEMP_BAN_FOR_DBWORK (12)"
-	MSI_REFUSE_SELF_LOCK,				// "MSI_SELF_LOCK (13)"
-	MSI_REFUSE_NOT_PERMITTED_GROUP,		// "MSI_REFUSE_NOT_PERMITTED_GROUP (14)"
-	MSI_REFUSE_WAIT_FOR_SAKRAY_ACTIVE,	// "MSI_REFUSE_WAIT_FOR_SAKRAY_ACTIVE (15)"
-	ALE_NO_WINDOW,						// Doesn't display anything (no window either)
-	ALE_BAN_HACK,						// "This account has been used for illegal program or hacking program. Block time: %s"
-	ALE_TAMPERED_CLIENT,				// "The possibility of exposure to illegal program, PC virus infection
-										// or Hacking Tool has been detected. Please execute licensed client. Our team is
-										// trying to make a best environment for Ro players. (18)"
-	/**
-	 * One-Time Password Security (OTP)
-	 * Probably the client will send PACKET_CA_OTP_AUTH_REQ and then an OTP will be generated to
-	 * username and then sent via some other service
-	 * When OTP is not available ALE_NO_OTP should be the answer
-	 * When the typed OTP is incorrect ALE_FAILED_OTP should be the answer and not ALE_INCORRED_PASS
-	 **/
-	ALE_NO_OTP,							// "There is no OTP information, contact administrator (19)"
-	ALE_FAILED_OTP,						// "fail to recognizing OTP (20)"
-	// 21 - 98 ALE_REJECTED
-	ALE_ID_REMOVED = 99,				// "This ID has been removed" - closes client window
-	ALE_LOGIN_INFO_REMAINS,				// "Login information remains at %s"
-	ALE_HACKING_INVESTIGATION,			// "Account has been locked for a hacking investigation. Please contact the GM Team for more information"
-	ALE_BUG_INVESTIGATION,				// "This account has been temporarily prohibited from login due to a bug-related investigation"
-	ALE_DELETING_CHAR,					// "Login is temporarily unavailable while this character is being deleted"
-	ALE_DELETING_SPOUSE,				// "Login is temporarily unavailable while your spouse character is being deleted"
-	ALE_UNSAFE_COM_KEY,					// "This account has not confirmed by connecting to the safe communication key. Please connect
-										// to the key first, and then login into the game"
-	ALE_MOBILE_AUTHENTICATION,			// "Mobile Authentication"
-	ALE_107,							// Rejected
-	ALE_CANNOT_CONNECT_FREE_SERVER,		// "An user of this server cannot connect to free server"
-	ALE_EXPIRED_PASS,					// "Your password has expired. Please log in again"
-	ALE_NO_MSG,							// "NO MSG" - closes client window
-	// 111 - 239 ALE_REJECTED
-	ALE_OPEN_SITE = 240,				// Prompt asking something in korean, if OK opens ragnarok.co.kr
-	// ... 255 with same message as ALE_REJECTED
-	// 256 starts repeating the messages, i.e 256 = ALE_UNREGISTERED
-	ALE_LAST = 255
-};
-
 struct client_hash_node {
 	int group_id;
 	uint8 hash[16];
@@ -334,32 +266,31 @@ struct login_interface {
 
 	void (*fromchar_accinfo) (struct socket_data *session, int account_id, int u_fd, int u_aid, int u_group, int map_fd, struct mmo_account *acc);
 	void (*fromchar_account) (struct socket_data *session, int account_id, struct mmo_account *acc);
-	void (*fromchar_account_update_other) (int account_id, unsigned int state);
+	void (*fromchar_account_update_state) (int account_id, unsigned char flag, unsigned int state);
 	void (*fromchar_auth_ack) (struct socket_data *session, int account_id, uint32 login_id1, uint32 login_id2, uint8 sex, int request_id, struct login_auth_node* node);
-	void (*fromchar_ban) (int account_id, time_t timestamp);
 	void (*fromchar_change_sex_other) (int account_id, char sex);
 	void (*fromchar_pong) (struct socket_data *session);
 
-	void (*fromchar_parse_auth) (struct s_receive_action_data *act, struct mmo_char_server *server);
-	void (*fromchar_parse_update_users) (struct s_receive_action_data *act, struct mmo_char_server *server);
+	void (*fromchar_parse_auth)                 (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_update_users)         (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
 	void (*fromchar_parse_request_change_email) (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
-	void (*fromchar_parse_account_data) (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
-	void (*fromchar_parse_ping) (struct s_receive_action_data *act);
-	void (*fromchar_parse_change_email) (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
-	void (*fromchar_parse_account_update) (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
-	void (*fromchar_parse_ban) (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
-	void (*fromchar_parse_change_sex)      (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
-	void (*fromchar_parse_account_reg2)    (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
-	void (*fromchar_parse_unban)           (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
-	void (*fromchar_parse_account_online)  (struct s_receive_action_data *act, struct mmo_char_server *server);
-	void (*fromchar_parse_account_offline) (struct s_receive_action_data *act);
-	void (*fromchar_parse_online_accounts) (struct s_receive_action_data *act, struct mmo_char_server *server);
-	void (*fromchar_parse_request_account_reg2) (struct s_receive_action_data *act);
-	void (*fromchar_parse_update_wan_ip) (struct s_receive_action_data *act, struct mmo_char_server *server);
-	void (*fromchar_parse_all_offline)   (struct s_receive_action_data *act, struct mmo_char_server *server);
-	void (*fromchar_parse_change_pincode) (struct s_receive_action_data *act);
-	bool (*fromchar_parse_wrong_pincode) (struct s_receive_action_data *act);
-	void (*fromchar_parse_accinfo) (struct s_receive_action_data *act);
+	void (*fromchar_parse_account_data)         (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_ping)                 (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_change_email)         (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_account_update)       (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_ban)                  (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_change_sex)           (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_account_reg2)         (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_unban)                (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_account_online)       (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_account_offline)      (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_online_accounts)      (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_request_account_reg2) (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_update_wan_ip)        (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_all_offline)          (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_change_pincode)       (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_wrong_pincode)        (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+	void (*fromchar_parse_accinfo)              (struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
 	enum parsefunc_rcode (*parse_fromchar) (struct s_receive_action_data *act);
 
 	void (*kick) (struct login_session_data* sd);
@@ -395,13 +326,41 @@ struct login_interface {
 };
 
 /**
- * Login.c Interface
+ * Login inter-server parse function
+ * @readlock g_char_server_list_lock
+ * @see login_parse_fromchar
+ **/
+typedef void (LoginInterParseFunc)(struct s_receive_action_data *act, struct mmo_char_server *server, const char *ip);
+
+/**
+ * Login inter-server packet information
+ * @see lchrif_init
+ **/
+struct login_inter_packet_entry {
+	int16 len;
+	LoginInterParseFunc *pFunc;
+};
+
+/**
+ * lchrif Interface
  **/
 struct lchrif_interface {
+	/**
+	 * Inter-server packet database
+	 * This database doesn't have any locks because it's not meant to be edited
+	 * after it's creation.
+	 * @see lchrif->init
+	 **/
+	struct DBMap *packet_db; // int16 packet_id -> struct login_inter_packet_entry*
+	struct login_inter_packet_entry *packet_list;
+
 	void (*server_destroy) (struct mmo_char_server *server);
 	void (*server_reset) (struct mmo_char_server *server);
 	struct mmo_char_server *(*server_find) (struct socket_data *session);
 	void (*on_disconnect) (struct mmo_char_server *server);
+
+	void (*init) (void);
+	void (*final) (void);
 };
 
 #ifdef HERCULES_CORE

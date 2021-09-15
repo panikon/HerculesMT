@@ -1316,6 +1316,134 @@ enum ac_charserverconnect_ack_status {
 };
 
 /**
+ * AC_REFUSE_LOGIN error code list
+ *  From ALE_UNREGISTERED to ALE_LAST there are the valid error codes
+ * @see struct HEADER_AC_REFUSE_LOGIN / _R2 / R3
+ * @see lclif_send_auth_failed
+ * @see login_auth_failed
+ * @see login_mmo_auth
+ **/
+enum accept_login_errorcode {
+	/**
+	 * These codes should hold the negative value of the equivalent code in
+	 * notify_ban_error_code (PACKET_SC_NOTIFY_BAN)
+	 **/
+	ALE_BRUTE_FORCE = -109,				// Brute force attempt (NBE_BRUTE_FORCE)
+	ALE_DUPLICATE_ID = -2,				// Already logged in   (NBE_DUPLICATE_ID)
+
+	/**
+	 * The range of valid account states is ALE_OK to ALE_UNAUTHORIZED, always added 1
+	 * So, an unregistered account would have state ALE_UNREGISTERED+1 (i.e. 1)
+	 * These states also have equivalent messages in the inter-server messages configuration,
+	 * they are in the range 412(ALE_UNREGISTERED) to 420(ALE_UNAUTHORIZED)
+	 *
+	 * These states are also used in inter-server communication
+	 * @see 0x2724 AW_UPDATE_STATE
+	 * @see 0x2731 WA_UPDATE_STATE
+	 * @see 0xb214 WZ_UPDATE_STATE
+	 **/
+	ALE_OK = -1,						// Authentication successful
+	ALE_UNREGISTERED = 0,				// "Unregistered account"
+	ALE_INCORRECT_PASS = 1,				// "Incorrect password"
+	ALE_EXPIRED_ID = 2,					// "This ID is expired"
+	ALE_REJECTED = 3,					// "Rejected from Server"
+	ALE_LOGIN_UNAVAILABLE,				// "Login is currently unavailable"
+	ALE_INVALID_VERSION,				// Invalid client version
+	ALE_PROHIBITED,						// "Your are Prohibited to log in until %s"
+	ALE_JAMMED,							// "Server is jammed due to overpopulation"
+	ALE_UNAUTHORIZED,					// "You cannot access sakray with this user account"
+
+	MSI_REFUSE_BAN_BY_DBA,				// "MSI_REFUSE_BAN_BY_DBA (9)"
+	MSI_REFUSE_EMAIL_NOT_CONFIRMED,		// "MSI_REFUSE_EMAIL_NOT_CONFIRMED (10)"
+	MSI_REFUSE_BAN_BY_GM,				// "MSI_REFUSE_BAN_BY_GM (11)"
+	MSI_REFUSE_TEMP_BAN_FOR_DBWORK,		// "MSI_REFUSE_TEMP_BAN_FOR_DBWORK (12)"
+	MSI_REFUSE_SELF_LOCK,				// "MSI_SELF_LOCK (13)"
+	MSI_REFUSE_NOT_PERMITTED_GROUP,		// "MSI_REFUSE_NOT_PERMITTED_GROUP (14)"
+	MSI_REFUSE_WAIT_FOR_SAKRAY_ACTIVE,	// "MSI_REFUSE_WAIT_FOR_SAKRAY_ACTIVE (15)"
+	ALE_NO_WINDOW,						// Doesn't display anything (no window either)
+	ALE_BAN_HACK,						// "This account has been used for illegal program or hacking program. Block time: %s"
+	ALE_TAMPERED_CLIENT,				// "The possibility of exposure to illegal program, PC virus infection
+										// or Hacking Tool has been detected. Please execute licensed client. Our team is
+										// trying to make a best environment for Ro players. (18)"
+	/**
+	 * One-Time Password Security (OTP)
+	 * Probably the client will send PACKET_CA_OTP_AUTH_REQ and then an OTP will be generated to
+	 * username and then sent via some other service
+	 * When OTP is not available ALE_NO_OTP should be the answer
+	 * When the typed OTP is incorrect ALE_FAILED_OTP should be the answer and not ALE_INCORRED_PASS
+	 **/
+	ALE_NO_OTP,							// "There is no OTP information, contact administrator (19)"
+	ALE_FAILED_OTP,						// "fail to recognizing OTP (20)"
+	// 21 - 98 ALE_REJECTED
+	ALE_ID_REMOVED = 99,				// "This ID has been removed" - closes client window
+	ALE_LOGIN_INFO_REMAINS,				// "Login information remains at %s"
+	ALE_HACKING_INVESTIGATION,			// "Account has been locked for a hacking investigation. Please contact the GM Team for more information"
+	ALE_BUG_INVESTIGATION,				// "This account has been temporarily prohibited from login due to a bug-related investigation"
+	ALE_DELETING_CHAR,					// "Login is temporarily unavailable while this character is being deleted"
+	ALE_DELETING_SPOUSE,				// "Login is temporarily unavailable while your spouse character is being deleted"
+	ALE_UNSAFE_COM_KEY,					// "This account has not confirmed by connecting to the safe communication key. Please connect
+										// to the key first, and then login into the game"
+	ALE_MOBILE_AUTHENTICATION,			// "Mobile Authentication"
+	ALE_107,							// Rejected
+	ALE_CANNOT_CONNECT_FREE_SERVER,		// "An user of this server cannot connect to free server"
+	ALE_EXPIRED_PASS,					// "Your password has expired. Please log in again"
+	ALE_NO_MSG,							// "NO MSG" - closes client window
+	// 111 - 239 ALE_REJECTED
+	ALE_OPEN_SITE = 240,				// Prompt asking something in korean, if OK opens ragnarok.co.kr
+	// ... 255 with same message as ALE_REJECTED
+	// 256 starts repeating the messages, i.e 256 = ALE_UNREGISTERED
+	ALE_LAST = 255
+};
+
+/**
+ * Values to be used in auction messages (both clif and mapif)
+ * @see mapif_auction_message
+ * @see clif_auction_message
+ */
+enum e_auction_result_message {
+	AUCTIONRESULT_BID_FAILED    = 0, // You have failed to bid into the auction
+	AUCTIONRESULT_BID_SUCCESS   = 1, // You have successfully bid in the auction
+	AUCTIONRESULT_CANCELED      = 2, // The auction has been canceled
+	AUCTIONRESULT_CANNOT_CANCEL = 3, // An auction with at least one bidder cannot be canceled
+	AUCTIONRESULT_ITEM_EXCEEDED = 4, // You cannot register more than 5 items in an auction at a time
+	AUCTIONRESULT_NO_FEE        = 5, // You do not have enough Zeny to pay the Auction Fee
+	AUCTIONRESULT_WON           = 6, // You have won the auction
+	AUCTIONRESULT_LOSE          = 7, // You have failed to win the auction
+	AUCTIONRESULT_NO_ZENY       = 8, // You do not have enough Zeny
+	AUCTIONRESULT_BID_EXCEEDED  = 9, // You cannot place more than 5 bids at a time
+};
+
+/**
+ * Auction search types used in inter-server communication
+ * @see mapif_parse_auction_requestlist
+ * @see clif_parse_Auction_search
+ * @see clif_parse_Auction_buysell
+ **/
+enum e_auction_search_type {
+	// 0x251 CZ_AUCTION_ITEM_SEARCH types
+	AUCTIONSEARCH_ARMOR    = 0, // armor
+	AUCTIONSEARCH_WEAPON   = 1, // weapon
+	AUCTIONSEARCH_CARD     = 2, // card
+	AUCTIONSEARCH_MISC     = 3, // misc
+	AUCTIONSEARCH_NAME     = 4, // name search
+	AUCTIONSEARCH_ID       = 5, // auction id search
+	// 0x025c CZ_AUCTION_REQ_MY_INFO types, all values -6
+	AUCTIONSEARCH_OWN_SELL = 6, // sell (own auctions)
+	AUCTIONSEARCH_OWN_BIDS = 7, // buy (own bids)
+};
+
+/**
+ * Results of auction cancelation
+ * @see clif_Auction_close
+ * @see mapif_auction_cancel
+ **/
+enum e_auction_cancel {
+	AUCTIONCANCEL_SUCCESS      = 0,
+	AUCTIONCANCEL_FAILED       = 1,
+	AUCTIONCANCEL_INCORRECT_ID = 2,
+};
+
+/**
  * Quest Info Types
  */
 enum questinfo_type {

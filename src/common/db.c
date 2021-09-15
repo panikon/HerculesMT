@@ -1949,6 +1949,48 @@ static struct DBData *db_obj_get(struct DBMap *self, const struct DBKey_s key)
 }
 
 /**
+ * Gets the data of the entry identified by the key.
+ * Ignores database cache and free_lock
+ * This function is thread-safe.
+ *
+ * @param self Interface of the database
+ * @param key Key that identifies the entry
+ * @return Data of the entry or NULL if not found
+ * @protected
+ * @see struct DBMap#get()
+ * @see db_obj_get
+ */
+static struct DBData *db_obj_get_safe(struct DBMap *self, const struct DBKey_s key)
+{
+	struct DBMap_impl *db = (struct DBMap_impl *)self;
+	struct DBNode *node;
+	struct DBData *data = NULL;
+
+	DB_COUNTSTAT(db_get);
+	if (db == NULL) return NULL; // nullpo candidate
+	if (!(db->options&DB_OPT_ALLOW_NULL_KEY) && db_is_key_null(db->type, &key)) {
+		ShowError("db_get: Attempted to retrieve non-allowed NULL key for db allocated at %s:%d\n",db->alloc_file, db->alloc_line);
+		return NULL; // nullpo candidate
+	}
+
+	node = db->ht[db->hash(&key)%db->bucket_count];
+	while (node) {
+		int c = db->cmp(&key, &node->key);
+		if (c == 0) {
+			if (!(node->deleted))
+				data = &node->data;
+			break;
+		}
+		if (c < 0)
+			node = node->left;
+		else
+			node = node->right;
+	}
+
+	return data;
+}
+
+/**
  * Get the data of the entries matched by <code>match</code>.
  * It puts a maximum of <code>max</code> entries into <code>buf</code>.
  * If <code>buf</code> is NULL, it only counts the matches.
@@ -2958,6 +3000,7 @@ static struct DBMap *db_alloc(const char *file, const char *func, int line,
 	db->vtable.iterator = db_obj_iterator;
 	db->vtable.exists   = db_obj_exists;
 	db->vtable.get      = db_obj_get;
+	db->vtable.get_safe = db_obj_get_safe;
 	db->vtable.getall   = db_obj_getall;
 	db->vtable.vgetall  = db_obj_vgetall;
 	db->vtable.ensure   = db_obj_ensure;

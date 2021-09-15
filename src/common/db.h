@@ -456,6 +456,18 @@ struct DBMap {
 	struct DBData *(*get)(struct DBMap *self, struct DBKey_s key);
 
 	/**
+	 * Get the data of the entry identified by the key.
+	 * Ignores database cache and free_lock
+	 * This function is thread-safe.
+	 *
+	 * @param self Database
+	 * @param key Key that identifies the entry
+	 * @return Data of the entry or NULL if not found
+	 * @protected
+	 */
+	struct DBData *(*get_safe)(struct DBMap *self, struct DBKey_s key);
+
+	/**
 	 * Just calls struct DBMap#vgetall().
 	 *
 	 * Get the data of the entries matched by <code>match</code>.
