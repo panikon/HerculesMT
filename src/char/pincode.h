@@ -28,6 +28,10 @@
 struct char_session_data;
 struct config_t; // common/conf.h
 
+/**
+ * 0x8bb Answer to a pincode creation request
+ * @see pincode_makestate
+ **/
 enum pincode_make_response {
 	PINCODE_MAKE_SUCCESS        = 0,
 	PINCODE_MAKE_DUPLICATED     = 1,
@@ -36,6 +40,10 @@ enum pincode_make_response {
 	PINCODE_MAKE_FAILED         = 4,
 };
 
+/**
+ * 0x8bf Answer to a pincode edit request
+ * @see pincode_editstate
+ **/
 enum pincode_edit_response {
 	PINCODE_EDIT_SUCCESS        = 0x0,
 	PINCODE_EDIT_FAILED         = 0x1,
@@ -43,19 +51,36 @@ enum pincode_edit_response {
 	PINCODE_EDIT_PERSONALNUM_PW = 0x3,
 };
 
+/**
+ * 0x8b9 / 0xae9 response states
+ * @see pincode_loginstate
+ * @see pincode_loginstate2
+ **/
 enum pincode_login_response {
-	PINCODE_LOGIN_OK          = 0,
-	PINCODE_LOGIN_ASK         = 1,
-	PINCODE_LOGIN_NOTSET      = 2,
-	PINCODE_LOGIN_EXPIRED     = 3,
-	PINCODE_LOGIN_RESTRICT_PW = 5,
-	PINCODE_LOGIN_UNUSED      = 7,
-	PINCODE_LOGIN_WRONG       = 8,
+	PINCODE_LOGIN_OK          = 0, // Pin is correct
+	PINCODE_LOGIN_ASK         = 1, // Ask for pin - client sends 0x8b8
+	PINCODE_LOGIN_NOTSET      = 2, // Create new pin - client sends 0x8ba
+	PINCODE_LOGIN_EXPIRED     = 3, // Pin must be changed - client 0x8be
+	PINCODE_LOGIN_CREATE      = 4, // Create new pin ?? - client sends 0x8ba
+	PINCODE_LOGIN_RESTRICT_PW = 5, // Client shows msgstr(1896)
+	PINCODE_LOGIN_INVALID_KSSN= 6, // Client shows msgstr(1897) Unable to use your KSSN number
+	PINCODE_LOGIN_UNUSED      = 7, // Char select window shows a button - client sends 0x8c5
+	PINCODE_LOGIN_WRONG       = 8, // Pincode was incorrect
 };
 
 enum pincode_login_response2 {
 	PINCODE_LOGIN_FLAG_LOCKED = 0,
 	PINCODE_LOGIN_FLAG_WRONG  = 2,
+};
+
+/**
+ * Result of pincode comparison
+ * @see pincode_compare
+ **/
+enum pincode_compare_result {
+	PINCODE_DISCONNECTED = -1,
+	PINCODE_FAILED       = 0,
+	PINCODE_SUCCESS      = 1,
 };
 
 /**
@@ -67,24 +92,29 @@ struct pincode_interface {
 	int changetime;
 	int maxtry;
 	int charselect;
+
+	// Should the pincode blacklist be checked against
 	bool check_blacklist;
+	// Prohibited pincodes
 	VECTOR_DECL(char *) blacklist;
+
 	unsigned int multiplier;
 	unsigned int baseSeed;
 	/* handler */
-	void (*handle) (int fd, struct char_session_data* sd);
+	void (*handle) (struct socket_data *session, struct char_session_data* sd);
+	void (*disconnect) (struct socket_data *session);
 	void (*decrypt) (unsigned int userSeed, char* pin);
 	void (*error) (int account_id);
-	void (*update) (int account_id, char* pin);
-	void (*makestate) (int fd, struct char_session_data *sd, enum pincode_make_response state);
-	void (*editstate) (int fd, struct char_session_data *sd, enum pincode_edit_response state);
-	void (*loginstate) (int fd, struct char_session_data *sd, enum pincode_login_response state);
-	void (*loginstate2) (int fd, struct char_session_data *sd, enum pincode_login_response state, enum pincode_login_response2 flag);
-	void (*setnew) (int fd, struct char_session_data* sd);
-	void (*change) (int fd, struct char_session_data* sd);
+	void (*update) (int account_id, const char* pin);
+	void (*makestate)  (struct socket_data *session, struct char_session_data *sd, enum pincode_make_response state);
+	void (*editstate)  (struct socket_data *session, struct char_session_data *sd, enum pincode_edit_response state);
+	void (*loginstate) (struct socket_data *session, struct char_session_data *sd, enum pincode_login_response state);
+	void (*loginstate2)(struct socket_data *session, struct char_session_data *sd, enum pincode_login_response state, enum pincode_login_response2 flag);
+	void (*setnew) (struct s_receive_action_data *act, struct char_session_data* sd);
+	void (*change) (struct s_receive_action_data *act, struct char_session_data* sd);
 	bool (*isBlacklisted) (const char *pin);
-	int  (*compare) (int fd, struct char_session_data* sd, char* pin);
-	void (*check) (int fd, struct char_session_data* sd);
+	enum pincode_compare_result  (*compare) (struct socket_data *session, struct char_session_data* sd, const char* pin);
+	void (*check)   (struct s_receive_action_data *act, struct char_session_data* sd);
 	bool (*config_read) (const char *filename, const struct config_t *config, bool imported);
 	void (*init) (void);
 	void (*final) (void);
