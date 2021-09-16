@@ -1292,12 +1292,17 @@ static enum parsefunc_rcode login_parse_fromchar(struct s_receive_action_data *a
 			socket_io->session_disconnect_guard(act->session);
 			goto unlock_list_return;
 		}
-		size_t packet_len = (packet_data->len == -1)?RFIFOW(act, 2):packet_data->len;
+
+		size_t packet_len;
+		if(packet_data->len == -1)
+			packet_len = (RFIFOREST(act) >= 4)?RFIFOW(act, 2):4;
+		else
+			packet_len = packet_data->len;
+
 		if(RFIFOREST(act) < packet_len)
 			goto unlock_list_return_incomplete;
 		packet_data->pFunc(act, server, ip);
 		RFIFOSKIP(act, packet_len);
-
 	} // while
 	// Fall-through
 unlock_list_return:

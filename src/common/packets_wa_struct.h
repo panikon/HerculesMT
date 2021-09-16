@@ -29,7 +29,7 @@
  * World-Account packets (char - login server) IDs
  **/
 enum inter_packet_wa_id {
-	//HEADER_CA_CHARSERVERCONNECT          = 0x2710, // @see login/packets_ca_struct.h
+	HEADER_CA_CHARSERVERCONNECT            = 0x2710,
 	HEADER_WA_AUTH                         = 0x2712, // login->fromchar_parse_auth
 	HEADER_WA_SEND_USERS_COUNT             = 0x2714, // login->fromchar_parse_update_users
 	HEADER_WA_REQUEST_CHANGE_DEFAULT_EMAIL = 0x2715, // login->fromchar_parse_request_change_email
@@ -55,6 +55,27 @@ enum inter_packet_wa_id {
 #if !defined(sun) && (!defined(__NETBSD__) || __NetBSD_Version__ >= 600000000) // NetBSD 5 and Solaris don't like pragma pack but accept the packed attribute
 #pragma pack(push, 1)
 #endif // not NetBSD < 6 / Solaris
+
+/**
+ * Packet structure for CA_CHARSERVERCONNECT.
+ *
+ * This packet is used internally, to signal a char-server connection.
+ * @remarks
+ * This packet is identified with CA because it's included in the same packet db
+ * as client-server packets.
+ */
+struct PACKET_CA_CHARSERVERCONNECT {
+	int16 packet_id;   ///< Packet ID (#HEADER_CA_CHARSERVERCONNECT)
+	char userid[24];   ///< Username
+	char password[24]; ///< Password
+	int32 unknown;
+	int32 ip;          ///< Charserver IP
+	int16 port;        ///< Charserver port
+	char name[20];     ///< Charserver name
+	int16 unknown2;
+	int16 type;        ///< Charserver type
+	int16 new;         ///< Whether charserver is to be marked as new
+} __attribute__((packed));
 
 /**
  * Char-server account authentication request
