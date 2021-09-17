@@ -118,10 +118,12 @@ struct PACKET_WA_REQUEST_CHANGE_DEFAULT_EMAIL {
 
 /**
  * @copydoc login_fromchar_parse_account_data
+ * @param request_id Identifier in char-server
  **/
 struct PACKET_WA_REQUEST_ACCOUNT {
 	int16 packet_id;
 	int32 account_id;
+	int32 request_id;
 } __attribute__((packed));
 
 /**

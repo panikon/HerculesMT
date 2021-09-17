@@ -96,6 +96,8 @@ struct PACKET_AW_AUTH_ACK  {
  * This is data is loaded from the accountDB
  *
  * @param account_id      Account id
+ * @param request_id      Id of this request in char-server
+ * @param found           True when this account was found by login-server
  * @param email           E-mail
  * @param expiration_time Account expiration time @see mmo_account::expiration_time
  * @param group_id        Group id @see mmo_account::group_id
@@ -109,9 +111,11 @@ struct PACKET_AW_AUTH_ACK  {
 struct PACKET_AW_REQUEST_ACCOUNT_ACK {
 	int16 packet_id;
 	int32 account_id;
+	int32 request_id;
+	uint8 found;
 	uint8 email[40];
 	int32 expiration_time;
-	uint8 group_id; //< FIXME: group_id should be an int32
+	int32 group_id;
 	uint8 char_slots;
 	uint8 birthdate[10+1];
 	uint8 pincode[5];

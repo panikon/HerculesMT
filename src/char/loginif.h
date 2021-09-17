@@ -83,6 +83,19 @@ struct loginif_interface {
 	void (*auth) (int session_id, struct char_session_data* sd, uint32 ipl);
 	void (*send_users_count) (int users);
 	void (*connect_to_server) (void);
+
+	void (*parse_connection_state) (struct s_receive_action_data *act);
+	void (*parse_auth_state)       (struct s_receive_action_data *act);
+	void (*parse_account_data)     (struct s_receive_action_data *act);
+	void (*parse_login_pong)       (struct s_receive_action_data *act);
+	void (*parse_changesex_reply)  (struct s_receive_action_data *act);
+	void (*parse_account_reg2)     (struct s_receive_action_data *act);
+	void (*parse_update_state)     (struct s_receive_action_data *act);
+	void (*parse_kick)             (struct s_receive_action_data *act);
+	void (*parse_update_ip)        (struct s_receive_action_data *act);
+	void (*parse_accinfo2_failed)  (struct s_receive_action_data *act);
+	void (*parse_accinfo2_ok)      (struct s_receive_action_data *act);
+	enum parsefunc_rcode (*parse)  (struct s_receive_action_data *act);
 };
 
 #ifdef HERCULES_CORE

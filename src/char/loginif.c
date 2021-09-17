@@ -24,6 +24,10 @@
 
 #include "char/char.h"
 #include "char/mapif.h"
+#include "char/inter.h"
+#include "char/pincode.h"
+
+#include "common/HPM.h"
 #include "common/cbasetypes.h"
 #include "common/core.h"
 #include "common/db.h"
@@ -33,6 +37,7 @@
 #include "common/timer.h"
 
 #include "common/rwlock.h"
+#include "common/mutex.h"
 #include "common/packets_wa_struct.h"
 #include "common/packets_aw_struct.h"
 
@@ -98,8 +103,8 @@ static void do_init_loginif(void)
 		int16 packet_len;
 		LoginifParseFunc *pFunc;
 	} inter_packet[] = {
-#define packet_def(name, fname) { HEADER_ ## name, sizeof(struct PACKET_ ## name), chr->parse_fromlogin_ ## fname }
-#define packet_def2(name, fname, len) { HEADER_ ## name, (len), chr->parse_fromlogin_ ## fname }
+#define packet_def(name, fname) { HEADER_ ## name, sizeof(struct PACKET_ ## name), loginif->parse_ ## fname }
+#define packet_def2(name, fname, len) { HEADER_ ## name, (len), loginif->parse_ ## fname }
 		packet_def(AW_CHARSERVERCONNECT_ACK, connection_state),
 		packet_def(AW_AUTH_ACK,              auth_state),
 		packet_def(AW_REQUEST_ACCOUNT_ACK,   account_data),
@@ -110,7 +115,7 @@ static void do_init_loginif(void)
 		packet_def(AW_IP_UPDATE,             update_ip),
 		packet_def(AW_ACCOUNT_INFO_SUCCESS,  accinfo2_ok),
 		packet_def(AW_ACCOUNT_INFO_FAILURE,  accinfo2_failed),
-		packet_def(AW_ACCOUNT_REG2,          account_reg2),
+		packet_def2(AW_ACCOUNT_REG2,          account_reg2, -1),
 #undef packet_def
 #undef packet_def2
 	};
@@ -562,6 +567,456 @@ static void loginif_connect_to_server(void)
 	WFIFOSET(chr->login_session, sizeof(struct PACKET_CA_CHARSERVERCONNECT));
 }
 
+/*======================================
+ * Parsing functions
+ *--------------------------------------*/
+
+/**
+ * AW_CHARSERVERCONNECT_ACK
+ * Result of connection request
+ * @see enum ac_charserverconnect_ack_status
+ **/
+static void loginif_parse_connection_state(struct s_receive_action_data *act)
+{
+	switch(RFIFOB(act,2)) {
+		case CCA_ACCEPTED:
+			ShowStatus("Connected to login-server (connection #%d).\n",
+				act->session->id);
+			loginif->on_ready();
+			return;
+		case CCA_INVALID_CREDENTIAL: // Invalid username/password
+			ShowError(
+				"Can not connect to login-server.\n"
+				"The server communication passwords (default s1/p1) "
+				"are probably invalid.\n"
+				"Also, please make sure your login db has the correct "
+				"communication username/passwords and the gender of the account is S.\n"
+				"The communication passwords are set in "
+				"/conf/map/map-server.conf and /conf/char/char-server.conf\n"
+				);
+			break;
+		case CCA_IP_NOT_ALLOWED: // IP not allowed
+			ShowError(
+				"Can not connect to login-server.\n"
+				"Please make sure your IP is allowed in conf/network.conf\n"
+				);
+			break;
+		case CCA_INVALID_ACC_ID: // Account id out of range
+			ShowError(
+				"Can not connect to login-server.\n"
+				"Character-server has an account id out of valid range.\n"
+				);
+			break;
+		case CCA_INVALID_SEX: // Invalid sex for server credential
+			ShowError(
+				"Can not connect to login-server.\n"
+				"Character-server has an account with an invalid sex type.\n"
+				);
+			break;
+		case CCA_INVALID_NOT_READY: // Login-server is not ready
+			ShowError(
+				"Can not connect to login-server.\n"
+				"Login-server is not yet ready for a new connection.\n"
+				);
+			break;
+		case CCA_ALREADY_CONNECTED: // Someone already used these credentials
+			ShowError(
+				"Can not connect to login-server.\n"
+				"Our credentials were already used in this server!\n"
+				);
+			break;
+		default:
+			ShowError("Invalid response from the login-server. Error code: %d\n",
+				(int)RFIFOB(act, 2));
+			break;
+	}
+	socket_io->session_disconnect_guard(act->session);
+}
+
+/**
+ * Player authentication steps:
+ *
+ * New player connection (CH_ENTER (0x065) chr->parse_char_connect)
+ * Request login-server for auth data (WA_AUTH)
+ *
+ * Receive authentication data (AW_AUTH_ACK loginif->parse_auth_state)
+ * chr->auth_ok
+ *   Notify that this account is in char-server (WA_ACCOUNT_ONLINE)
+ *   Request login-server for account information (WA_REQUEST_ACCOUNT)
+ * Receive account information (AW_REQUEST_ACCOUNT_ACK)
+ * Send confirmation to player.
+ **/
+
+/**
+ * AW_AUTH_ACK
+ * Result of an account authentication request
+ **/
+static void loginif_parse_auth_state(struct s_receive_action_data *act)
+{
+	enum notify_ban_errorcode flag = NBE_SUCCESS;
+	struct char_session_data* sd = NULL;
+
+	int account_id               = RFIFOL(act,2);
+	uint32 login_id1             = RFIFOL(act,6);
+	uint32 login_id2             = RFIFOL(act,10);
+	uint8 sex                    = RFIFOB(act,14);
+	uint8 result                 = RFIFOB(act,15);
+	int request_id               = RFIFOL(act,16);
+	uint32 version               = RFIFOL(act,20);
+	uint8 clienttype             = RFIFOB(act,24);
+	int group_id                 = RFIFOL(act,25);
+	unsigned int expiration_time = RFIFOL(act,29);
+
+	struct socket_data *client_session = socket_io->session_from_id(request_id);
+	if(!client_session)
+		return;
+	mutex->lock(client_session->mutex);
+	bool marked_removal = socket_io->session_marked_removal(client_session);
+	mutex->unlock(client_session->mutex);
+
+	if(marked_removal)
+		return; // Ignore this authentication
+
+	sd = client_session->session_data;
+	if(!sd) {
+		// Invalid session. Force disconnection.
+		flag = NBE_TIME_GAP;
+		goto failed_auth;
+	}
+	if(sd->auth) {
+		/**
+		 * How was this session already authenticated? Has another worker 
+		 * asked for the authentication or is the login-server resending
+		 * us this packet? Disconnect the player.
+		 **/
+		ShowDebug("loginif_parse_auth_state: Tried to reauthenticate an already "
+				  "authenticated account (aid %d), forcing disconnection.\n",
+				  sd->account_id);
+		/**
+		 * The parsing entry-point will remove the session from the db when
+		 * the disconnection request is dequeued
+		 **/
+		flag = NBE_TIME_GAP;
+		goto failed_auth;
+	}
+	if(sd->account_id != account_id
+	|| sd->login_id1 != login_id1
+	|| sd->login_id2 != login_id2
+	|| sd->sex != sex
+	) {
+		// Data mismatch. Is this 'session' memory being reused by the server?
+		flag = NBE_IP_MISMATCH;
+		goto failed_auth;
+	}
+
+	int client_fd = request_id;
+	sd->version = version;
+	sd->clienttype = clienttype;
+	switch(result) {
+		case 0:// ok
+			/* restrictions apply */
+			if(chr->server_type == CST_MAINTENANCE
+			&& group_id < chr->maintenance_min_group_id_get()
+			) {
+				flag = NBE_SERVER_CLOSED;
+				goto failed_auth;
+			}
+			/* the client will already deny this request, this check is to avoid someone bypassing. */
+			if(chr->server_type == CST_PAYING
+			&& (time_t)expiration_time < time(NULL)
+			) {
+				flag = NBE_DISCONNECTED;
+				goto failed_auth;
+			}
+			chr->auth_ok(client_fd, sd);
+			break;
+		case 1:// auth failed
+			chr->auth_error(client_fd, 0);
+			break;
+	}
+	return;
+
+failed_auth:
+	chr->authfail_fd(client_session, flag);
+	socket_io->session_disconnect_guard(client_session);
+}
+
+/**
+ * AW_REQUEST_ACCOUNT_ACK
+ * Parses requested account data, and sends connection acceptance to player.
+ * @see char_auth_ok
+ **/
+static void loginif_parse_account_data(struct s_receive_action_data *act)
+{
+	struct char_session_data *sd;
+	struct socket_data *client_session;
+	enum notify_ban_errorcode flag = NBE_SUCCESS;
+
+	int32 account_id = RFIFO(act, 2);
+	int32 request_id = RFIFO(act, 6);
+	uint8 result     = RFIFO(act,10);
+
+	client_session = socket_io->session_from_id(request_id);
+	if(!client_session)
+		return;
+
+	mutex->lock(client_session->mutex);
+	bool marked_removal = socket_io->session_marked_removal(client_session);
+	mutex->unlock(client_session->mutex);
+
+	if(marked_removal)
+		return; // Ignore this authentication
+
+	sd = client_session->session_data;
+	if(!sd || !sd->auth) {
+		// Invalid session. Force disconnection.
+		flag = NBE_TIME_GAP;
+		goto failed_auth;
+	}
+	if(!result) {
+		// Login-server failed to find account data, disconnect
+		flag = NBE_DISCONNECTED;
+		goto failed_auth;
+	}
+	int max_connect_user = chr->max_connect_user_get();
+	int gm_allow_group = chr->gm_allow_group_get();
+	if((max_connect_user == 0 && sd->group_id != gm_allow_group)
+	|| (max_connect_user > 0 && chr->count_users() >= max_connect_user && sd->group_id != gm_allow_group)
+	) {
+		// Refuse connection (over populated)
+		flag = NBE_JAMMED_SHORTLY;
+		goto failed_auth;
+	}
+
+	safestrncpy(sd->email, RFIFOP(act, 11), sizeof(sd->email));
+	sd->expiration_time = RFIFOL(act, 51);
+	sd->group_id        = RFIFOL(act, 55);
+	sd->char_slots      = RFIFOB(act, 59);
+	safestrncpy(sd->pincode,   RFIFOP(act, 60), sizeof(sd->pincode));
+	safestrncpy(sd->birthdate, RFIFOP(act, 65), sizeof(sd->birthdate));
+	sd->pincode_change  = RFIFOL(act, 76);
+
+	if(sd->char_slots > MAX_CHARS) {
+		ShowError("Account '%d' `character_slots` column is higher than "
+				  "supported MAX_CHARS (%d), update MAX_CHARS in mmo.h! "
+				  "Capping to MAX_CHARS...\n",
+				  sd->account_id, sd->char_slots);
+		sd->char_slots = MAX_CHARS;/* cap to maximum */
+	} else if( sd->char_slots <= 0 )/* no value aka 0 in sql */
+		sd->char_slots = MAX_CHARS;/* cap to maximum */
+
+	/**
+	 * Continued from chr->auth_ok...
+	 * send characters to player
+	 **/
+	chr->mmo_char_send_slots_info(client_session, sd);
+	chr->mmo_char_send_characters(client_session, sd);
+#if PACKETVER >= 20060819
+	chr->mmo_char_send_ban_list(client_session, sd);
+#endif
+#if PACKETVER >= 20110309
+	pincode->handle(client_session, sd);
+#endif
+	return;
+
+failed_auth:
+	chr->authfail_fd(client_session, flag);
+	socket_io->session_disconnect_guard(client_session);
+}
+
+/**
+ * AW_PONG
+ * Parses pong from login-server
+ **/
+static void loginif_parse_login_pong(struct s_receive_action_data *act)
+{
+	mutex->lock(act->session->mutex);
+	act->session->flag.ping = 0;
+	mutex->unlock(act->session->mutex);
+}
+
+/**
+ * AW_SEX_BROADCAST
+ * Parses login-server notification of a sex change
+ **/
+static void loginif_parse_changesex_reply(struct s_receive_action_data *act)
+{
+	int account_id = RFIFOL(act,2);
+	int sex        = RFIFOB(act,6);
+
+	// This should _never_ happen
+	if(account_id <= 0) {
+		ShowError("Received invalid account id from login server! (aid: %d)\n",
+			account_id);
+		return;
+	}
+	chr->changecharsex_all(account_id, sex);
+}
+
+/**
+ * AW_ACCOUNT_REG2
+ * Relays received account2 registry to map-servers
+ **/
+static void loginif_parse_account_reg2(struct s_receive_action_data *act)
+{
+	//Receive account_reg2 registry, forward to map servers.
+	mapif->sendall(RFIFOP(act, 0), RFIFOW(act,2));
+}
+
+/**
+ * AW_UPDATE_STATE
+ * Parses login-server request to update an account state
+ * @see mapif_update_state
+ * @readlock chr->map_server_list_lock
+ **/
+static void loginif_parse_update_state(struct s_receive_action_data *act)
+{
+	int account_id = RFIFOL(act, 2);
+	unsigned char flag = RFIFOB(act,6);
+	unsigned int state = RFIFOL(act,7);
+
+	if(flag == 2) {
+		ShowWarning("loginif_parse_update_state: Invalid flag, 2 is reserved "
+			"for character update, login-server can only ask for account updates!\n");
+		return;
+	}
+	mapif->update_state(account_id, flag, state);
+	// disconnect player if online on char-server
+	chr->disconnect_player(account_id);
+}
+
+/**
+ * AW_KICK
+ * Kick request from login-server
+ **/
+static void loginif_parse_kick(struct s_receive_action_data *act)
+{
+	chr->kick(RFIFOL(act,2));
+}
+
+/**
+ * AW_IP_UPDATE
+ * Parse login-server ip synchronization request
+ **/
+static void loginif_parse_update_ip(struct s_receive_action_data *act)
+{
+	unsigned char buf[2];
+	WBUFW(buf,0) = 0x2b1e;
+	mapif->sendall(buf, 2);
+
+	chr->config_update_ip();
+}
+
+/**
+ * 0x2744 AW_ACCOUNT_INFO_FAILURE
+ * Login-server couldn't find accinfo
+ **/
+static void loginif_parse_accinfo2_failed(struct s_receive_action_data *act)
+{
+	int32 map_id     = RFIFOL(act, 2);
+	int32 u_fd       = RFIFOL(act, 6);
+	int32 u_aid      = RFIFOL(act,10);
+	int32 account_id = RFIFOL(act,14);
+	inter->accinfo_ack(false, map_id, u_fd, u_aid, account_id,
+		NULL, NULL, NULL, NULL, NULL, -1, 0, 0);
+}
+
+/**
+ * 0x2743 AW_ACCOUNT_INFO_SUCCESS
+ * Receive account information
+ **/
+static void loginif_parse_accinfo2_ok(struct s_receive_action_data *act)
+{
+	int32 map_id        = RFIFOL(act, 2);
+	int32 u_fd          = RFIFOL(act, 6);
+	int32 u_aid         = RFIFOL(act,10);
+	int32 account_id    = RFIFOL(act,14);
+	// userid.24B / email.40B / lastip.16B
+	int32 group_id      = RFIFOL(act,98);
+	// last_login.24B
+	uint32 login_count  = RFIFOL(act,126);
+	uint32 state        = RFIFOL(act,130);
+	// birthdate.11B
+	inter->accinfo_ack(false, map_id, u_fd, u_aid, account_id,
+		RFIFOP(act,  18)/*userid*/,    RFIFOP(act, 42)/*email*/,
+		RFIFOP(act,  82)/*last_ip*/,   RFIFOP(act, 102)/*last_login*/,
+		RFIFOP(act, 134)/*birthdate*/, group_id,
+		login_count, state);
+}
+
+/**
+ * Entry-point of login-server packets
+ **/
+static enum parsefunc_rcode loginif_parse(struct s_receive_action_data *act)
+{
+	// only process data from the login-server
+	if(!chr->login_session || act->session_id != chr->login_session->id) {
+		mutex->lock(act->session->mutex);
+		if(!socket_io->session_marked_removal(act->session))
+			ShowDebug("loginif_parse: Disconnecting invalid session #%d (is not the login-server)\n",
+				act->session->id);
+		socket_io->session_disconnect(act->session);
+		mutex->unlock(act->session->mutex);
+		return PACKET_VALID;
+	}
+
+	mutex->lock(act->session->mutex);
+	if(socket_io->session_marked_removal(act->session))	{
+		mutex->unlock(act->session->mutex);
+		chr->login_session = NULL;
+		loginif->on_disconnect();
+		return PACKET_VALID;
+	}
+	// @see session_timeout
+	if(act->session->flag.ping) { /* we've reached stall time */
+		if(DIFF_TICK(socket_io->last_tick, act->session->rdata_tick) > (socket_io->stall_time * 2)) {/* we can't wait any longer */
+			socket_io->session_disconnect(act->session);
+			mutex->unlock(act->session->mutex);
+			return PACKET_VALID;
+		}
+		if(act->session->flag.ping != 2 ) { /* we haven't sent ping out yet */
+			loginif->ping();
+			act->session->flag.ping = 2;
+		}
+	}
+	mutex->unlock(act->session->mutex);
+
+	while(RFIFOREST(act) >= 2) {
+		uint16 command = RFIFOW(act, 0);
+
+		if (VECTOR_LENGTH(HPM->packets[hpParse_FromLogin]) > 0) {
+			int result = HPM->parse_packets(act,command,hpParse_FromLogin);
+			if (result == 1)
+				continue;
+			if (result == 2)
+				return PACKET_INCOMPLETE;
+		}
+
+		struct loginif_packet_entry *packet_data;
+		packet_data = DB->data2ptr(loginif->packet_db->get_safe(loginif->packet_db, DB->i2key(command)));
+		if(!packet_data) {
+			ShowError("loginif_parse: Unknown packet 0x%04x from a "
+				"char-server! Disconnecting!\n", command);
+			socket_io->session_disconnect_guard(act->session);
+			return PACKET_UNKNOWN;
+		}
+
+		size_t packet_len;
+		if(packet_data->len == -1)
+			packet_len = (RFIFOREST(act) >= 4)?RFIFOW(act, 2):4;
+		else
+			packet_len = packet_data->len;
+
+		if(RFIFOREST(act) < packet_len)
+			return PACKET_INCOMPLETE;
+
+		packet_data->pFunc(act);
+		RFIFOSKIP(act, packet_len);
+	}
+	return PACKET_VALID;
+}
+
+
 void loginif_defaults(void) {
 	loginif = &loginif_s;
 
@@ -597,4 +1052,17 @@ void loginif_defaults(void) {
 	loginif->auth = loginif_auth;
 	loginif->send_users_count = loginif_send_users_count;
 	loginif->connect_to_server = loginif_connect_to_server;
+
+	loginif->parse_connection_state = loginif_parse_connection_state;
+	loginif->parse_auth_state       = loginif_parse_auth_state;
+	loginif->parse_account_data     = loginif_parse_account_data;
+	loginif->parse_login_pong       = loginif_parse_login_pong;
+	loginif->parse_changesex_reply  = loginif_parse_changesex_reply;
+	loginif->parse_account_reg2     = loginif_parse_account_reg2;
+	loginif->parse_update_state     = loginif_parse_update_state;
+	loginif->parse_kick             = loginif_parse_kick;
+	loginif->parse_update_ip        = loginif_parse_update_ip;
+	loginif->parse_accinfo2_failed  = loginif_parse_accinfo2_failed;
+	loginif->parse_accinfo2_ok      = loginif_parse_accinfo2_ok;
+	loginif->parse                  = loginif_parse;
 }

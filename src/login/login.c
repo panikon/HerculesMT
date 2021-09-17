@@ -647,48 +647,31 @@ static void login_fromchar_parse_request_change_email(struct s_receive_action_da
  * @param acc Account data (when NULL no data was found)
  **/
 static void login_fromchar_account(struct socket_data *session,
-	int account_id, struct mmo_account *acc
+	int account_id, struct mmo_account *acc, int request_id
 ) {
-	WFIFOHEAD(session, 72, true);
+	WFIFOHEAD(session, sizeof(struct PACKET_AW_REQUEST_ACCOUNT_ACK), true);
 	WFIFOW(session, 0) = HEADER_AW_REQUEST_ACCOUNT_ACK;
 	WFIFOL(session, 2) = account_id;
-	if (acc)
-	{
-		time_t expiration_time = 0;
-		char email[40] = "";
-		int group_id = 0;
-		uint8 char_slots = 0;
-		char birthdate[10+1] = "";
-		char pincode[4+1] = "\0\0\0\0";
-
-		safestrncpy(email, acc->email, sizeof(email));
-		expiration_time = acc->expiration_time;
-		group_id = acc->group_id;
-		char_slots = acc->char_slots;
-		safestrncpy(pincode, acc->pincode, sizeof(pincode));
-		safestrncpy(birthdate, acc->birthdate, sizeof(birthdate));
-		if (pincode[0] == '\0')
-			memset(pincode,'\0',sizeof(pincode));
-
-		safestrncpy(WFIFOP(session,6), email, 40);
-		WFIFOL(session,46) = (uint32)expiration_time;
-		WFIFOB(session,50) = (unsigned char)group_id;
-		WFIFOB(session,51) = char_slots;
-		safestrncpy(WFIFOP(session,52), birthdate, 10+1);
-		safestrncpy(WFIFOP(session,63), pincode, 4+1 );
-		WFIFOL(session,68) = acc->pincode_change;
+	WFIFOL(session, 6) = request_id;
+	if(!acc) {
+		WFIFOB(session, 10) = false;
+		memset(WFIFOP(session, 11),
+			0,
+			sizeof(struct PACKET_AW_REQUEST_ACCOUNT_ACK)-11);
+	} else {
+		WFIFOB(session, 10) = true;
+		safestrncpy(WFIFOP(session, 11), acc->email, sizeof(acc->email));
+		WFIFOL(session, 51) = (uint32)acc->expiration_time;
+		WFIFOL(session, 55) = acc->group_id;
+		WFIFOB(session, 59) = acc->char_slots;
+		if(acc->pincode[0] == '\0')
+			memset(WFIFOP(session, 60),'\0',sizeof(acc->pincode));
+		else
+			safestrncpy(WFIFOP(session, 60), acc->pincode, sizeof(acc->pincode));
+		safestrncpy(WFIFOP(session, 65), acc->birthdate, sizeof(acc->birthdate));
+		WFIFOL(session, 76) = acc->pincode_change;
 	}
-	else
-	{
-		safestrncpy(WFIFOP(session,6), "", 40);
-		WFIFOL(session,46) = 0;
-		WFIFOB(session,50) = 0;
-		WFIFOB(session,51) = 0;
-		safestrncpy(WFIFOP(session,52), "", 10+1);
-		safestrncpy(WFIFOP(session,63), "\0\0\0\0", 4+1 );
-		WFIFOL(session,68) = 0;
-	}
-	WFIFOSET(session,72);
+	WFIFOSET(session, sizeof(struct PACKET_AW_REQUEST_ACCOUNT_ACK));
 }
 
 /**
@@ -701,16 +684,17 @@ static void login_fromchar_parse_account_data(struct s_receive_action_data *act,
 	struct mmo_account acc;
 
 	int account_id = RFIFOL(act,2);
+	int request_id = RFIFOL(act,6);
 
 	if( !login->account_load(account_id, &acc) )
 	{
 		ShowNotice("Char-server '%s': account %d NOT found (ip: %s).\n",
 			server->name, account_id, ip);
-		login->fromchar_account(act->session, account_id, NULL);
+		login->fromchar_account(act->session, account_id, NULL, request_id);
 		return;
 	}
 
-	login->fromchar_account(act->session, account_id, &acc);
+	login->fromchar_account(act->session, account_id, &acc, request_id);
 }
 
 /**
