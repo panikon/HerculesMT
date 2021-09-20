@@ -158,11 +158,21 @@ static int mapindex_name2id(const char *name)
 
 	mapindex->getmapname(name, map_name);
 
-	if( (i = strdb_iget(mapindex->db, map_name, 0)) )
+	if( (i = strdb_iget_safe(mapindex->db, map_name, 0)) )
 		return i;
 
 	ShowDebug("mapindex_name2id: Map \"%s\" not found in index list!\n", map_name);
 	return 0;
+}
+
+/**
+ * Returns default map id.
+ * @see MAP_DEFAULT
+ **/
+static int mapindex_default_id(void)
+{
+	return strdb_iget_safe(mapindex->db,
+			mapindex->default_map, mapindex->default_map_len);
 }
 
 /**
@@ -300,8 +310,9 @@ static int mapindex_init(void)
 
 static bool mapindex_check_default(void)
 {
-	if (!strdb_iget(mapindex->db, mapindex->default_map, 0)) {
-		ShowError("mapindex_init: MAP_DEFAULT '%s' not found in cache! update mapindex.h MAP_DEFAULT var!!!\n", mapindex->default_map);
+	if(!strdb_iget_safe(mapindex->db, mapindex->default_map, mapindex->default_map_len)) {
+		ShowError("mapindex_init: MAP_DEFAULT '%s' not found in cache! "
+			"Update mapindex.h MAP_DEFAULT var!!!\n", mapindex->default_map);
 		return false;
 	}
 	return true;
@@ -330,6 +341,7 @@ void mapindex_defaults(void)
 	/* */
 	mapindex->db = NULL;
 	mapindex->default_map = MAP_DEFAULT;
+	mapindex->default_map_len = strlen(mapindex->default_map_len);
 	mapindex->default_x = MAP_DEFAULT_X;
 	mapindex->default_y = MAP_DEFAULT_Y;
 	VECTOR_INIT(mapindex->list);
@@ -345,6 +357,7 @@ void mapindex_defaults(void)
 	mapindex->removemap = mapindex_removemap;
 	mapindex->getmapname = mapindex_getmapname;
 	mapindex->getmapname_ext = mapindex_getmapname_ext;
+	mapindex->default_id = mapindex_default_id;
 	mapindex->name2id = mapindex_name2id;
 	mapindex->id2name = mapindex_id2name_sub;
 	mapindex->check_default = mapindex_check_default;

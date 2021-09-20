@@ -91,6 +91,10 @@ struct pincode_interface {
 	int enabled;
 	int changetime;
 	int maxtry;
+	/**
+	 * Should the pincode be queried in every selection or only on login?
+	 * This is a boolean and is defined in pincode:request at char-server.conf
+	 **/
 	int charselect;
 
 	// Should the pincode blacklist be checked against
@@ -110,8 +114,9 @@ struct pincode_interface {
 	void (*editstate)  (struct socket_data *session, struct char_session_data *sd, enum pincode_edit_response state);
 	void (*loginstate) (struct socket_data *session, struct char_session_data *sd, enum pincode_login_response state);
 	void (*loginstate2)(struct socket_data *session, struct char_session_data *sd, enum pincode_login_response state, enum pincode_login_response2 flag);
-	void (*setnew) (struct s_receive_action_data *act, struct char_session_data* sd);
-	void (*change) (struct s_receive_action_data *act, struct char_session_data* sd);
+	void (*setnew) (struct s_receive_action_data *act, struct char_session_data *sd, int ipl);
+	void (*change) (struct s_receive_action_data *act, struct char_session_data *sd, int ipl);
+	void (*window) (struct s_receive_action_data *act, struct char_session_data *sd, int ipl);
 	bool (*isBlacklisted) (const char *pin);
 	enum pincode_compare_result  (*compare) (struct socket_data *session, struct char_session_data* sd, const char* pin);
 	void (*check)   (struct s_receive_action_data *act, struct char_session_data* sd);

@@ -87,6 +87,7 @@ struct mapindex_interface {
 
 	/* default map name */
 	char *default_map;
+	size_t default_map_len;
 	/* default x on map */
 	int default_x;
 	/* default y on map */
@@ -108,6 +109,7 @@ struct mapindex_interface {
 	/* TODO: server shouldn't be handling the extension, game client automatically adds .gat/.rsw/.whatever
 	 * and there are official map names taking advantage of it that we cant support due to the .gat room being saved */
 	const char* (*getmapname_ext) (const char* string, char* output);
+	unsigned int (*default_id) (void);
 	unsigned int (*name2id) (const char*);
 	const char * (*id2name) (uint16 id, const char *file, int line, const char *func);
 	bool (*check_default) (void);

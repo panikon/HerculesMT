@@ -678,6 +678,11 @@ struct DBMap {
 	 * @return Success
 	 **/
 	bool (*set_hash)(struct DBMap *self, DBHasher new_hash);
+
+	/**
+	 * Sets a new releasal function for provided table
+	 **/
+	void (*set_release)(struct DBMap *self, DBReleaser new_release);
 };
 
 // For easy access to the common functions.
@@ -702,6 +707,7 @@ struct DBMap {
 #define idb_iget(db,k)    ( DB->data2i((db)->get((db),DB->i2key(k))) )
 #define uidb_iget(db,k)   ( DB->data2i((db)->get((db),DB->ui2key(k))) )
 #define strdb_iget(db,k,l)( DB->data2i((db)->get((db),DB->str2key((k),(l)))) )
+#define strdb_iget_safe(db,k,l)( DB->data2i((db)->get_safe((db),DB->str2key((k),(l)))) )
 #define i64db_iget(db,k)  ( DB->data2i((db)->get((db),DB->i642key(k))) )
 #define ui64db_iget(db,k) ( DB->data2i((db)->get((db),DB->ui642key(k))) )
 

@@ -95,17 +95,15 @@ static void pincode_disconnect(struct socket_data *session)
 /**
  * Checks if provided pincode is valid
  * [server] pincode->loginstate(PINCODE_LOGIN_ASK)
- * [client] 0x8b8
+ * [client] 0x8b8 CH_SECOND_PASSWD_ACK
  * [server] pincode->loginstate
  **/
-static void pincode_check(struct s_receive_action_data *act, struct char_session_data *sd)
+static void pincode_check(struct s_receive_action_data *act, struct char_session_data *sd, int ipl)
 {
 	char pin[5] = "\0\0\0\0";
 
-	nullpo_retv(sd);
-
 	// Disconnect player, the client shouldn't have sent this packet
-	if(strlen(sd->pincode) != 4) {
+	if(RFIFOL(act,2) != sd->account_id || strlen(sd->pincode) != 4) {
 		pincode->disconnect(act->session);
 		return;
 	}
@@ -188,17 +186,17 @@ static enum pincode_compare_result pincode_compare(struct socket_data *session,
 /**
  * Performs pincode update after a client request
  * [server] pincode->loginstate(PINCODE_LOGIN_ASK)
- * [client] 0x8be
+ * [client] 0x8be CH_EDIT_SECOND_PASSWD
  * [server] pincode->loginstate
  **/
-static void pincode_change(struct s_receive_action_data *act, struct char_session_data *sd)
+static void pincode_change(struct s_receive_action_data *act, struct char_session_data *sd, int ipl)
 {
 	char oldpin[5] = "\0\0\0\0", newpin[5] = "\0\0\0\0";
 
 	nullpo_retv(sd);
 
 	// Disconnect player, the client shouldn't have sent this packet
-	if(strlen(sd->pincode) != 4) {
+	if(RFIFOL(act,2) != sd->account_id || strlen(sd->pincode) != 4) {
 		pincode->disconnect(act->session);
 		return;
 	}
@@ -235,17 +233,17 @@ static void pincode_change(struct s_receive_action_data *act, struct char_sessio
 /**
  * Activates PIN system and sets a pincode (triggered by 0x8ba).
  * [server] pincode->loginstate(PINCODE_LOGIN_NOTSET)
- * [client] 0x8ba
+ * [client] 0x8ba CH_MAKE_SECOND_PASSWD
  * [server] pincode->makestate (if success sends loginstate as well)
  **/
-static void pincode_setnew(struct s_receive_action_data *act, struct char_session_data *sd)
+static void pincode_setnew(struct s_receive_action_data *act, struct char_session_data *sd, int ipl)
 {
 	char newpin[5] = "\0\0\0\0";
 
 	nullpo_retv(sd);
 
 	// Disconnect player, the client shouldn't have sent this packet
-	if(strlen(sd->pincode) == 4) {
+	if(RFIFOL(act,2) != sd->account_id || strlen(sd->pincode) == 4) {
 		pincode->disconnect(act->session);
 		return;
 	}
@@ -302,6 +300,18 @@ static void pincode_editstate(struct socket_data *session,
 	WFIFOW(session, 2) = state;
 	WFIFOL(session, 4) = sd->pincode_seed = rnd() % 0xFFFF;
 	WFIFOSET(session, 8);
+}
+
+/**
+ * CH_AVAILABLE_SECOND_PASSWD
+ * Client request for a pincode window
+ **/
+static void pincode_window(struct s_receive_action_data *act,
+	struct char_session_data *sd, int ipl)
+{
+	if(RFIFOL(act,2) != sd->account_id)
+		return;
+	pincode->loginstate(act->session, sd, PINCODE_LOGIN_NOTSET);
 }
 
 /**

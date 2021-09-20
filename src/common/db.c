@@ -1497,6 +1497,7 @@ static bool db_rehash(struct DBMap *self, size_t new_count)
  *  dbit_obj_destroy - Destroys the iterator, unlocking the database and     *
  *           freeing used memory.                                            *
  *  db_obj_iterator - Return a new database iterator.                        *
+ *  db_set_release  - Sets a new release function.                           *
  *  db_set_hash     - Sets a new hash function.                              *
  *  db_obj_exists   - Checks if an entry exists.                             *
  *  db_obj_get      - Get the data identified by the key.                    *
@@ -1829,6 +1830,15 @@ static struct DBIterator *db_obj_iterator(struct DBMap *self)
 	/* Lock the database */
 	db_free_lock(db);
 	return &it->vtable;
+}
+
+/**
+ * Sets a new releasal function for provided table
+ **/
+void db_set_release(struct DBMap *self, DBReleaser new_release)
+{
+	struct DBMap_impl *db = (struct DBMap_impl *)self;
+	db->release = new_release;
 }
 
 /**
@@ -3017,6 +3027,7 @@ static struct DBMap *db_alloc(const char *file, const char *func, int line,
 	db->vtable.type     = db_obj_type;
 	db->vtable.options  = db_obj_options;
 	db->vtable.set_hash = db_set_hash;
+	db->vtable.set_release = db_set_release;
 	/* File and line of allocation */
 	db->alloc_file = file;
 	db->alloc_line = line;

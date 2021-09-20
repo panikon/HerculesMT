@@ -133,6 +133,10 @@ struct sql_interface {
 	///
 	/// @return Number of columns
 	uint32 (*NumColumns) (struct Sql *self);
+	/// Returns number of affected rows by an UPDATE/DELETE/INSERT operation.
+	///
+	/// @return Number of rows
+	uint64 (*NumAffectedRows) (struct Sql *self);
 	/// Returns the number of rows in the result.
 	///
 	/// @return Number of rows

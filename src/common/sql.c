@@ -226,7 +226,13 @@ static int Sql_P_Keepalive(struct Sql *self)
 	return timer->add_interval(timer->gettick() + ping_interval*1000, Sql_P_KeepaliveTimer, 0, (intptr_t)self, ping_interval*1000);
 }
 
-/// Escapes a string.
+/**
+ * Escapes a string.
+ *
+ * @param self     Current sql connection (can be NULL)
+ * @param out_to   Buffer of the encoded string, the size of this buffer must be from_len*2+1
+ * @param from     Buffer to be encoded
+ **/
 static size_t Sql_EscapeString(struct Sql *self, char *out_to, const char *from)
 {
 	if (self != NULL)
@@ -235,7 +241,14 @@ static size_t Sql_EscapeString(struct Sql *self, char *out_to, const char *from)
 		return (size_t)mysql_escape_string(out_to, from, (unsigned long)strlen(from));
 }
 
-/// Escapes a string.
+/**
+ * Escapes a string.
+ *
+ * @param self     Current sql connection (can be NULL)
+ * @param out_to   Buffer of the encoded string, the size of this buffer must be from_len*2+1
+ * @param from     Buffer to be encoded
+ * @param from_len Length of from
+ **/
 static size_t Sql_EscapeStringLen(struct Sql *self, char *out_to, const char *from, size_t from_len)
 {
 	if (self != NULL)
@@ -322,6 +335,14 @@ static uint32 Sql_NumColumns(struct Sql *self)
 {
 	if (self != NULL && self->result != NULL)
 		return (uint32)mysql_num_fields(self->result);
+	return 0;
+}
+
+/// Returns number of affected rows by an UPDATE/DELETE/INSERT operation
+static uint64 Sql_NumAffectedRows(struct Sql *self)
+{
+	if (self != NULL)
+		return (uint64)mysql_affected_rows(&self->handle);
 	return 0;
 }
 
@@ -1115,6 +1136,7 @@ void sql_defaults(void)
 	SQL->QueryStr = Sql_QueryStr;
 	SQL->LastInsertId = Sql_LastInsertId;
 	SQL->NumColumns = Sql_NumColumns;
+	SQL->NumAffectedRows = Sql_NumAffectedRows;
 	SQL->NumRows = Sql_NumRows;
 	SQL->NextRow = Sql_NextRow;
 	SQL->GetData = Sql_GetData;
