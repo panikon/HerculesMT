@@ -260,22 +260,23 @@ static void inter_auctions_fromsql(void)
 	SQL->FreeResult(inter->sql_handle);
 }
 
-/*==========================================
- * Packets From Map Server
- *------------------------------------------*/
-static int inter_auction_parse_frommap(int fd)
+/**
+ * Parsing entry point (from map-server)
+ * @see inter_parse_frommap
+ **/
+static enum parsefunc_rcode inter_auction_parse_frommap(struct s_receive_action_data *act)
 {
-	switch(RFIFOW(fd,0))
+	switch(RFIFOW(act,0))
 	{
-		case 0x3050: mapif->parse_auction_requestlist(fd); break;
-		case 0x3051: mapif->parse_auction_register(fd); break;
-		case 0x3052: mapif->parse_auction_cancel(fd); break;
-		case 0x3053: mapif->parse_auction_close(fd); break;
-		case 0x3055: mapif->parse_auction_bid(fd); break;
+		case 0x3050: mapif->parse_auction_requestlist(act); break;
+		case 0x3051: mapif->parse_auction_register(act); break;
+		case 0x3052: mapif->parse_auction_cancel(act); break;
+		case 0x3053: mapif->parse_auction_close(act); break;
+		case 0x3055: mapif->parse_auction_bid(act); break;
 		default:
-			return 0;
+			return PACKET_INCOMPLETE;
 	}
-	return 1;
+	return PACKET_VALID;
 }
 
 static int inter_auction_sql_init(void)

@@ -48,208 +48,656 @@
 #include "common/sql.h"
 #include "common/strlib.h"
 
+#include "common/rwlock.h"
+#include "common/mutex.h"
+#include "common/packets_zw_struct.h"
+#include "common/packets_wz_struct.h"
+
 #include <stdlib.h>
 
 static struct mapif_interface mapif_s;
 struct mapif_interface *mapif;
 
-static void mapif_ban(int id, unsigned int flag, int status)
+/**
+ * Finds server object of given session
+ *
+ * @retval NULL Failed to find server
+ * @readlock chr->map_server_list_lock
+ **/
+static struct mmo_map_server *mapif_server_find(struct socket_data *session)
 {
-	// send to all map-servers to disconnect the player
-	unsigned char buf[11];
-	WBUFW(buf,0) = 0x2b14;
-	WBUFL(buf,2) = id;
-	WBUFB(buf,6) = flag; // 0: change of status, 1: ban
-	WBUFL(buf,7) = status; // status or final date of a banishment
-	mapif->sendall(buf, 11);
+	if(!session->session_data)
+		return NULL;
+	struct mmo_map_server *server;
+	uint32 server_pos = *(uint32*)session->session_data;
+
+	if(server_pos >= INDEX_MAP_LENGTH(chr->map_server_list))
+		return NULL;
+
+	server = INDEX_MAP_INDEX(chr->map_server_list, server_pos);
+	if(!server || server->session != session)
+		return NULL;
+
+	return server;
 }
 
-/// Initializes a server structure.
-static void mapif_server_init(int id)
+/**
+ * Destroys a server structure.
+ * Acquires map_server_list_lock write lock
+ **/
+static void mapif_server_destroy(struct mmo_map_server *server)
 {
-	//memset(&chr->server[id], 0, sizeof(server[id]));
-	chr->server[id].fd = -1;
-}
+	if(!server || !server->session)
+		return;
+	rwlock->write_lock(chr->map_server_list_lock);
+	INDEX_MAP_REMOVE(chr->map_server_list, server->pos);
+	socket_io->session_disconnect_guard(server->session);
 
-/// Destroys a server structure.
-static void mapif_server_destroy(int id)
-{
-	if (chr->server[id].fd == -1) {
-		sockt->close(chr->server[id].fd);
-		chr->server[id].fd = -1;
+	mutex->lock(chr->action_information_mutex);
+	struct s_action_information *data = linkdb_erase(&chr->action_information, server);
+	if(data) {
+		data->server = NULL;
+		linkdb_insert(&chr->action_information, NULL, data);
 	}
+	mutex->unlock(chr->action_information_mutex);
+
+	aFree(server);
+	rwlock->write_unlock(chr->map_server_list_lock);
 }
 
-/// Resets all the data related to a server.
-static void mapif_server_reset(int id)
+/**
+ * Notifies other map-servers of the shutdown and also login-server, then
+ * sets all of its characters offline and frees all data related to it.
+ * Acquires map_server_list_lock
+ **/
+static void mapif_server_reset(struct mmo_map_server *server)
 {
 	int i, j;
 	unsigned char buf[16384];
-	int fd = chr->server[id].fd;
-	//Notify other map servers that this one is gone. [Skotlex]
+
+	rwlock->read_lock(chr->map_server_list_lock);
+
+	/**
+	 * 0x2b20 ZZ_SET_OFFLINE <len>.W <ip>.L <port>.W {<map-id>.W}*VECTOR_LENGTH(server->maps)
+	 * Notify other map servers that this one is gone. [Skotlex]
+	 * The notification is only made when the server owns at least one map.
+	 **/
 	WBUFW(buf, 0) = 0x2b20;
-	WBUFL(buf, 4) = htonl(chr->server[id].ip);
-	WBUFW(buf, 8) = htons(chr->server[id].port);
+	WBUFL(buf, 4) = htonl(server->ip);
+	WBUFW(buf, 8) = htons(server->port);
 	j = 0;
-	for (i = 0; i < VECTOR_LENGTH(chr->server[id].maps); i++) {
-		uint16 m = VECTOR_INDEX(chr->server[id].maps, i);
+	for (i = 0; i < VECTOR_LENGTH(server->maps); i++) {
+		uint16 m = VECTOR_INDEX(server->maps, i);
 		if (m != 0)
 			WBUFW(buf, 10 + (j++) * 4) = m;
 	}
+
+	rwlock->read_unlock(chr->map_server_list_lock);
+
 	if (j > 0) {
 		WBUFW(buf, 2) = j * 4 + 10;
-		mapif->sendallwos(fd, buf, WBUFW(buf, 2));
+		mapif->sendallwos(server, buf, WBUFW(buf, 2));
 	}
-	if (SQL_ERROR == SQL->Query(inter->sql_handle, "DELETE FROM `%s` WHERE `index`='%d'", ragsrvinfo_db, chr->server[id].fd))
+	if (SQL_ERROR == SQL->Query(inter->sql_handle, "DELETE FROM `%s` WHERE `index`='%d'",
+		ragsrvinfo_db, server->session->id)
+	)
 		Sql_ShowDebug(inter->sql_handle);
+	/**
+	 * When setting these chars to disconnected in our database the login server will
+	 * be notified via 0x272d WA_ACCOUNT_LIST (loginif->account_list)
+	 * This information is broadcasted in fixed intervals
+	 * @see do_init_loginif
+	 **/
 	chr->online_char_db->foreach(chr->online_char_db, chr->db_setoffline, id); //Tag relevant chars as 'in disconnected' server.
-	mapif->server_destroy(id);
-	mapif->server_init(id);
+	mapif->server_destroy(server);
 }
 
-/// Called when the connection to a Map Server is disconnected.
-static void mapif_on_disconnect(int id)
+/**
+ * Called upon map-server disconnection
+ * Acquires chr->map_server_list_lock
+ **/
+static void mapif_on_disconnect(struct mmo_map_server *server)
 {
-	ShowStatus("Map-server #%d has disconnected.\n", id);
-	mapif->server_reset(id);
+	ShowStatus("Map-server (id: %d) has disconnected.\n", server->session->id);
+	mapif->server_reset(server);
 }
 
-static void mapif_on_parse_accinfo(int account_id, int u_fd, int u_aid, int u_group, int map_fd)
+/**
+ * Called upon a successful map-server connection
+ * Acquires chr->map_server_list_lock
+ **/
+static struct mmo_map_server *mapif_on_connect(struct socket_data *session, uint32 ip_, uint16 port_)
 {
-	Assert_retv(chr->login_fd > 0);
-	WFIFOHEAD(chr->login_fd, 22);
-	WFIFOW(chr->login_fd, 0) = 0x2740;
-	WFIFOL(chr->login_fd, 2) = account_id;
-	WFIFOL(chr->login_fd, 6) = u_fd;
-	WFIFOL(chr->login_fd, 10) = u_aid;
-	WFIFOL(chr->login_fd, 14) = u_group;
-	WFIFOL(chr->login_fd, 18) = map_fd;
-	WFIFOSET(chr->login_fd, 22);
+	struct mmo_map_server *server = aCalloc(1, sizeof(*server));
+	server->ip = ip_;
+	server->port = port_;
+	server->session = session;
+	VECTOR_INIT(server->maps);
+
+	rwlock->write_lock(chr->map_server_list_lock);
+	INDEX_MAP_ADD(chr->map_server_list, server, server->pos);
+	rwlock->write_unlock(chr->map_server_list_lock);
+	return server;
 }
 
-static void mapif_char_ban(int char_id, time_t timestamp)
+/**
+ * Sends a buffer to all connected map-servers
+ **/
+static int mapif_sendall(const unsigned char *buf, unsigned int len)
+{
+	return mapif->sendallwos(NULL, buf, len);
+}
+
+/**
+ * Sends a buffer to all connected map-servers except the provided one.
+ * @param server Server to be excluded (if NULL sends message to all servers)
+ * @return Number of messages sent
+ * @readlock chr->map_server_list_lock
+ **/
+static int mapif_sendallwos(struct mmo_map_server *server, const unsigned char *buf, unsigned int len)
+{
+	int i, c;
+
+	nullpo_ret(buf);
+	c = 0;
+	for(i = 0; i < INDEX_MAP_LENGTH(chr->map_server_list); i++) {
+		struct mmo_map_server *cur = &INDEX_MAP_INDEX(chr->map_server_list, i);
+		if(!cur)
+			continue;
+		if(cur->session && cur != server) {
+			WFIFOHEAD(cur->session, len, true);
+			memcpy(WFIFOP(cur->session, 0), buf, len);
+			WFIFOSET(cur->session, len);
+			c++;
+		}
+	}
+
+	return c;
+}
+
+/**
+ * Sends buffer to provided server
+ * @return Number of copies sent
+ * @readlock chr->map_server_list_lock
+ **/
+static int mapif_send(struct mmo_map_server *server, const unsigned char *buf, unsigned int len)
+{
+	nullpo_ret(buf);
+	if(!server)
+		return 0;
+
+	WFIFOHEAD(server->session, len, true);
+	memcpy(WFIFOP(server->session, 0), buf, len);
+	WFIFOSET(server->session, len);
+
+	return 1;
+}
+
+/**
+ * 0xb214 WZ_UPDATE_STATE <id>.L <flag>.B <state>.W
+ * Notifies all map-servers of a state change
+ * @param id     account-id (flags 0 and 1), character-id (flag 2)
+ * @param flag   0 Account status change
+ *               1 Account ban
+ *               2 Character ban
+ * @param state  timestamp of ban due date (flags 1 and 2)
+ *               ALE_UNREGISTERED to ALE_UNAUTHORIZED +1 @see enum notify_ban_errorcode
+ *               100: message 421 ("Your account has been totally erased")
+ *               Other values: message 420 ("Your account is no longer authorized")
+ * @readlock chr->map_server_list_lock
+ **/
+static void mapif_update_state(int id, unsigned char flag, unsigned int state)
 {
 	unsigned char buf[11];
 	WBUFW(buf, 0) = 0x2b14;
-	WBUFL(buf, 2) = char_id;
-	WBUFB(buf, 6) = 2;
-	WBUFL(buf, 7) = (unsigned int)timestamp;
+	WBUFL(buf, 2) = id;
+	WBUFB(buf, 6) = flag;
+	WBUFL(buf, 7) = state;
 	mapif->sendall(buf, 11);
 }
 
-static int mapif_sendall(const unsigned char *buf, unsigned int len)
+/**
+ * Bans a character
+ * Triggered by 0x2b0e with flag CHAR_ASK_NAME_CHARBAN
+ * @see mapif_update_state
+ * @readlock chr->map_server_list_lock
+ **/
+static void mapif_char_ban(int char_id, time_t timestamp)
 {
-	int i, c;
-
-	nullpo_ret(buf);
-	c = 0;
-	for (i = 0; i < ARRAYLENGTH(chr->server); i++) {
-		int fd;
-		if ((fd = chr->server[i].fd) > 0) {
-			WFIFOHEAD(fd, len);
-			memcpy(WFIFOP(fd, 0), buf, len);
-			WFIFOSET(fd, len);
-			c++;
-		}
-	}
-
-	return c;
+	mapif->update_state(char_id, 2, (unsigned int)timestamp);
 }
 
-static int mapif_sendallwos(int sfd, unsigned char *buf, unsigned int len)
-{
-	int i, c;
-
-	nullpo_ret(buf);
-	c = 0;
-	for (i = 0; i < ARRAYLENGTH(chr->server); i++) {
-		int fd;
-		if ((fd = chr->server[i].fd) > 0 && fd != sfd) {
-			WFIFOHEAD(fd, len);
-			memcpy(WFIFOP(fd, 0), buf, len);
-			WFIFOSET(fd, len);
-			c++;
-		}
-	}
-
-	return c;
-}
-
-
-static int mapif_send(int fd, unsigned char *buf, unsigned int len)
-{
-	nullpo_ret(buf);
-	if (fd >= 0) {
-		int i;
-		ARR_FIND (0, ARRAYLENGTH(chr->server), i, fd == chr->server[i].fd);
-		if (i < ARRAYLENGTH(chr->server)) {
-			WFIFOHEAD(fd, len);
-			memcpy(WFIFOP(fd, 0), buf, len);
-			WFIFOSET(fd, len);
-			return 1;
-		}
-	}
-	return 0;
-}
-
-static void mapif_send_users_count(int users)
+/**
+ * 0x2b00 WZ_USER_COUNT <count>.L
+ * Sends current user count to all map-servers
+ * @readlock chr->map_server_list_lock
+ **/
+static void mapif_users_count(int users)
 {
 	uint8 buf[6];
-	// send number of players to all map-servers
-	WBUFW(buf, 0) = 0x2b00;
+	WBUFW(buf, 0) = HEADER_WZ_USER_COUNT;
 	WBUFL(buf, 2) = users;
-	mapif->sendall(buf, 6);
+	mapif->sendall(buf, sizeof(struct PACKET_WZ_USER_COUNT));
 }
 
-
-static void mapif_auction_message(int char_id, unsigned char result)
+/**
+ * 0x2b0d WZ_CHANGE_SEX
+ * Notifies all map-servers of a sex-change
+ **/
+static void mapif_change_sex(int account_id, int sex)
 {
-	unsigned char buf[74];
+	unsigned char buf[7];
+
+	WBUFW(buf,0) = HEADER_WZ_CHANGE_SEX;
+	WBUFL(buf,2) = account_id;
+	WBUFB(buf,6) = sex;
+	mapif->sendall(buf, sizeof(struct PACKET_WZ_CHANGE_SEX));
+}
+
+/**
+ * Writes list to buffer
+ * @return Number of written bytes.
+ **/
+size_t mapif_fame_list_sub(uint8 *buf, struct fame_list *list, int len)
+{
+	size_t pos = 0;
+	for(int i = 0; i < len && list[i].id; i++) {
+		pos += sizeof((WBUFL(&buf, pos) = list[i].id));
+		pos += sizeof((WBUFL(&buf, pos) = list[i].fame));
+		memcpy(WBUFP(&buf, pos), list[i].name, sizeof(list[i].name));
+		pos += sizeof(list[i].name);
+	}
+	return pos;
+}
+
+/**
+ * Send map-servers the fame ranking lists
+ *
+ * @param session When set, sends list to only this server
+ **/
+static int mapif_fame_list(struct socket_data *session,
+	struct fame_list *smith, int smith_len,
+	struct fame_list *chemist, int chemist_len,
+	struct fame_list *taekwon, int taekwon_len
+) {
+	size_t len = sizeof(struct PACKET_WZ_FAME_LIST)-3*sizeof(intptr); // 3 dynamic lists
+
+	size_t expected_len = len; 
+	expected_len += sizeof(struct fame_list_packet_data)*smith_len;
+	expected_len += sizeof(struct fame_list_packet_data)*chemist_len;
+	expected_len += sizeof(struct fame_list_packet_data)*taekwon_len;
+	/**
+	 * The expected size of this packet when all lists are of the default
+	 * length is 968 bytes, there's no need to use the stack to allocate
+	 * 32000bytes as it was being done.
+	 **/
+	CREATE_BUFFER(buf, uint8, expected_len);
+
+	WBUFW(buf,0) = HEADER_WZ_FAME_LIST;
+	len += mapif_fame_list_sub(&buf[len], smith, smith_len);
+	// add blacksmith's block length
+	WBUFW(buf, 6) = len;
+	len += mapif_fame_list_sub(&buf[len], chemist, chemist_len);
+	// add alchemist's block length
+	WBUFW(buf, 4) = len;
+	len += mapif_fame_list_sub(&buf[len], taekwon, taekwon_len);
+	// add total packet length
+	WBUFW(buf, 2) = len;
+	assert(len == expected_len && "Buffer overflow");
+
+	if(session)
+		mapif->send(session, buf, len);
+	else
+		mapif->sendall(buf, len);
+
+	DELETE_BUFFER(buf);
+}
+
+/**
+ * Updates fame of a player
+ *char_update_fame_list
+ **/
+static void mapif_fame_list_update(enum fame_list_type type, int index, int fame)
+{
+	unsigned char buf[8];
+	WBUFW(buf,0) = HEADER_WZ_FAME_LIST_UPDATE;
+	WBUFB(buf,2) = (uint8)type;
+	WBUFB(buf,3) = index;
+	WBUFL(buf,4) = fame;
+	mapif->sendall(buf, 8);
+}
+
+/**
+ * Notifies map of receival of maps
+ * char_map_received_ok
+ **/
+static void mapif_map_received(struct socket_data *session, char *wisp_server_name, uint8 flag)
+{
+	WFIFOHEAD(session, sizeof(struct PACKET_WZ_SEND_MAP_ACK), true);
+	WFIFOW(session,0) = HEADER_WZ_SEND_MAP_ACK;
+	WFIFOB(session,2) = flag;
+	memcpy(WFIFOP(session,3), wisp_server_name, NAME_LENGTH);
+	WFIFOSET(session, sizeof(struct PACKET_WZ_SEND_MAP_ACK));
+}
+
+/**
+ * Notifies map-server of maps owned by the other servers and other servers
+ * of the maps owned by the former.
+ *
+ * @param server New server
+ * @readlock map_server_list_lock
+ **/
+static void mapif_send_maps(struct mmo_map_server *server, int16 *map_list)
+{
+	int k,i;
+
+	if(!VECTOR_LENGTH(server->maps)) {
+		ShowWarning("Map-server %d has NO maps.\n", server->pos);
+	} else {
+		// Transmitting maps information to the other map-servers
+		size_t expected_len = sizeof(struct PACKET_WZ_SEND_MAP)-sizeof(intptr);
+		size_t list_len = VECTOR_LENGTH(server->maps) * sizeof(int16);
+		expected_len += list_len;
+		CREATE_BUFFER(buf, uint8, expected_len);
+
+		WBUFW(buf,0) = HEADER_WZ_SEND_MAP;
+		WBUFW(buf,2) = expected_len;
+		WBUFL(buf,4) = htonl(server->ip);
+		WBUFW(buf,8) = htons(server->port);
+		memcpy(WBUFP(buf,10), map_list, list_len);
+		mapif->sendallwos(server, buf, WBUFW(buf,2));
+
+		DELETE_BUFFER(buf);
+	}
+	// Transmitting the maps of the other map-servers to the new map-server
+	for(k = 0; k < INDEX_MAP_LENGTH(chr->map_server_list); k++) {
+		struct mmo_map_server *cur = &INDEX_MAP_INDEX(chr->map_server_list, k);
+		if(!cur)
+			continue;
+		if(cur == server)
+			continue;
+
+		WFIFOHEAD(cur->session,10 + 4 * VECTOR_LENGTH(cur->maps), true);
+		WFIFOW(cur->session,0) = HEADER_WZ_SEND_MAP;
+		WFIFOL(cur->session,4) = htonl(cur->ip);
+		WFIFOW(cur->session,8) = htons(cur->port);
+		j = 0;
+		for(i = 0; i < VECTOR_LENGTH(cur->maps); i++) {
+			uint16 m = VECTOR_INDEX(cur->maps, i);
+			if (m != 0)
+				WFIFOW(cur->session,10+(j++)*4) = m;
+		}
+		if (j > 0) {
+			WFIFOW(cur->session,2) = j * 4 + 10;
+			WFIFOSET(cur->session, WFIFOW(cur->session,2));
+		}
+	}
+}
+
+/**
+ * Sends WZ_STATUS_CHANGE built by mapif_scdata_head and mapif_scdata_data
+ **/
+static void mapif_scdata_send(struct socket_data *session)
+{
+	size_t expected_len = sizeof(struct PACKET_WZ_STATUS_CHANGE)-sizeof(intptr);
+	expected_len += WFIFOW(session, 12)*sizeof(struct status_change_packet_data);
+	if(expected_len != WFIFOW(session, 2)) {
+		ShowDebug("mapif_scdata_send: Expected length %zd, got %zd\n",
+			WFIFOW(session, 2), expected_len);
+		WFIFOW(session, 2) = expected_len;
+	}
+	WFIFOSET(session, WFIFOW(session, 2));
+}
+
+/**
+ * Adds status change data to WZ_STATUS_CHANGE initiated by mapif_scdata_head
+ **/
+static void mapif_scdata_data(struct socket_data *session, struct status_change_data *data)
+{
+	size_t pos = sizeof(struct PACKET_WZ_STATUS_CHANGE)-sizeof(intptr);
+	size_t count = WFIFOW(session, 12);
+	pos += count * sizeof(struct status_change_packet_data);
+
+	pos += sizeof((WFIFOW(session,pos) = data->type));
+	pos += sizeof((WFIFOL(session,pos) = data->val1));
+	pos += sizeof((WFIFOL(session,pos) = data->val2));
+	pos += sizeof((WFIFOL(session,pos) = data->val3));
+	pos += sizeof((WFIFOL(session,pos) = data->val4));
+	pos += sizeof((WFIFOL(session,pos) = data->tick));
+	pos += sizeof((WFIFOL(session,pos) = data->total_tick));
+
+	WFIFOW(session, 12) = count + 1;
+}
+
+/**
+ * Begins WZ_STATUS_CHANGE with requested SC data
+ * This packet is completed by mapif_scdata_data and then mapif_scdata_send
+ **/
+static void mapif_scdata_head(struct socket_data *session, int aid, int cid, int count)
+{
+	size_t expected_len = sizeof(struct PACKET_WZ_STATUS_CHANGE)-sizeof(intptr);
+	expected_len += sizeof(struct status_change_packet_data)*count;
+	WFIFOHEAD(session, expected_len, true);
+	WFIFOW(session, 0) = HEADER_WZ_STATUS_CHANGE;
+	WFIFOW(session, 2) = expected_len;
+	WFIFOL(session,4)  = aid;
+	WFIFOL(session,8)  = cid;
+	WFIFOW(session,12) = 0;
+}
+
+/**
+ * Notifies map-server that a character was saved
+ * Only needed on final save.
+ **/
+static void mapif_save_character_ack(struct socket_data *session, int aid, int cid)
+{
+	WFIFOHEAD(session, sizeof(struct PACKET_WZ_SAVE_CHARACTER_ACK), true);
+	WFIFOW(session,0) = HEADER_WZ_SAVE_CHARACTER_ACK;
+	WFIFOL(session,2) = aid;
+	WFIFOL(session,6) = cid;
+	WFIFOSET(session,10);
+}
+
+/**
+ * Notifies map-server of a request to receive a character to selection screen
+ **/
+static void mapif_char_select_ack(struct socket_data *session, int account_id, uint8 flag)
+{
+	WFIFOHEAD(session, sizeof(struct PACKET_WZ_CHAR_SELECT_ACK), true);
+	WFIFOW(session,0) = HEADER_WZ_CHAR_SELECT_ACK;
+	WFIFOL(session,2) = account_id;
+	WFIFOB(session,6) = flag;
+	WFIFOSET(session,7);
+}
+
+/**
+ * Answer to map server change request
+ * @param data Buffer containing the same data as ZW_CHANGE_SERVER_REQUEST[2]
+ **/
+static void mapif_change_map_server_ack(struct socket_data *session, const uint8 *data, bool ok)
+{
+	WFIFOHEAD(session, sizeof(struct PACKET_WZ_CHANGE_SERVER_REQUEST_ACK), true);
+	WFIFOW(session,0) = HEADER_WZ_CHANGE_SERVER_REQUEST_ACK;
+	memcpy(WFIFOP(session,2), data, 28);
+	if(!ok)
+		WFIFOL(session,6) = 0; //Set login1 to 0.
+	WFIFOSET(session,30);
+}
+
+/**
+ * Answer to a character name request
+ **/
+static void mapif_char_name_ack(struct socket_data *session, int char_id)
+{
+	WFIFOHEAD(session, sizeof(struct PACKET_WZ_CHARNAME_REQUEST_ACK), true);
+	WFIFOW(session,0) = HEADER_WZ_CHARNAME_REQUEST_ACK;
+	WFIFOL(session,2) = char_id;
+	/**
+	 * Map-server adds this name in the nickdb upon receival, even if it's not found.
+	 * Clients older than 20180307 always expect a name when resolving, so we send 
+	 * 'Unknown' to be added, newer clients have a flag in clif_solved_charname packet
+	 * and NUL is sent instead, thus we send exactly what the map-server needs to
+	 * send to the client here.
+	 * @see clif_solved_charname (ZC_ACK_REQNAME_BYGID)
+	 **/
+#if PACKETVER_MAIN_NUM >= 20180307 || PACKETVER_RE_NUM >= 20180221 || PACKETVER_ZERO_NUM >= 20180328
+	if (chr->loadName(char_id, WFIFOP(session,6)) == 0)
+		WFIFOL(session, 6) = 0;
+#else
+	chr->loadName(char_id, WFIFOP(session,6));
+#endif
+	WFIFOSET(session, 30);
+}
+
+/**
+ * Answer of an update account request
+ * This is only sent when the original request was made by a player and
+ * not only by map-server.
+ **/
+static void mapif_change_account_ack(struct socket_data *session, int acc,
+	const char *name, enum zh_char_ask_name_type type, int result
+) {
+	nullpo_retv(name);
+	WFIFOHEAD(session, sizeof(struct PACKET_ZW_UPDATE_ACCOUNT_ACK), true);
+	WFIFOW(session, 0) = HEADER_ZW_UPDATE_ACCOUNT_ACK;
+	WFIFOL(session, 2) = acc;
+	safestrncpy(WFIFOP(session,6), name, NAME_LENGTH);
+	WFIFOW(session,30) = type;
+	WFIFOW(session,32) = result;
+	WFIFOSET(session,34);
+}
+
+/**
+ * Pong
+ **/
+static void mapif_pong(struct socket_data *session)
+{
+	WFIFOHEAD(session, 2,true);
+	WFIFOW(session,0) = HEADER_ZW_PONG;
+	WFIFOSET(session,2);
+}
+
+/**
+ * Sends authentication data to map-server
+ **/
+static void mapif_auth_ok(struct socket_data *session, int account_id, struct char_auth_node *node, struct mmo_charstatus *cd)
+{
+	nullpo_retv(cd);
+	WFIFOHEAD(session,25 + sizeof(struct mmo_charstatus), true);
+	WFIFOW(session,0) = 0x2afd;
+	WFIFOW(session,2) = 25 + sizeof(struct mmo_charstatus);
+	WFIFOL(session,4) = account_id;
+	if (node)
+	{
+		WFIFOL(session,8) = node->login_id1;
+		WFIFOL(session,12) = node->login_id2;
+		WFIFOL(session,16) = (uint32)node->expiration_time; // FIXME: will wrap to negative after "19-Jan-2038, 03:14:07 AM GMT"
+		WFIFOL(session,20) = node->group_id;
+		WFIFOB(session,24) = node->changing_mapservers;
+	}
+	else
+	{
+		WFIFOL(session,8) = 0;
+		WFIFOL(session,12) = 0;
+		WFIFOL(session,16) = 0;
+		WFIFOL(session,20) = 0;
+		WFIFOB(session,24) = 0;
+	}
+	/**
+	 * TODO/FIXME: This just copies a padded struct, if the map-server doesn't have
+	 * the same padding this could get messy... [Panikon]
+	 **/
+	memcpy(WFIFOP(session,25), cd, sizeof(struct mmo_charstatus));
+	WFIFOSET(session, WFIFOW(session, 2));
+}
+
+/**
+ * Notifies map-server of the failed authentication
+ **/
+static void char_auth_failed(struct socket_data *session, int account_id, int char_id, int login_id1, char sex, uint32 ip)
+{
+	WFIFOHEAD(session,sizeof(struct PACKET_ZW_AUTH_FAILED),true);
+	WFIFOW(session,0) = HEADER_ZW_AUTH_FAILED;
+	WFIFOL(session,2) = account_id;
+	WFIFOL(session,6) = char_id;
+	WFIFOL(session,10) = login_id1;
+	WFIFOB(session,14) = sex;
+	WFIFOL(session,15) = htonl(ip);
+	WFIFOSET(session,19);
+}
+
+/*======================================
+ * MAPIF : AUCTION
+ *--------------------------------------*/
+
+/**
+ * 0x3854 WZ_AUCTION_MESSAGE <char_id>.L <result>.B
+ * Sends an auction message to the character via the map-server (clif->auction_message)
+ * @see enum e_auction_result_message
+ * @readlock chr->map_server_list_lock
+ **/
+static void mapif_auction_message(int char_id, enum e_auction_result_message result)
+{
+	unsigned char buf[7];
 
 	WBUFW(buf, 0) = 0x3854;
 	WBUFL(buf, 2) = char_id;
-	WBUFL(buf, 6) = result;
+	WBUFB(buf, 6) = result;
+
 	mapif->sendall(buf, 7);
 }
 
-static void mapif_auction_sendlist(int fd, int char_id, short count, short pages, unsigned char *buf)
+/**
+ * 0x3850 WZ_AUCTION_LIST <len>.W <char_id>.L <count>.W <pages>.W <struct auction_data>.<count>
+ * Sends auction list to the map-server (answer of 0x3050 ZW_AUCTION_REQUEST_LIST)
+ * @param session Map-server that requested
+ **/
+static void mapif_auction_sendlist(struct socket_data *session, int char_id, short count, short pages, unsigned char *buf)
 {
 	int len = (sizeof(struct auction_data) * count) + 12;
 
 	nullpo_retv(buf);
 
-	WFIFOHEAD(fd, len);
-	WFIFOW(fd, 0) = 0x3850;
-	WFIFOW(fd, 2) = len;
-	WFIFOL(fd, 4) = char_id;
-	WFIFOW(fd, 8) = count;
-	WFIFOW(fd, 10) = pages;
-	memcpy(WFIFOP(fd, 12), buf, len - 12);
-	WFIFOSET(fd, len);
+	WFIFOHEAD(session, len, true);
+	WFIFOW(session, 0) = 0x3850;
+	WFIFOW(session, 2) = len;
+	WFIFOL(session, 4) = char_id;
+	WFIFOW(session, 8) = count;
+	WFIFOW(session, 10) = pages;
+	memcpy(WFIFOP(session, 12), buf, len - 12);
+	WFIFOSET(session, len);
 }
 
-static void mapif_parse_auction_requestlist(int fd)
+/**
+ * 0x3050 ZW_AUCTION_REQUEST_LIST <char_id>.L <type>.W <price>.L <page>.W <search>[NAME_LENGTH].B
+ * Map-server request of information of an auction list
+ **/
+static void mapif_parse_auction_requestlist(struct s_receive_action_data *act)
 {
 	char searchtext[NAME_LENGTH];
-	int char_id = RFIFOL(fd, 4), len = sizeof(struct auction_data);
-	int price = RFIFOL(fd, 10);
-	short type = RFIFOW(fd, 8), page = max(1, RFIFOW(fd, 14));
+
+	int char_id = RFIFOL(act, 4);
+	short type  = RFIFOW(act, 8); // enum e_auction_search_type
+	int price   = RFIFOL(act, 10);
+	short page  = max(1, RFIFOW(act, 14));
+	memcpy(searchtext, RFIFOP(act, 16), NAME_LENGTH);
+
+	int len = sizeof(struct auction_data);
+
 	unsigned char buf[5 * sizeof(struct auction_data)];
 	struct DBIterator *iter = db_iterator(inter_auction->db);
 	struct auction_data *auction;
 	short i = 0, j = 0, pages = 1;
 
-	memcpy(searchtext, RFIFOP(fd, 16), NAME_LENGTH);
-
 	for (auction = dbi_first(iter); dbi_exists(iter); auction = dbi_next(iter)) {
-		if ((type == 0 && auction->type != IT_ARMOR && auction->type != IT_PETARMOR)
-		 || (type == 1 && auction->type != IT_WEAPON)
-		 || (type == 2 && auction->type != IT_CARD)
-		 || (type == 3 && auction->type != IT_ETC)
-		 || (type == 4 && !strstr(auction->item_name, searchtext))
-		 || (type == 5 && auction->price > price)
-		 || (type == 6 && auction->seller_id != char_id)
-		 || (type == 7 && auction->buyer_id != char_id))
+		if ((type == AUCTIONSEARCH_ARMOR    && auction->type != IT_ARMOR && auction->type != IT_PETARMOR)
+		 || (type == AUCTIONSEARCH_WEAPON   && auction->type != IT_WEAPON)
+		 || (type == AUCTIONSEARCH_CARD     && auction->type != IT_CARD)
+		 || (type == AUCTIONSEARCH_MISC     && auction->type != IT_ETC)
+		 || (type == AUCTIONSEARCH_NAME     && !strstr(auction->item_name, searchtext))
+		 || (type == AUCTIONSEARCH_ID       && auction->price > price)
+		 || (type == AUCTIONSEARCH_OWN_SELL && auction->seller_id != char_id)
+		 || (type == AUCTIONSEARCH_OWN_BIDS && auction->buyer_id != char_id))
 			continue;
 
 		i++;
@@ -267,97 +715,127 @@ static void mapif_parse_auction_requestlist(int fd)
 	}
 	dbi_destroy(iter);
 
-	mapif->auction_sendlist(fd, char_id, j, pages, buf);
+	mapif->auction_sendlist(act->session, char_id, j, pages, buf);
 }
 
-static void mapif_auction_register(int fd, struct auction_data *auction)
+/**
+ * 0x3851 WZ_AUCTION_REGISTER_ACK <len>.W <struct auction_data>
+ * Notifies map-server of a successful registration of an auction (answer of 0x3051 ZW_AUCTION_REGISTER)
+ **/
+static void mapif_auction_register(struct socket_data *session, struct auction_data *auction)
 {
 	int len = sizeof(struct auction_data) + 4;
 
 	nullpo_retv(auction);
 
-	WFIFOHEAD(fd,len);
-	WFIFOW(fd, 0) = 0x3851;
-	WFIFOW(fd, 2) = len;
-	memcpy(WFIFOP(fd, 4), auction, sizeof(struct auction_data));
-	WFIFOSET(fd, len);
+	WFIFOHEAD(session, len, true);
+	WFIFOW(session, 0) = 0x3851;
+	WFIFOW(session, 2) = len;
+	memcpy(WFIFOP(session, 4), auction, sizeof(struct auction_data));
+	WFIFOSET(session, len);
 }
 
-static void mapif_parse_auction_register(int fd)
+/**
+ * 0x3051 ZW_AUCTION_REGISTER <len>.W <struct auction_data>
+ * Parses map-server request to register an auction
+ **/
+static void mapif_parse_auction_register(struct s_receive_action_data *act)
 {
 	struct auction_data auction;
-	if( RFIFOW(fd, 2) != sizeof(struct auction_data) + 4 )
+	if( RFIFOW(act, 2) != sizeof(struct auction_data) + 4 ) {
+		ShowError("mapif_parse_auction_register: data size mismatch %d != %"PRIuS"\n",
+			RFIFOW(act,2) - 4, sizeof(struct auction_data));
 		return;
+	}
 
-	memcpy(&auction, RFIFOP(fd, 4), sizeof(struct auction_data));
+	memcpy(&auction, RFIFOP(act, 4), sizeof(struct auction_data));
 	if( inter_auction->count(auction.seller_id, false) < 5 )
 		auction.auction_id = inter_auction->create(&auction);
 
-	mapif->auction_register(fd, &auction);
+	mapif->auction_register(act, &auction);
 }
 
-static void mapif_auction_cancel(int fd, int char_id, unsigned char result)
+/**
+ * 0x3852 WZ_AUCTION_CANCEL_ACK <char_id>.L <result>.B
+ * Sends an auction cancelation to the character via the map-server (clif->auction_close)
+ * @see enum e_auction_cancel
+ **/
+static void mapif_auction_cancel(struct socket_data *session, int char_id, enum e_auction_cancel result)
 {
-	WFIFOHEAD(fd, 7);
-	WFIFOW(fd, 0) = 0x3852;
-	WFIFOL(fd, 2) = char_id;
-	WFIFOB(fd, 6) = result;
-	WFIFOSET(fd, 7);
+	WFIFOHEAD(session, 7, true);
+	WFIFOW(session, 0) = 0x3852;
+	WFIFOL(session, 2) = char_id;
+	WFIFOB(session, 6) = result;
+	WFIFOSET(session, 7);
 }
 
-static void mapif_parse_auction_cancel(int fd)
+/**
+ * 0x3052 ZW_AUCTION_CANCEL <char_id>.L <auction_id>.L
+ * Parses cancelation request (CZ_AUCTION_ADD_CANCEL)
+ **/
+static void mapif_parse_auction_cancel(struct s_receive_action_data *act)
 {
-	int char_id = RFIFOL(fd, 2), auction_id = RFIFOL(fd, 6);
+	int char_id    = RFIFOL(act, 2);
+	int auction_id = RFIFOL(act, 6);
 	struct auction_data *auction;
 
 	if ((auction = (struct auction_data *)idb_get(inter_auction->db, auction_id)) == NULL) {
-		mapif->auction_cancel(fd, char_id, 1); // Bid Number is Incorrect
+		mapif->auction_cancel(act->session, char_id, AUCTIONCANCEL_INCORRECT_ID);
 		return;
 	}
 
 	if (auction->seller_id != char_id) {
-		mapif->auction_cancel(fd, char_id, 2); // You cannot end the auction
+		mapif->auction_cancel(act->session, char_id, AUCTIONCANCEL_FAILED);
 		return;
 	}
 
 	if (auction->buyer_id > 0) {
-		mapif->auction_cancel(fd, char_id, 3); // An auction with at least one bidder cannot be canceled
+		// An auction with at least one bidder cannot be canceled
+		mapif->auction_message(char_id, AUCTIONRESULT_CANNOT_CANCEL);
 		return;
 	}
 
-	inter_mail->sendmail(0, "Auction Manager", auction->seller_id, auction->seller_name, "Auction", "Auction canceled.", 0, &auction->item);
+	inter_mail->sendmail(0, "Auction Manager", auction->seller_id,
+		auction->seller_name, "Auction", "Auction canceled.", 0, &auction->item);
 	inter_auction->delete_(auction);
 
-	mapif->auction_cancel(fd, char_id, 0); // The auction has been canceled
+	mapif->auction_cancel(act->session, char_id, AUCTIONCANCEL_SUCCESS);
 }
 
-
-static void mapif_auction_close(int fd, int char_id, unsigned char result)
+/**
+ * 0x3853 ZW_AUCTION_CLOSE_ACK <char_id>.L <result>.B
+ **/
+static void mapif_auction_close(struct socket_data *session, int char_id, enum e_auction_cancel result)
 {
-	WFIFOHEAD(fd, 7);
-	WFIFOW(fd, 0) = 0x3853;
-	WFIFOL(fd, 2) = char_id;
-	WFIFOB(fd, 6) = result;
-	WFIFOSET(fd, 7);
+	WFIFOHEAD(session, 7, true);
+	WFIFOW(session, 0) = 0x3853;
+	WFIFOL(session, 2) = char_id;
+	WFIFOB(session, 6) = result;
+	WFIFOSET(session, 7);
 }
 
-static void mapif_parse_auction_close(int fd)
+/**
+ * 0x3053 ZW_AUCTION_CLOSE <char_id>.L <result>.B
+ * Parses close request (CZ_AUCTION_REQ_MY_SELL_STOP)
+ **/
+static void mapif_parse_auction_close(struct s_receive_action_data *act)
 {
-	int char_id = RFIFOL(fd, 2), auction_id = RFIFOL(fd, 6);
+	int char_id    = RFIFOL(act, 2);
+	int auction_id = RFIFOL(act, 6);
 	struct auction_data *auction;
 
 	if ((auction = (struct auction_data *)idb_get(inter_auction->db, auction_id)) == NULL) {
-		mapif->auction_close(fd, char_id, 2); // Bid Number is Incorrect
+		mapif->auction_close(act->session, char_id, AUCTIONCANCEL_INCORRECT_ID); // Bid Number is Incorrect
 		return;
 	}
 
 	if (auction->seller_id != char_id) {
-		mapif->auction_close(fd, char_id, 1); // You cannot end the auction
+		mapif->auction_close(act->session, char_id, AUCTIONCANCEL_FAILED); // You cannot end the auction
 		return;
 	}
 
 	if (auction->buyer_id == 0) {
-		mapif->auction_close(fd, char_id, 1); // You cannot end the auction
+		mapif->auction_close(act->session, char_id, AUCTIONCANCEL_FAILED); // You cannot end the auction
 		return;
 	}
 
@@ -365,59 +843,81 @@ static void mapif_parse_auction_close(int fd)
 	inter_mail->sendmail(0, "Auction Manager", auction->seller_id, auction->seller_name, "Auction", "Auction closed.", auction->price, NULL);
 	// Send Item to Buyer
 	inter_mail->sendmail(0, "Auction Manager", auction->buyer_id, auction->buyer_name, "Auction", "Auction winner.", 0, &auction->item);
-	mapif->auction_message(auction->buyer_id, 6); // You have won the auction
+	mapif->auction_message(auction->buyer_id, AUCTIONRESULT_WON); // You have won the auction
 	inter_auction->delete_(auction);
 
-	mapif->auction_close(fd, char_id, 0); // You have ended the auction
+	mapif->auction_close(act->session, char_id, AUCTIONCANCEL_SUCCESS); // You have ended the auction
 }
 
-static void mapif_auction_bid(int fd, int char_id, int bid, unsigned char result)
-{
-	WFIFOHEAD(fd, 11);
-	WFIFOW(fd, 0) = 0x3855;
-	WFIFOL(fd, 2) = char_id;
-	WFIFOL(fd, 6) = bid; // To Return Zeny
-	WFIFOB(fd, 10) = result;
-	WFIFOSET(fd, 11);
+/**
+ * 0x3855 ZW_AUCTION_BID_ACK <char_id>.L <bid>.L <result>.B
+ **/
+static void mapif_auction_bid(struct socket_data *session, int char_id, int bid,
+	enum e_auction_result_message result
+) {
+	WFIFOHEAD(session, 11, true);
+	WFIFOW(session, 0) = 0x3855;
+	WFIFOL(session, 2) = char_id;
+	WFIFOL(session, 6) = bid; // To Return Zeny
+	WFIFOB(session, 10) = result;
+	WFIFOSET(session, 11);
 }
 
-static void mapif_parse_auction_bid(int fd)
+/**
+ * 0x3055 ZW_AUCTION_BID_ACK <char_id>.L <auction_id>.L <bid>.L <buyer_name>
+ **/
+static void mapif_parse_auction_bid(struct s_receive_action_data *act)
 {
-	int char_id = RFIFOL(fd, 4), bid = RFIFOL(fd, 12);
-	unsigned int auction_id = RFIFOL(fd, 8);
-	struct auction_data *auction;
+	int char_id             = RFIFOL(act, 4);
+	unsigned int auction_id = RFIFOL(act, 8);
+	int bid                 = RFIFOL(act, 12);
+	struct auction_data *auction =
+		(struct auction_data *)idb_get(inter_auction->db, auction_id);
 
-	if ((auction = (struct auction_data *)idb_get(inter_auction->db, auction_id)) == NULL || auction->price >= bid || auction->seller_id == char_id) {
-		mapif->auction_bid(fd, char_id, bid, 0); // You have failed to bid in the auction
+	if(auction == NULL || auction->price >= bid || auction->seller_id == char_id) {
+		mapif->auction_bid(act->session, char_id, bid, AUCTIONRESULT_BID_FAILED);
 		return;
 	}
 
-	if (inter_auction->count(char_id, true) > 4 && bid < auction->buynow && auction->buyer_id != char_id) {
-		mapif->auction_bid(fd, char_id, bid, 9); // You cannot place more than 5 bids at a time
+	if(inter_auction->count(char_id, true) > 4
+	&& bid < auction->buynow
+	&& auction->buyer_id != char_id
+	) {
+		mapif->auction_bid(act->session, char_id, bid, AUCTIONRESULT_BID_EXCEEDED); // You cannot place more than 5 bids at a time
 		return;
 	}
 
-	if (auction->buyer_id > 0) {
+	if(auction->buyer_id > 0) {
 		// Send Money back to the previous Buyer
-		if (auction->buyer_id != char_id) {
-			inter_mail->sendmail(0, "Auction Manager", auction->buyer_id, auction->buyer_name, "Auction", "Someone has placed a higher bid.", auction->price, NULL);
-			mapif->auction_message(auction->buyer_id, 7); // You have failed to win the auction
+		if(auction->buyer_id != char_id) {
+			inter_mail->sendmail(0, "Auction Manager", auction->buyer_id,
+				auction->buyer_name,
+				"Auction", "Someone has placed a higher bid.",
+				auction->price, NULL);
+			mapif->auction_message(auction->buyer_id, AUCTIONRESULT_LOSE); // You have failed to win the auction
 		} else {
-			inter_mail->sendmail(0, "Auction Manager", auction->buyer_id, auction->buyer_name, "Auction", "You have placed a higher bid.", auction->price, NULL);
+			inter_mail->sendmail(0, "Auction Manager", auction->buyer_id,
+				auction->buyer_name,
+				"Auction", "You have placed a higher bid.",
+				auction->price, NULL);
 		}
 	}
 
 	auction->buyer_id = char_id;
-	safestrncpy(auction->buyer_name, RFIFOP(fd, 16), NAME_LENGTH);
+	safestrncpy(auction->buyer_name, RFIFOP(act, 16), NAME_LENGTH);
 	auction->price = bid;
 
-	if (bid >= auction->buynow) {
+	if(bid >= auction->buynow) {
 		// Automatic won the auction
-		mapif->auction_bid(fd, char_id, bid - auction->buynow, 1); // You have successfully bid in the auction
+		mapif->auction_bid(act, char_id, bid - auction->buynow, AUCTIONRESULT_BID_SUCCESS);
 
-		inter_mail->sendmail(0, "Auction Manager", auction->buyer_id, auction->buyer_name, "Auction", "You have won the auction.", 0, &auction->item);
-		mapif->auction_message(char_id, 6); // You have won the auction
-		inter_mail->sendmail(0, "Auction Manager", auction->seller_id, auction->seller_name, "Auction", "Payment for your auction!.", auction->buynow, NULL);
+		inter_mail->sendmail(0, "Auction Manager", auction->buyer_id,
+			auction->buyer_name,
+			"Auction", "You have won the auction.", 0, &auction->item);
+		mapif->auction_message(char_id, AUCTIONRESULT_WON); // You have won the auction
+		inter_mail->sendmail(0, "Auction Manager", auction->seller_id,
+			auction->seller_name,
+			"Auction", "Payment for your auction!.", auction->buynow, NULL);
 
 		inter_auction->delete_(auction);
 		return;
@@ -425,8 +925,12 @@ static void mapif_parse_auction_bid(int fd)
 
 	inter_auction->save(auction);
 
-	mapif->auction_bid(fd, char_id, 0, 1); // You have successfully bid in the auction
+	mapif->auction_bid(act->session, char_id, 0, AUCTIONRESULT_BID_SUCCESS); // You have successfully bid in the auction
 }
+
+/*======================================
+ * MAPIF : ELEMENTAL
+ *--------------------------------------*/
 
 static void mapif_elemental_send(int fd, struct s_elemental *ele, unsigned char flag)
 {
@@ -2057,14 +2561,20 @@ static void mapif_parse_ItemBoundRetrieve(int fd)
 	mapif->itembound_ack(fd, RFIFOL(fd, 6), RFIFOW(fd, 10));
 }
 
-static void mapif_parse_accinfo(int fd)
+/**
+ * 0x3007 ZW_ACCINFO_REQUEST <requester fd>.L <target aid>.L <requester group lvl>.W <target name>.NAME_LENGTH
+ * Parses account information request
+ **/
+static void mapif_parse_accinfo(struct s_receive_action_data *act)
 {
 	char query[NAME_LENGTH];
-	int u_fd = RFIFOL(fd, 2), aid = RFIFOL(fd, 6), castergroup = RFIFOL(fd, 10);
+	int u_fd = RFIFOL(act, 2);
+	int aid = RFIFOL(act, 6);
+	int castergroup = RFIFOL(act, 10);
 
-	safestrncpy(query, RFIFOP(fd, 14), NAME_LENGTH);
+	safestrncpy(query, RFIFOP(act, 14), NAME_LENGTH);
 
-	inter->accinfo(u_fd, aid, castergroup, query, fd);
+	inter->accinfo(u_fd, aid, castergroup, query, act->session_id);
 }
 
 #if 0
@@ -2109,8 +2619,13 @@ static int mapif_parse_Registry(int fd)
 		char sval[SCRIPT_STRING_VAR_LENGTH + 1];
 		bool isLoginActive = sockt->session_is_active(chr->login_fd);
 
+		/**
+		 * Prepare packet to request login-server to save, this packet is filled
+		 * in every call of inter->savereg, and then set to send in the end of
+		 * this function.
+		 **/
 		if (isLoginActive)
-			chr->global_accreg_to_login_start(account_id, char_id);
+			loginif->save_accreg2_head(account_id, char_id);
 
 		for (i = 0; i < count; i++) {
 			unsigned int index;
@@ -2147,7 +2662,7 @@ static int mapif_parse_Registry(int fd)
 		}
 
 		if (isLoginActive)
-			chr->global_accreg_to_login_send();
+			loginif->save_accreg2_send();
 	}
 	return 0;
 }
@@ -2163,7 +2678,7 @@ static int mapif_parse_RegistryRequest(int fd)
 		mapif->account_reg_reply(fd, RFIFOL(fd, 2), RFIFOL(fd, 6), 2); // 2: account reg
 	//Ask Login Server for Account2 values.
 	if (RFIFOB(fd, 10) != 0)
-		chr->request_accreg2(RFIFOL(fd, 2), RFIFOL(fd, 6));
+		loginif->request_accreg2(RFIFOL(fd, 2), RFIFOL(fd, 6));
 	return 1;
 }
 
@@ -2377,20 +2892,102 @@ static void mapif_rodex_getitemsack(int fd, int char_id, int64 mail_id, uint8 op
 	WFIFOSET(fd, 16 + sizeof(struct rodex_item) * RODEX_MAX_ITEM);
 }
 
+/**
+ * Frees mapif data
+ **/
+void mapif_final(void)
+{
+	int i;
+	for( i = 0; i < ARRAYLENGTH(chr->server); ++i ) //FIXME
+		mapif->server_destroy(i);
+
+	db_clear(mapif->packet_db);
+	aFree(mapif->packet_list);
+}
+
+/**
+ * Initializes mapif data
+ **/
+void mapif_init(void)
+{
+	struct {
+		int16 packet_id;
+		int16 packet_len;
+		MapifParseFunc *pFunc;
+	} inter_packet[] = {
+#define packet_def(name, fname) { HEADER_ ## name, sizeof(struct PACKET_ ## name), chr->parse_frommap_ ## fname }
+#define packet_def2(name, fname, len) { HEADER_ ## name, (len), chr->parse_frommap_ ## fname }
+	packet_def2(ZW_DATASYNC,             datasync, -1),
+	packet_def2(ZW_SKILLID2IDX,          skillid2idx, -1),
+	packet_def2(ZW_OWNED_MAP_LIST,       map_names, -1),
+	packet_def(ZW_REQUEST_SCDATA,        request_scdata),
+	packet_def(ZW_SEND_USERS_COUNT,      set_users_count),
+	packet_def2(ZW_USER_LIST,            set_users, -1),
+	packet_def2(ZW_SAVE_CHARACTER,       save_character, -1),
+	packet_def(ZW_CHAR_SELECT_REQ,       char_select_req),
+	packet_def(ZW_CHANGE_SERVER_REQUEST, change_map_server),
+	packet_def(ZW_REMOVE_FRIEND,         remove_friend),
+	packet_def(ZW_CHARNAME_REQUEST,      char_name_request),
+	packet_def(ZW_REQUEST_CHANGE_EMAIL,  change_email),
+	packet_def(ZW_UPDATE_ACCOUNT,        change_account),
+	packet_def(ZW_FAME_LIST_UPDATE,      fame_list),
+	packet_def(ZW_DIVORCE,               divorce_char),
+	packet_def(ZW_RATES,                 ragsrvinfo),
+	packet_def(ZW_SET_CHARACTER_OFFLINE, set_char_offline),
+	packet_def(ZW_SET_ALL_OFFLINE,       set_all_offline),
+	packet_def(ZW_SET_CHARACTER_ONLINE,  set_char_online),
+	packet_def(ZW_FAME_LIST_BUILD,       build_fame_list),
+	packet_def2(ZW_STATUS_CHANGE_SAVE,   save_status_change_data, -1),
+	packet_def(ZW_PING,                  ping),
+	packet_def(ZW_AUTH,                  auth_request),
+	packet_def(ZW_WAN_UPDATE,            update_ip),
+	packet_def(ZW_STATUS_CHANGE_UPDATE,  scdata_update),
+	packet_def(ZW_STATUS_CHANGE_DELETE,  scdata_delete),
+#undef packet_def
+#undef packet_def2
+	};
+	size_t length = ARRAYLENGTH(inter_packet);
+
+	mapif->packet_list = aMalloc(sizeof(*mapif->packet_list)*length);
+	mapif->packet_db = idb_alloc(DB_OPT_BASE);
+
+	// Fill packet db
+	for(size_t i = 0; i < length; i++) {
+		int exists;
+		mapif->packet_list[i].len = inter_packet[i].packet_len;
+		mapif->packet_list[i].pFunc = inter_packet[i].pFunc;
+		exists = idb_put(mapif->packet_db,
+			inter_packet[i].packet_id, &mapif->packet_list[i]);
+		if(exists) {
+			ShowWarning("mapif_init: Packet 0x%x already in database, replacing...\n",
+				inter_packet[i].packet_id);
+		}
+	}
+}
+
 void mapif_defaults(void)
 {
 	mapif = &mapif_s;
 
-	mapif->ban = mapif_ban;
-	mapif->server_init = mapif_server_init;
+	mapif->packet_db = NULL;
+	mapif->packet_list = NULL;
+
+	mapif->init = mapif_init;
+	mapif->final = mapif_final;
+
+	mapif->server_find = mapif_server_find;
 	mapif->server_destroy = mapif_server_destroy;
 	mapif->server_reset = mapif_server_reset;
 	mapif->on_disconnect = mapif_on_disconnect;
-	mapif->on_parse_accinfo = mapif_on_parse_accinfo;
+	mapif->on_connect = mapif_on_connect;
+
 	mapif->char_ban = mapif_char_ban;
+	mapif->update_state = mapif_update_state;
+
 	mapif->sendall = mapif_sendall;
 	mapif->sendallwos = mapif_sendallwos;
 	mapif->send = mapif_send;
+
 	mapif->send_users_count = mapif_send_users_count;
 	mapif->pLoadAchievements = mapif_parse_load_achievements;
 	mapif->sAchievementsToMap = mapif_send_achievements_to_map;

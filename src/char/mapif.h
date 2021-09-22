@@ -26,36 +26,88 @@
 struct rodex_item;
 
 /**
+ * Map inter-server parse function
+ * @see inter_parse_frommap
+ * @readlock chr->map_server_list_lock
+ **/
+typedef void (MapifParseFunc)(struct s_receive_action_data *act, struct mmo_map_server *server);
+
+/**
+ * Map inter-server packet information
+ * @see mapif_init
+ **/
+struct mapif_packet_entry {
+	int16 len;
+	MapifParseFunc *pFunc;
+};
+
+/**
  * mapif interface
  **/
 struct mapif_interface {
-	void (*ban) (int id, unsigned int flag, int status);
-	void (*server_init) (int id);
-	void (*server_destroy) (int id);
-	void (*server_reset) (int id);
-	void (*on_disconnect) (int id);
-	void (*on_parse_accinfo) (int account_id, int u_fd, int u_aid, int u_group, int map_fd);
-	void (*char_ban) (int char_id, time_t timestamp);
+	/**
+	 * Inter-server packet database (mapif)
+	 * This database doesn't have any locks because it's not meant to be edited
+	 * after it's creation.
+	 * @see mapif->init
+	 **/
+	struct DBMap *packet_db; // int16 packet_id -> struct mapif_packet_entry*
+	struct mapif_packet_entry *packet_list;
+
+	void (*init) (void);
+	void (*final) (void);
+
+	struct mmo_map_server *(*server_find) (struct socket_data *session);
+	void (*server_destroy)(struct mmo_map_server *server);
+	void (*server_reset)  (struct mmo_map_server *server);
+	void (*on_disconnect) (struct mmo_map_server *server);
+	struct mmo_map_server *(*on_connect) (struct socket_data *session, uint32 ip_, uint16 port_);
+
 	int (*sendall) (const unsigned char *buf, unsigned int len);
-	int (*sendallwos) (int sfd, unsigned char *buf, unsigned int len);
-	int (*send) (int fd, unsigned char *buf, unsigned int len);
+	int (*sendallwos) (struct mmo_map_server *server, unsigned char *buf, unsigned int len);
+	int (*send) (struct mmo_map_server *server, unsigned char *buf, unsigned int len);
+
+	void (*accinfo_request) (int account_id, int u_fd, int u_aid, int u_group, int map_id);
+	void (*update_state) (int id, unsigned char flag, unsigned int state);
+	void (*char_ban) (int char_id, time_t timestamp);
+	void (*change_sex) (int account_id, int sex);
+	void (*fame_list)(struct socket_data *session, struct fame_list *smith, int smith_len, struct fame_list *chemist, int chemist_len, struct fame_list *taekwon, int taekwon_len);
+	void (*fame_list_update) (enum fame_list_type type, int index, int fame);
+	void (*map_received) (struct socket_data *session, char *wisp_server_name, uint8 flag);
+	void (*send_maps) (struct mmo_map_server *server, int16 *map_list);
+
+	void (*scdata_head) (struct socket_data *session, int aid, int cid, int count);
+	void (*scdata_data) (struct socket_data *session, struct status_change_data *data);
+	void (*scdata_send) (struct socket_data *session);
+
+	void (*save_character_ack) (struct socket_data *session, int aid, int cid);
+	void (*char_select_ack) (struct socket_data *session, int account_id, uint8 flag);
+	void (*change_map_server_ack) (struct socket_data *session, const uint8 *data, bool ok);
+	void (*char_name_ack) (struct socket_data *session, int char_id);
+	void (*change_account_ack) (struct socket_data *session, int acc, const char *name, enum zh_char_ask_name_type type, int result);
+	void (*pong)(struct socket_data *session);
+	void (*auth_ok) (struct socket_data *session, int account_id, struct char_auth_node *node, struct mmo_charstatus *cd);
+	void (*auth_failed) (struct socket_data *session, int account_id, int char_id, int login_id1, char sex, uint32 ip);
+
 	void (*send_users_count) (int users);
 	void (*pLoadAchievements) (int fd);
 	void (*sAchievementsToMap) (int fd, int char_id, const struct char_achievements *p);
 	void (*pSaveAchievements) (int fd);
 	void (*achievement_load) (int fd, int char_id);
 	void (*achievement_save) (int char_id, struct char_achievements *p);
-	void (*auction_message) (int char_id, unsigned char result);
-	void (*auction_sendlist) (int fd, int char_id, short count, short pages, unsigned char *buf);
-	void (*parse_auction_requestlist) (int fd);
-	void (*auction_register) (int fd, struct auction_data *auction);
-	void (*parse_auction_register) (int fd);
-	void (*auction_cancel) (int fd, int char_id, unsigned char result);
-	void (*parse_auction_cancel) (int fd);
-	void (*auction_close) (int fd, int char_id, unsigned char result);
-	void (*parse_auction_close) (int fd);
-	void (*auction_bid) (int fd, int char_id, int bid, unsigned char result);
-	void (*parse_auction_bid) (int fd);
+
+	void (*auction_message) (int char_id, enum e_auction_result_message result);
+	void (*auction_sendlist) (struct socket_data *session, int char_id, short count, short pages, unsigned char *buf);
+	void (*parse_auction_requestlist) (struct s_receive_action_data *act);
+	void (*auction_register) (struct socket_data *session, struct auction_data *auction);
+	void (*parse_auction_register) (struct s_receive_action_data *act);
+	void (*auction_cancel) (struct socket_data *session, int char_id, enum e_auction_cancel result);
+	void (*parse_auction_cancel) (struct s_receive_action_data *act);
+	void (*auction_close) (struct socket_data *session, int char_id, enum e_auction_cancel result);
+	void (*parse_auction_close) (struct s_receive_action_data *act);
+	void (*auction_bid) (struct socket_data *session, int char_id, int bid, enum e_auction_result_message result);
+	void (*parse_auction_bid) (struct s_receive_action_data *act);
+
 	void (*elemental_send) (int fd, struct s_elemental *ele, unsigned char flag);
 	void (*parse_elemental_create) (int fd, const struct s_elemental *ele);
 	void (*parse_elemental_load) (int fd, int ele_id, int char_id);
@@ -63,6 +115,7 @@ struct mapif_interface {
 	void (*parse_elemental_delete) (int fd, int ele_id);
 	void (*elemental_saved) (int fd, unsigned char flag);
 	void (*parse_elemental_save) (int fd, const struct s_elemental *ele);
+
 	int (*guild_created) (int fd, int account_id, struct guild *g);
 	int (*guild_noinfo) (int fd, int guild_id);
 	int (*guild_info) (int fd, struct guild *g);
@@ -167,25 +220,25 @@ struct mapif_interface {
 	void (*rodex_getzenyack) (int fd, int char_id, int64 mail_id, uint8 opentype, int64 zeny);
 	void (*rodex_getitemsack) (int fd, int char_id, int64 mail_id, uint8 opentype, int count, const struct rodex_item *items);
 	int (*load_guild_storage) (int fd, int account_id, int guild_id, char flag);
-	int (*save_guild_storage_ack) (int fd, int account_id, int guild_id, int fail);
-	int (*parse_LoadGuildStorage) (int fd);
-	int (*parse_SaveGuildStorage) (int fd);
-	int (*account_storage_load) (int fd, int account_id);
-	int (*pAccountStorageLoad) (int fd);
-	int (*pAccountStorageSave) (int fd);
-	void (*sAccountStorageSaveAck) (int fd, int account_id, bool save);
-	int (*itembound_ack) (int fd, int aid, int guild_id);
-	void (*parse_ItemBoundRetrieve) (int fd);
-	void (*parse_accinfo) (int fd);
-	int (*account_reg_reply) (int fd,int account_id,int char_id, int type);
-	int (*disconnectplayer) (int fd, int account_id, int char_id, int reason);
-	int (*parse_Registry) (int fd);
-	int (*parse_RegistryRequest) (int fd);
-	void (*namechange_ack) (int fd, int account_id, int char_id, int type, int flag, const char *name);
-	int (*parse_NameChangeRequest) (int fd);
+	int (*save_guild_storage_ack) (struct s_receive_action_data *act, int account_id, int guild_id, int fail);
+	int (*parse_LoadGuildStorage) (struct s_receive_action_data *act);
+	int (*parse_SaveGuildStorage) (struct s_receive_action_data *act);
+	int (*account_storage_load) (struct s_receive_action_data *act, int account_id);
+	int (*pAccountStorageLoad) (struct s_receive_action_data *act);
+	int (*pAccountStorageSave) (struct s_receive_action_data *act);
+	void (*sAccountStorageSaveAck) (struct s_receive_action_data *act, int account_id, bool save);
+	int (*itembound_ack) (struct s_receive_action_data *act, int aid, int guild_id);
+	void (*parse_ItemBoundRetrieve) (struct s_receive_action_data *act);
+	void (*parse_accinfo) (struct s_receive_action_data *act);
+	int (*account_reg_reply) (struct s_receive_action_data *act,int account_id,int char_id, int type);
+	int (*disconnectplayer)  (struct session_data *session, int account_id, int char_id, int reason);
+	int (*parse_Registry) (struct s_receive_action_data *act);
+	int (*parse_RegistryRequest) (struct s_receive_action_data *act);
+	void (*namechange_ack) (struct s_receive_action_data *act, int account_id, int char_id, int type, int flag, const char *name);
+	int (*parse_NameChangeRequest) (struct s_receive_action_data *act);
 	// Clan System
-	int (*parse_ClanMemberKick) (int fd, int clan_id, int kick_interval);
-	int (*parse_ClanMemberCount) (int fd, int clan_id, int kick_interval);
+	int (*parse_ClanMemberKick)  (struct s_receive_action_data *act, int clan_id, int kick_interval);
+	int (*parse_ClanMemberCount) (struct s_receive_action_data *act, int clan_id, int kick_interval);
 };
 
 #ifdef HERCULES_CORE

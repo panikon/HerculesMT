@@ -2077,6 +2077,10 @@ static int intif_Auction_cancel(int char_id, unsigned int auction_id)
 	return 0;
 }
 
+/**
+ * 0x3852 WZ_AUCTION_CANCEL_ACK <char_id>.L <result>.B
+ * @see enum e_auction_cancel
+ **/
 static void intif_parse_AuctionCancel(int fd)
 {
 	struct map_session_data *sd = map->charid2sd(RFIFOL(fd,2));
@@ -2085,12 +2089,7 @@ static void intif_parse_AuctionCancel(int fd)
 	if( sd == NULL )
 		return;
 
-	switch( result ) {
-		case 0: clif->auction_message(sd->fd, 2); break;
-		case 1: clif->auction_close(sd->fd, 2); break;
-		case 2: clif->auction_close(sd->fd, 1); break;
-		case 3: clif->auction_message(sd->fd, 3); break;
-	}
+	clif->auction_close(fd, result);
 }
 
 static int intif_Auction_close(int char_id, unsigned int auction_id)
@@ -2162,7 +2161,10 @@ static void intif_parse_AuctionBid(int fd)
 	}
 }
 
-// Used to send 'You have won the auction' and 'You failed to won the auction' messages
+/**
+ * 0x3854 WZ_AUCTION_MESSAGE <char_id>.L <result>.B
+ * Relays an auction message from char-server to the character
+ **/
 static void intif_parse_AuctionMessage(int fd)
 {
 	struct map_session_data *sd = map->charid2sd(RFIFOL(fd,2));

@@ -61,13 +61,7 @@
     <ClCompile Include="..\src\common\utils.c">
       <Filter>common</Filter>
     </ClCompile>
-    <ClCompile Include="..\src\char\HPMchar.c">
-      <Filter>char</Filter>
-    </ClCompile>
     <ClCompile Include="..\src\char\char.c">
-      <Filter>char</Filter>
-    </ClCompile>
-    <ClCompile Include="..\src\char\geoip.c">
       <Filter>char</Filter>
     </ClCompile>
     <ClCompile Include="..\src\char\int_achievement.c">
@@ -109,13 +103,7 @@
     <ClCompile Include="..\src\char\inter.c">
       <Filter>char</Filter>
     </ClCompile>
-    <ClCompile Include="..\src\char\loginif.c">
-      <Filter>char</Filter>
-    </ClCompile>
     <ClCompile Include="..\src\char\mapif.c">
-      <Filter>char</Filter>
-    </ClCompile>
-    <ClCompile Include="..\src\char\pincode.c">
       <Filter>char</Filter>
     </ClCompile>
     <ClCompile Include="..\3rdparty\mt19937ar\mt19937ar.c">
@@ -150,6 +138,18 @@
     </ClCompile>
     <ClCompile Include="..\src\common\rwlock.c">
       <Filter>common</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\char\pincode.c">
+      <Filter>char\done_files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\char\loginif.c">
+      <Filter>char\done_files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\char\geoip.c">
+      <Filter>char\done_files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\char\HPMchar.c">
+      <Filter>char\done_files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -219,13 +219,7 @@
     <ClInclude Include="..\src\common\utils.h">
       <Filter>common</Filter>
     </ClInclude>
-    <ClInclude Include="..\src\char\HPMchar.h">
-      <Filter>char</Filter>
-    </ClInclude>
     <ClInclude Include="..\src\char\char.h">
-      <Filter>char</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\char\geoip.h">
       <Filter>char</Filter>
     </ClInclude>
     <ClInclude Include="..\src\char\int_achievement.h">
@@ -267,13 +261,7 @@
     <ClInclude Include="..\src\char\inter.h">
       <Filter>char</Filter>
     </ClInclude>
-    <ClInclude Include="..\src\char\loginif.h">
-      <Filter>char</Filter>
-    </ClInclude>
     <ClInclude Include="..\src\char\mapif.h">
-      <Filter>char</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\char\pincode.h">
       <Filter>char</Filter>
     </ClInclude>
     <ClInclude Include="..\3rdparty\mt19937ar\mt19937ar.h">
@@ -348,6 +336,27 @@
     <ClInclude Include="..\src\common\rwlock.h">
       <Filter>common</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\common\packets_aw_struct.h">
+      <Filter>char\packets</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\common\packets_wa_struct.h">
+      <Filter>char\packets</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\char\pincode.h">
+      <Filter>char\done_files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\char\loginif.h">
+      <Filter>char\done_files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\char\geoip.h">
+      <Filter>char\done_files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\char\HPMchar.h">
+      <Filter>char\done_files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\common\packets_zw_struct.h">
+      <Filter>char\packets</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="common">
@@ -367,6 +376,12 @@
     </Filter>
     <Filter Include="config">
       <UniqueIdentifier>{d2dbc907-ce23-48c3-85ac-049ff2a8c728}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="char\packets">
+      <UniqueIdentifier>{82b51b32-a227-484a-9ce6-dfba000f539a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="char\done_files">
+      <UniqueIdentifier>{1d768c41-fb00-4c0a-9a69-168dfeb0cad4}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>

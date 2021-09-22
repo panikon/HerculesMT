@@ -40,23 +40,21 @@ struct inter_interface {
 	bool (*msg_config_read) (const char *cfg_name, bool allow_override);
 	void (*do_final_msg) (void);
 	const char* (*job_name) (int class);
-	void (*vmsg_to_fd) (int fd, int u_fd, int aid, char* msg, va_list ap);
-	void (*msg_to_fd) (int fd, int u_fd, int aid, char *msg, ...) __attribute__((format(printf, 4, 5)));
+	void (*vmsg_to_fd) (int map_id, int u_fd, int aid, char* msg, va_list ap);
+	void (*msg_to_fd) (int map_id, int u_fd, int aid, char *msg, ...) __attribute__((format(printf, 4, 5)));
 	void (*savereg) (int account_id, int char_id, const char *key, unsigned int index, intptr_t val, bool is_string);
-	int (*accreg_fromsql) (int account_id,int char_id, int fd, int type);
+	int (*accreg_fromsql) (int account_id,int char_id, struct socket_data *session, int type);
 	int (*vlog) (char* fmt, va_list ap);
 	int (*log) (char* fmt, ...);
 	int (*init_sql) (const char *file);
-	int (*mapif_init) (int fd);
-	int (*check_length) (int fd, int length);
-	int (*parse_frommap) (int fd);
+	int (*mapif_init) (struct socket_data *session);
 	void (*final) (void);
 	bool (*config_read) (const char *filename, bool imported);
 	bool (*config_read_log) (const char *filename, const struct config_t *config, bool imported);
 	bool (*config_read_connection) (const char *filename, const struct config_t *config, bool imported);
-	void (*accinfo) (int u_fd, int aid, int castergroup, const char *query, int map_fd);
-	void (*accinfo2) (bool success, int map_fd, int u_fd, int u_aid, int account_id, const char *userid, const char *user_pass,
-			const char *email, const char *last_ip, const char *lastlogin, const char *pin_code, const char *birthdate,
+	void (*accinfo) (int u_fd, int aid, int castergroup, const char *query, int map_id);
+	void (*accinfo_ack) (bool success, int map_fd, int u_fd, int u_aid, int account_id, const char *userid,
+			const char *email, const char *last_ip, const char *lastlogin, const char *birthdate,
 			int group_id, int logincount, int state);
 };
 

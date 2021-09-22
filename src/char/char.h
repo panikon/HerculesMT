@@ -36,8 +36,15 @@ enum E_CHARSERVER_ST {
 	CHARSERVER_ST_LAST
 };
 
+/**
+ * Character session data
+ *
+ * This data is only used while the player is logged only in the char-server,
+ * so all access to its members is sequential in a single Action Worker. Thus
+ * There's no need to use any mutexes to access it.
+ **/
 struct char_session_data {
-	bool auth; // whether the session is authed or not
+	bool auth; // Authentication state inside the char-server
 	int account_id, login_id1, login_id2, sex;
 	int found_char[MAX_CHARS]; // ids of chars on this account
 	time_t unban_time[MAX_CHARS]; // char unban time array
@@ -51,32 +58,72 @@ struct char_session_data {
 	uint32 pincode_seed;
 	uint16 pincode_try;
 	uint32 pincode_change;
-	char new_name[NAME_LENGTH];
 	char birthdate[10+1];  // YYYY-MM-DD
+	/**
+	 * Rename process data.
+	 **/
+	struct {
+		/**
+		 * New character name, used when there's a renaming process.
+		 *
+		 * The client sends the desired name and after server confirmation that
+		 * the name is valid the player needs to reconfirm that the change is
+		 * still desired.
+		 * @see chclif_parse_rename
+		 **/
+		char new_name[NAME_LENGTH*2+1];
+		int char_id;
+	} *rename;
 };
 
 struct online_char_data {
 	int account_id;
 	int char_id;
-	int fd;
+	int session_id;
+	// Account timeout timer id when moving to map-server
 	int waiting_disconnect;
 	short server; // -2: unknown server, -1: not connected, 0+: id of server
+	/**
+	 * Should the player be queried for the pincode? (2: true)
+	 * @see pincode_handle
+	 **/
 	int pincode_enable;
 };
 
+/**
+ * Map-server information
+ **/
 struct mmo_map_server {
-	int fd;
+	uint32 pos; // Position in list (@see char_interface::map_server_list)
+
+	struct socket_data *session;
 	uint32 ip;
 	uint16 port;
-	int users;
-	VECTOR_DECL(uint16) maps;
+
+	int user_count; // Current user count (accessed via InterLocked)
+	VECTOR_DECL(uint16) maps; // Maps owned by this map-server
+	/**
+	 * TODO: This map list is searched for several times (everytime a player
+	 * changes server or logs in), this should be a hashtable.
+	 **/
 };
+INDEX_MAP_STRUCT_DECL(s_mmo_map_server_list, struct mmo_map_server);
+#define MAP_SERVER_LIST_INITIAL_LENGTH 1 // Initial length of map-server list (multiplied by 32) @see do_init
 
 /**
  * deprecated feature, multi map been a dangerous in-complete feature for so long and going to be removed.
  * USE IT AT YOUR OWN RISK!
  */
 #define MAX_MAP_SERVERS 1
+
+/**
+ * Linked list of all action workers active in this server with the
+ * map-server that's attached.
+ **/
+struct s_action_information {
+	uint32_t index;
+	struct mmo_map_server *server;
+};
 
 #define DEFAULT_AUTOSAVE_INTERVAL (300*1000)
 
@@ -100,14 +147,68 @@ struct char_auth_node {
 };
 
 /**
+ * HC_REFUSE_MAKECHAR Error Codes
+ * @see char_creation_failed
+ **/
+enum refuse_make_char_errorcode {
+	RMCE_CREATED = -1,  // Character successfuly created (internal)
+	RMCE_ALREADY_EXISTS,// "Character Name already exists"
+	RMCE_UNDERAGED,     // "You are underaged"
+	RMCE_SYMBOLS,       // "Symbols in Character Names are forbidden"
+	RMCE_NOT_ELIGIBLE,  // "You are not eligible to open the Character Slot"
+	RMCE_DENIED,        // "Character Creation is denied"
+	// 5 - 10 RMCE_DENIED
+	RMCE_PREMIUM = 11,  // "This service is only available for premium users"
+	RMCE_INVALID,       // "Character name is invalid"
+	// 12 - 129 RMCE_DENIED
+};
+
+/**
+ * HC_ACK_CHANGE_CHARNAME Result list
+ * @see chr->rename_char_ack
+ **/
+enum change_charname_result {
+	CRR_SUCCESS = 0,      // Success
+	CRR_ALREADY_CHANGED,  // The Character Name was changed before. You can not change the name more than once
+	CRR_INCORRECT_USER,   // User information is not correct
+	CRR_FAILED,           // Changing character name has failed
+	CRR_DUPLICATE,        // Other user already selected the character name. Please use other name.
+	CRR_BELONGS_TO_GUILD, // MSG_FAILED_RENAME_BELONGS_TO_GUILD
+	CRR_BELONGS_TO_PARTY, // MSG_FAILED_RENAME_BELONGS_TO_PARTY
+};
+
+/**
  * char interface
  **/
 struct char_interface {
-	struct mmo_map_server server[MAX_MAP_SERVERS];
-	int login_fd;
+	struct ers_collection_t *ers_collection;
+
+	/**
+	 * List of all connected map-servers
+	 **/
+	struct s_mmo_map_server_list map_server_list;
+	struct rwlock_data *map_server_list_lock;
+	//struct mmo_map_server server[MAX_MAP_SERVERS];
+
+	/**
+	 * Action queue information
+	 * Used to find which queue is being used to process each server.
+	 * Login-server uses any of the available workers.
+	 **/
+	struct linkdb_node *action_information; // <server> <s_action_information>
+	struct mutex_data *action_information_mutex;
+
+	struct socket_data *login_session;
 	int char_fd;
 	struct DBMap *online_char_db; // int account_id -> struct online_char_data*
-	struct DBMap *char_db_;
+	struct DBMap *char_db_; // int char_id -> struct mmo_charstatus*
+	/**
+	 * Players connected to the char-server
+	 * @see char_disconnect_player
+	 * @see char_connect_add
+	 * @see char_connect_remove
+	 **/
+	struct DBMap *connected_db; // int account_id -> struct socket_data*
 	char userid[NAME_LENGTH];
 	char passwd[NAME_LENGTH];
 	char server_name[20];
@@ -126,11 +227,10 @@ struct char_interface {
 
 	char db_path[256]; //< Database directory (db)
 
+	void (*escape_normalize_name)(const char *name, char *esc_name);
 	int (*waiting_disconnect) (int tid, int64 tick, int id, intptr_t data);
 	int (*delete_char_sql) (int char_id);
 	struct DBData (*create_online_char_data) (union DBKey key, va_list args);
-	void (*set_account_online) (int account_id);
-	void (*set_account_offline) (int account_id);
 	void (*set_char_charselect) (int account_id);
 	void (*set_char_online) (int map_id, int char_id, int account_id);
 	void (*set_char_offline) (int char_id, int account_id);
@@ -139,19 +239,22 @@ struct char_interface {
 	void (*set_login_all_offline) (void);
 	void (*set_all_offline) (int id);
 	void (*set_all_offline_sql) (void);
+	void (*delete_charstatus) (struct DBKey_s *key, struct DBData data, enum DBReleaseOption which);
 	struct DBData (*create_charstatus) (union DBKey key, va_list args);
 	int (*mmo_char_tosql) (int char_id, struct mmo_charstatus* p);
 	int (*getitemdata_from_sql) (struct item *items, int max, int guid, enum inventory_table_type table);
 	int (*memitemdata_to_sql) (const struct item items[], int current_size, int guid, enum inventory_table_type table);
 	int (*mmo_gender) (const struct char_session_data *sd, const struct mmo_charstatus *p, char sex);
 	int (*mmo_chars_fromsql) (struct char_session_data* sd, uint8* buf, int *count);
-	int (*mmo_char_fromsql) (int char_id, struct mmo_charstatus* p, bool load_everything);
+	int (*mmo_char_fromsql) (int char_id, struct mmo_charstatus *out_db, bool load_everything);
 	int (*mmo_char_sql_init) (void);
+	int (*get_map_server)(struct mmo_charstatus *cd);
+	void (*log_select) (struct mmo_charstatus *cd, int slot);
 	bool (*char_slotchange) (struct char_session_data *sd, int fd, unsigned short from, unsigned short to);
 	int (*rename_char_sql) (struct char_session_data *sd, int char_id);
 	bool (*name_exists) (const char *name, const char *esc_name);
-	int (*check_char_name) (const char *name, const char *esc_name);
-	int (*make_new_char_sql) (struct char_session_data *sd, const char *name_, int str, int agi, int vit, int int_, int dex, int luk, int slot, int hair_color, int hair_style, int starting_job, uint8 sex);
+	enum refuse_make_char_errorcode (*check_char_name) (const char *name, const char *esc_name);
+	enum refuse_make_char_errorcode (*make_new_char_sql) (struct char_session_data *sd, const char *name_, int str, int agi, int vit, int int_, int dex, int luk, int slot, int hair_color, int hair_style, int starting_job, uint8 sex, int *out_char_id);
 	int (*divorce_char_sql) (int partner_id1, int partner_id2);
 	int (*count_users) (void);
 	int (*mmo_char_tobuf) (uint8* buffer, struct mmo_charstatus* p);
@@ -164,55 +267,32 @@ struct char_interface {
 	int (*char_child) (int parent_id, int child_id);
 	int (*char_family) (int cid1, int cid2, int cid3);
 	void (*disconnect_player) (int account_id);
-	void (*authfail_fd) (int fd, int type);
-	void (*request_account_data) (int account_id);
+	void (*connect_add) (int account_id, struct socket_data *session);
+	void (*connect_remove) (int account_id);
+	void (*authfail_fd) (struct socket_data *session, enum notify_ban_errorcode flag);
 	void (*auth_ok) (int fd, struct char_session_data *sd);
 	void (*ping_login_server) (int fd);
-	int (*parse_fromlogin_connection_state) (int fd);
 	void (*auth_error) (int fd, unsigned char flag);
-	void (*parse_fromlogin_auth_state) (int fd);
-	void (*parse_fromlogin_account_data) (int fd);
-	void (*parse_fromlogin_login_pong) (int fd);
-	void (*changesex) (int account_id, int sex);
-	int (*parse_fromlogin_changesex_reply) (int fd);
-	void (*parse_fromlogin_account_reg2) (int fd);
-	void (*parse_fromlogin_ban) (int fd);
-	void (*parse_fromlogin_kick) (int fd);
 	void (*update_ip) (int fd);
-	void (*parse_fromlogin_update_ip) (int fd);
-	void (*parse_fromlogin_accinfo2_failed) (int fd);
-	void (*parse_fromlogin_accinfo2_ok) (int fd);
-	int (*parse_fromlogin) (int fd);
-	int (*request_accreg2) (int account_id, int char_id);
-	void (*global_accreg_to_login_start) (int account_id, int char_id);
-	void (*global_accreg_to_login_send) (void);
-	void (*global_accreg_to_login_add) (const char *key, unsigned int index, intptr_t val, bool is_string);
 	void (*read_fame_list) (void);
-	int (*send_fame_list) (int fd);
-	void (*update_fame_list) (int type, int index, int fame);
 	int (*loadName) (int char_id, char* name);
-	void (*parse_frommap_datasync) (int fd);
+	void (*parse_frommap_datasync) (struct s_receive_action_data *act);
 	void (*parse_frommap_skillid2idx) (int fd);
-	void (*map_received_ok) (int fd);
-	void (*send_maps) (int fd, int id, int j);
 	void (*parse_frommap_map_names) (int fd, int id);
 	void (*send_scdata) (int fd, int aid, int cid);
 	void (*parse_frommap_request_scdata) (int fd);
 	void (*parse_frommap_set_users_count) (int fd, int id);
 	void (*parse_frommap_set_users) (int fd, int id);
-	void (*save_character_ack) (int fd, int aid, int cid);
 	void (*parse_frommap_save_character) (int fd, int id);
-	void (*select_ack) (int fd, int account_id, uint8 flag);
 	void (*parse_frommap_char_select_req) (int fd);
-	void (*change_map_server_ack) (int fd, const uint8 *data, bool ok);
 	void (*parse_frommap_change_map_server) (int fd);
 	void (*parse_frommap_remove_friend) (int fd);
-	void (*char_name_ack) (int fd, int char_id);
 	void (*parse_frommap_char_name_request) (int fd);
 	void (*parse_frommap_change_email) (int fd);
+	void (*kick) (int account_id);
 	void (*ban) (int account_id, int char_id, time_t *unban_time, short year, short month, short day, short hour, short minute, short second);
 	void (*unban) (int char_id, int *result);
-	void (*ask_name_ack) (int fd, int acc, const char* name, int type, int result);
+	void (*changecharsex_all) (int account_id, int sex);
 	int (*changecharsex) (int char_id, int sex);
 	void (*parse_frommap_change_account) (int fd);
 	void (*parse_frommap_fame_list) (int fd);
@@ -223,18 +303,18 @@ struct char_interface {
 	void (*parse_frommap_set_char_online) (int fd, int id);
 	void (*parse_frommap_build_fame_list) (int fd);
 	void (*parse_frommap_save_status_change_data) (int fd);
-	void (*send_pong) (int fd);
 	void (*parse_frommap_ping) (int fd);
-	void (*map_auth_ok) (int fd, int account_id, struct char_auth_node* node, struct mmo_charstatus* cd);
-	void (*map_auth_failed) (int fd, int account_id, int char_id, int login_id1, char sex, uint32 ip);
-	void (*parse_frommap_auth_request) (int fd, int id);
-	void (*parse_frommap_update_ip) (int fd, int id);
-	void (*parse_frommap_scdata_update) (int fd);
-	void (*parse_frommap_scdata_delete) (int fd);
-	int (*parse_frommap) (int fd);
+	void (*parse_frommap_auth_request) (struct s_receive_action_data *act, int id);
+	void (*parse_frommap_update_ip)    (struct s_receive_action_data *act, int id);
+	void (*parse_frommap_scdata_update) (struct s_receive_action_data *act);
+	void (*parse_frommap_scdata_delete) (struct s_receive_action_data *act);
+	enum parsefunc_rcode (*parse_frommap) (struct s_receive_action_data *act);
 	int (*search_mapserver) (unsigned short map, uint32 ip, uint16 port);
 	int (*mapif_init) (int fd);
 	uint32 (*lan_subnet_check) (uint32 ip);
+	int (*can_delete) (int char_id, int *out_delete_date);
+	bool (*delete_remove_queue) (int char_id);
+	int (*delete_insert_queue) (int char_id, time_t *delete_timestamp);
 	void (*delete2_ack) (int fd, int char_id, uint32 result, time_t delete_date);
 	void (*delete2_accept_actual_ack) (int fd, int char_id, uint32 result);
 	void (*delete2_accept_ack) (int fd, int char_id, uint32 result);
@@ -243,44 +323,49 @@ struct char_interface {
 	void (*delete2_accept) (int fd, struct char_session_data* sd);
 	void (*delete2_cancel) (int fd, struct char_session_data* sd);
 	void (*send_account_id) (int fd, int account_id);
-	void (*parse_char_connect) (int fd, struct char_session_data* sd, uint32 ipl);
-	void (*send_map_info) (int fd, int i, uint32 subnet_map_ip, struct mmo_charstatus *cd, char *dnsHost);
+	void (*parse_char_connect) (struct s_receive_action_data *act, struct char_session_data* sd, uint32 ipl);
+	void (*send_map_info) (struct socket_data *session, uint32 subnet_map_ip, uint32 map_ip, uint16 map_port, struct mmo_charstatus *cd, char *dnsHost);
+	void (*create_auth_entry)(struct char_session_data *sd, int char_id, int ipl, bool changing_map_servers);
 	void (*send_wait_char_server) (int fd);
 	int (*search_default_maps_mapserver) (struct mmo_charstatus *cd);
-	void (*parse_char_select) (int fd, struct char_session_data* sd, uint32 ipl);
-	void (*creation_failed) (int fd, int result);
+	void (*parse_char_select) (struct s_receive_action_data *act, struct char_session_data* sd, uint32 ipl);
+	void (*creation_failed) (struct socket_data *session, enum refuse_make_char_errorcode result);
 	void (*creation_ok) (int fd, struct mmo_charstatus *char_dat);
-	void (*parse_char_create_new_char) (int fd, struct char_session_data* sd);
+	void (*parse_char_create_new_char) (struct s_receive_action_data *act, struct char_session_data* sd);
 	void (*delete_char_failed) (int fd, int flag);
 	void (*delete_char_ok) (int fd);
-	void (*parse_char_delete_char) (int fd, struct char_session_data* sd, unsigned short cmd);
-	void (*parse_char_ping) (int fd);
+	void (*parse_char_delete_char) (struct s_receive_action_data *act, struct char_session_data* sd, unsigned short cmd);
+	void (*parse_char_ping) (struct s_receive_action_data *act);
 	void (*allow_rename) (int fd, int flag);
-	void (*parse_char_rename_char) (int fd, struct char_session_data* sd);
-	void (*parse_char_rename_char2) (int fd, struct char_session_data* sd);
+	void (*parse_char_rename_char)  (struct s_receive_action_data *act, struct char_session_data* sd);
+	void (*parse_char_rename_char2) (struct s_receive_action_data *act, struct char_session_data* sd);
 	void (*rename_char_ack) (int fd, int flag);
 	void (*parse_char_rename_char_confirm) (int fd, struct char_session_data* sd);
 	void (*captcha_notsupported) (int fd);
-	void (*parse_char_request_captcha) (int fd);
-	void (*parse_char_check_captcha) (int fd);
-	void (*parse_char_delete2_req) (int fd, struct char_session_data* sd);
-	void (*parse_char_delete2_accept) (int fd, struct char_session_data* sd);
-	void (*parse_char_delete2_cancel) (int fd, struct char_session_data* sd);
+	void (*parse_char_request_captcha) (struct s_receive_action_data *act);
+	void (*parse_char_check_captcha)   (struct s_receive_action_data *act);
+	void (*parse_char_delete2_req)     (struct s_receive_action_data *act, struct char_session_data* sd);
+	void (*parse_char_delete2_accept)  (struct s_receive_action_data *act, struct char_session_data* sd);
+	void (*parse_char_delete2_cancel)  (struct s_receive_action_data *act, struct char_session_data* sd);
 	void (*login_map_server_ack) (int fd, uint8 flag);
-	void (*parse_char_login_map_server) (int fd, uint32 ipl);
-	void (*parse_char_pincode_check) (int fd, struct char_session_data* sd);
-	void (*parse_char_pincode_window) (int fd, struct char_session_data* sd);
-	void (*parse_char_pincode_change) (int fd, struct char_session_data* sd);
-	void (*parse_char_pincode_first_pin) (int fd, struct char_session_data* sd);
-	void (*parse_char_request_chars) (int fd, struct char_session_data* sd);
+	void (*parse_char_login_map_server) (struct s_receive_action_data *act, uint32 ipl);
+	void (*parse_char_pincode_check)  (struct s_receive_action_data *act, struct char_session_data* sd);
+	void (*parse_char_pincode_window) (struct s_receive_action_data *act, struct char_session_data* sd);
+	void (*parse_char_pincode_change) (struct s_receive_action_data *act, struct char_session_data* sd);
+	void (*parse_char_pincode_first_pin) (struct s_receive_action_data *act, struct char_session_data* sd);
+	void (*parse_char_request_chars) (struct s_receive_action_data *act, struct char_session_data* sd);
 	void (*change_character_slot_ack) (int fd, bool ret);
-	void (*parse_char_move_character) (int fd, struct char_session_data* sd);
-	int (*parse_char_unknown_packet) (int fd, uint32 ipl);
-	int (*parse_char) (int fd);
-	int (*broadcast_user_count) (int tid, int64 tick, int id, intptr_t data);
-	int (*send_accounts_tologin_sub) (union DBKey key, struct DBData *data, va_list ap);
-	int (*send_accounts_tologin) (int tid, int64 tick, int id, intptr_t data);
-	int (*check_connect_login_server) (int tid, int64 tick, int id, intptr_t data);
+	void (*parse_char_move_character) (struct s_receive_action_data *act, struct char_session_data* sd);
+	int (*parse_char_unknown_packet)  (struct s_receive_action_data *act, uint32 ipl);
+
+	int (*slot2id)(int account_id, int slot);
+	void (*select)(struct socket_data *session, struct char_session_data *sd, uint32 ipl);
+	enum notify_ban_errorcode (*auth)(struct socket_data *session, struct char_session_data *sd, int ipl);
+	void (*disconnect)(struct socket_data *session, struct char_session_data *sd);
+	enum parsefunc_rcode (*parse_entry) (struct s_receive_action_data *act);
+
+	int (*broadcast_user_count) (struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data);
+	int (*check_connect_login_server) (struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data);
 	int (*online_data_cleanup_sub) (union DBKey key, struct DBData *data, va_list ap);
 	int (*online_data_cleanup) (int tid, int64 tick, int id, intptr_t data);
 
@@ -301,6 +386,11 @@ struct char_interface {
 	bool (*config_set_ip) (const char *type, const char *value, uint32 *out_ip, char *out_ip_str);
 	bool (*config_read_inter) (const char *filename, const struct config_t *config, bool imported);
 	bool (*config_read_top) (const char *filename, const struct config_t *config, bool imported);
+	void (*config_update_ip) (void);
+
+	int (*gm_allow_group_get) (void);
+	int (*max_connect_user_get) (void);
+	int (*maintenance_min_group_id_get) (void);
 };
 
 #ifdef HERCULES_CORE

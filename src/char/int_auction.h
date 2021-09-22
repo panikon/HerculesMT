@@ -38,7 +38,8 @@ struct inter_auction_interface {
 	int (*end_timer) (int tid, int64 tick, int id, intptr_t data);
 	void (*delete_) (struct auction_data *auction);
 	void (*fromsql) (void);
-	int (*parse_frommap) (int fd);
+
+	enum parsefunc_rcode (*parse_frommap) (struct s_receive_action_data *act);
 	int (*sql_init) (void);
 	void (*sql_final) (void);
 };

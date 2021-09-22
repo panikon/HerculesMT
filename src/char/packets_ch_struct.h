@@ -26,9 +26,9 @@
 #include "common/packetsstatic_len.h"
 
 /**
- * Account-World packets (login - char server) IDs
+ * Client-Char-server packet IDs
  **/
-enum inter_packet_aw_id {
+enum ch_packet_id {
 	HEADER_CH_ENTER = 0x065, // chclif_parse_enter
 	HEADER_CH_SELECT_CHAR = 0x066, // chclif_parse_select_char
 #if PACKETVER >= 20151001

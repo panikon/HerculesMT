@@ -38,6 +38,7 @@
 #include "char/int_storage.h"
 #include "char/int_achievement.h"
 #include "char/mapif.h"
+#include "char/loginif.h"
 #include "common/cbasetypes.h"
 #include "common/conf.h"
 #include "common/db.h"
@@ -64,20 +65,6 @@ static char char_server_db[32] = "ragnarok";
 static char default_codepage[32] = ""; //Feature by irmin.
 
 int party_share_level = 10;
-
-// recv. packet list
-static int inter_recv_packet_length[] = {
-	 0, 0, 0, 0, -1,13,36, (2 + 4 + 4 + 4 + NAME_LENGTH),  0, 0, 0, 0,  0, 0,  0, 0, // 3000-
-	 6,-1, 6,-1,  0, 0, 0, 0, 10,-1, 0, 0,  0, 0,  0, 0,    // 3010- Account Storage, Achievements [Smokexyz]
-	-1,10,-1,14, 14,19, 6, 0, 14,14, 0, 0,  0, 0,  0, 0,    // 3020- Party
-	-1, 6,-1,-1, 55,23, 6, 0, 14,-1,-1,-1, 18,19,186,-1,    // 3030-
-	-1, 9, 0, 0, 10,10, 0, 0,  7, 6,10,10, 10,-1,  0, 0,    // 3040- Clan System(3044-3045)
-	-1,-1,10,10,  0,-1,12, 0,  0, 0, 0, 0,  0, 0,  0, 0,    // 3050-  Auction System [Zephyrus], Item Bound [Mhalicot]
-	 6,-1, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0,  0, 0,    // 3060-  Quest system [Kevin] [Inkfish]
-	-1,10, 6,-1,  0, 0, 0, 0,  0, 0, 0, 0, -1,10,  6,-1,    // 3070-  Mercenary packets [Zephyrus], Elemental packets [pakpil]
-	56,14,-1, 6,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0,  0, 0,    // 3080-
-	-1,10,-1, 6,  0, 20,10,20, -1,6 + NAME_LENGTH, 0, 0,  0, 0,  0, 0,    // 3090-  Homunculus packets [albator], RoDEX packets
-};
 
 #define MAX_JOB_NAMES 150
 static char *msg_table[MAX_JOB_NAMES]; //  messages 550 ~ 699 are job names
@@ -391,53 +378,75 @@ static const char *inter_job_name(int class)
 }
 
 /**
+ * 0x3807 WZ_MSG_TO_FD
  * Argument-list version of inter_msg_to_fd
  * @see inter_msg_to_fd
  */
-static void inter_vmsg_to_fd(int fd, int u_fd, int aid, char *msg, va_list ap)
+static void inter_vmsg_to_fd(int map_id, int u_fd, int aid, char *msg, va_list ap)
 {
 	char msg_out[512];
 	va_list apcopy;
 	int len = 1;/* yes we start at 1 */
+
+	struct socket_data *session = socket_io->session_from_id(map_id);
+	if(!session)
+		return;
 
 	nullpo_retv(msg);
 	va_copy(apcopy, ap);
 	len += vsnprintf(msg_out, 512, msg, apcopy);
 	va_end(apcopy);
 
-	WFIFOHEAD(fd,12 + len);
+	WFIFOHEAD(session, 12 + len, true);
 
-	WFIFOW(fd,0) = 0x3807;
-	WFIFOW(fd,2) = 12 + (unsigned short)len;
-	WFIFOL(fd,4) = u_fd;
-	WFIFOL(fd,8) = aid;
-	safestrncpy(WFIFOP(fd,12), msg_out, len);
+	WFIFOW(session,0) = 0x3807;
+	WFIFOW(session,2) = 12 + (unsigned short)len;
+	WFIFOL(session,4) = u_fd;
+	WFIFOL(session,8) = aid;
+	safestrncpy(WFIFOP(session,12), msg_out, len);
 
-	WFIFOSET(fd,12 + len);
+	WFIFOSET(session,12 + len);
 
 	return;
 }
 
 /**
- * Sends a message to map server (fd) to a user (u_fd) although we use fd we
+ * Sends a message to map server (id) to a user (u_fd) although we use fd we
  * keep aid for safe-check.
- * @param fd   Mapserver's fd
- * @param u_fd Recipient's fd
- * @param aid  Recipient's expected for sanity checks on the mapserver
- * @param msg  Message format string
- * @param ...  Additional parameters for (v)sprinf
+ * @param map_id   Mapserver's id
+ * @param u_fd     Recipient's fd
+ * @param aid      Recipient's expected for sanity checks on the mapserver
+ * @param msg      Message format string
+ * @param ...      Additional parameters for (v)sprinf
  */
-static void inter_msg_to_fd(int fd, int u_fd, int aid, char *msg, ...) __attribute__((format(printf, 4, 5)));
-static void inter_msg_to_fd(int fd, int u_fd, int aid, char *msg, ...)
+static void inter_msg_to_fd(int map_id, int u_fd, int aid, char *msg, ...) __attribute__((format(printf, 4, 5)));
+static void inter_msg_to_fd(int map_id, int u_fd, int aid, char *msg, ...)
 {
 	va_list ap;
 	va_start(ap,msg);
-	inter->vmsg_to_fd(fd, u_fd, aid, msg, ap);
+	inter->vmsg_to_fd(map_id, u_fd, aid, msg, ap);
 	va_end(ap);
 }
 
-/* [Dekamaster/Nightroad] */
-static void inter_accinfo(int u_fd, int aid, int castergroup, const char *query, int map_fd)
+/**
+ * Processes account information request and relays to login-server
+ * When the account isn't found relays message to map-server via inter->msg_to_fd,
+ * otherwise calls loginif->accinfo_request and sends 0x2740 to login.
+ *
+ * @param u_fd        Requester fd
+ * @param aid         AID to be searched for (-1 search for query instead)
+ * @param castergroup Requester group level
+ * @param query       Character name to be searched for
+ * @param map_id      Session id of the requester map server
+ * @author [Dekamaster/Nightroad]
+ * @remarks Triggered by 0x3007 @see mapif->parse_accinfo
+ *
+ * [Map]   0x3007 ZW_ACCINFO_REQUEST
+ * [Char]  0x2740 WA_ACCOUNT_INFO_REQUEST
+ * [Login] 0x2743 (success) / 0x2744 (failed)
+ * [Char]  0x3807 WZ_MSG_TO_FD
+ **/
+static void inter_accinfo(int u_fd, int aid, int castergroup, const char *query, int map_id)
 {
 	char query_esq[NAME_LENGTH*2+1];
 	int account_id;
@@ -448,96 +457,114 @@ static void inter_accinfo(int u_fd, int aid, int castergroup, const char *query,
 	account_id = atoi(query);
 
 	if (account_id < START_ACCOUNT_NUM) {
-		// is string
-		if ( SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT `account_id`,`name`,`class`,`base_level`,`job_level`,`online` FROM `%s` WHERE `name` LIKE '%s' LIMIT 10", char_db, query_esq)
-				|| SQL->NumRows(inter->sql_handle) == 0 ) {
+		// Search for name
+		if ( SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT `account_id`,`name`,"
+			"`class`,`base_level`,`job_level`,`online` FROM `%s` WHERE `name` "
+			"LIKE '%s' LIMIT 10", char_db, query_esq)
+				|| SQL->NumRows(inter->sql_handle) == 0
+		) {
 			if( SQL->NumRows(inter->sql_handle) == 0 ) {
-				inter->msg_to_fd(map_fd, u_fd, aid, "No matches were found for your criteria, '%s'",query);
+				inter->msg_to_fd(map_id, u_fd, aid, "No matches were found for "
+					"your criteria, '%s'", query);
 			} else {
 				Sql_ShowDebug(inter->sql_handle);
-				inter->msg_to_fd(map_fd, u_fd, aid, "An error occurred, bother your admin about it.");
+				inter->msg_to_fd(map_id, u_fd, aid, "An error occurred, bother "
+					"your admin about it.");
 			}
 			SQL->FreeResult(inter->sql_handle);
 			return;
-		} else {
-			if( SQL->NumRows(inter->sql_handle) == 1 ) {//we found a perfect match
-				SQL->NextRow(inter->sql_handle);
+		}
+		// We found a perfect match
+		if( SQL->NumRows(inter->sql_handle) == 1 ) {
+			SQL->NextRow(inter->sql_handle);
+			SQL->GetData(inter->sql_handle, 0, &data, NULL); account_id = atoi(data);
+			SQL->FreeResult(inter->sql_handle);
+		} else {// more than one, listing... [Dekamaster/Nightroad]
+			inter->msg_to_fd(map_id, u_fd, aid, "Your query returned the "
+				"following %d results, please be more specific...",
+				(int)SQL->NumRows(inter->sql_handle));
+			while ( SQL_SUCCESS == SQL->NextRow(inter->sql_handle) ) {
+				int class;
+				int base_level, job_level, online;
+				char name[NAME_LENGTH];
+
 				SQL->GetData(inter->sql_handle, 0, &data, NULL); account_id = atoi(data);
-				SQL->FreeResult(inter->sql_handle);
-			} else {// more than one, listing... [Dekamaster/Nightroad]
-				inter->msg_to_fd(map_fd, u_fd, aid, "Your query returned the following %d results, please be more specific...",(int)SQL->NumRows(inter->sql_handle));
-				while ( SQL_SUCCESS == SQL->NextRow(inter->sql_handle) ) {
-					int class;
-					int base_level, job_level, online;
-					char name[NAME_LENGTH];
+				SQL->GetData(inter->sql_handle, 1, &data, NULL); safestrncpy(name, data, sizeof(name));
+				SQL->GetData(inter->sql_handle, 2, &data, NULL); class = atoi(data);
+				SQL->GetData(inter->sql_handle, 3, &data, NULL); base_level = atoi(data);
+				SQL->GetData(inter->sql_handle, 4, &data, NULL); job_level = atoi(data);
+				SQL->GetData(inter->sql_handle, 5, &data, NULL); online = atoi(data);
 
-					SQL->GetData(inter->sql_handle, 0, &data, NULL); account_id = atoi(data);
-					SQL->GetData(inter->sql_handle, 1, &data, NULL); safestrncpy(name, data, sizeof(name));
-					SQL->GetData(inter->sql_handle, 2, &data, NULL); class = atoi(data);
-					SQL->GetData(inter->sql_handle, 3, &data, NULL); base_level = atoi(data);
-					SQL->GetData(inter->sql_handle, 4, &data, NULL); job_level = atoi(data);
-					SQL->GetData(inter->sql_handle, 5, &data, NULL); online = atoi(data);
-
-					inter->msg_to_fd(map_fd, u_fd, aid, "[AID: %d] %s | %s | Level: %d/%d | %s", account_id, name, inter->job_name(class), base_level, job_level, online?"Online":"Offline");
-				}
-				SQL->FreeResult(inter->sql_handle);
-				return;
+				inter->msg_to_fd(map_id, u_fd, aid, "[AID: %d] %s | %s | "
+					"Level: %d/%d | %s", account_id, name, inter->job_name(class),
+					base_level, job_level, online?"Online":"Offline");
 			}
+			SQL->FreeResult(inter->sql_handle);
+			return;
 		}
 	}
 
 	/* it will only get here if we have a single match */
 	/* and we will send packet with account id to login server asking for account info */
 	if( account_id ) {
-		mapif->on_parse_accinfo(account_id, u_fd, aid, castergroup, map_fd);
+		loginif->accinfo_request(account_id, u_fd, aid, castergroup, map_id);
 	}
 
 	return;
 }
 
-static void inter_accinfo2(bool success, int map_fd, int u_fd, int u_aid, int account_id, const char *userid, const char *user_pass,
-		const char *email, const char *last_ip, const char *lastlogin, const char *pin_code, const char *birthdate,
+/**
+ * Answers an account information request from map-server using msg_to_fd
+ *
+ * @param success    Was the account found
+ * @param map_id     Session id of map-server that requested information
+ * @param u_fd       Requester fd
+ * @param u_aid      Requester account id
+ * @param userid     Targets login
+ * @param email      Targets e-mail
+ * @param last-ip    Targets last ip
+ * @param lastlogin  Targets last login date
+ * @param birthdate  Targets birthdate
+ * @param group_id   Targets group id
+ * @param logincount Targets login count
+ * @param state      Targets state
+ * @see inter_accinfo
+ **/
+static void inter_accinfo_ack(bool success, int map_id, int u_fd, int u_aid, int account_id, const char *userid,
+		const char *email, const char *last_ip, const char *lastlogin, const char *birthdate,
 		int group_id, int logincount, int state)
 {
-	nullpo_retv(userid);
-	nullpo_retv(user_pass);
-	nullpo_retv(email);
-	nullpo_retv(last_ip);
-	nullpo_retv(lastlogin);
-	nullpo_retv(birthdate);
-	if (map_fd <= 0 || !sockt->session_is_active(map_fd))
+	struct socket_data *map_session = socket_io->session_from_id(map_id);
+	if(!map_session)
 		return; // check if we have a valid fd
 
 	if (!success) {
-		inter->msg_to_fd(map_fd, u_fd, u_aid, "No account with ID '%d' was found.", account_id);
+		inter->msg_to_fd(map_id, u_fd, u_aid, "No account with ID '%d' was found.", account_id);
 		return;
 	}
 
-	inter->msg_to_fd(map_fd, u_fd, u_aid, "-- Account %d --", account_id);
-	inter->msg_to_fd(map_fd, u_fd, u_aid, "User: %s | GM Group: %d | State: %d", userid, group_id, state);
+	inter->msg_to_fd(map_id, u_fd, u_aid, "-- Account %d --", account_id);
+	inter->msg_to_fd(map_id, u_fd, u_aid, "User: %s | GM Group: %d | State: %d",
+		userid, group_id, state);
 
-// enable this if you really know what you doing.
-#if 0
-	if (*user_pass != '\0') { /* password is only received if your gm level is greater than the one you're searching for */
-		if (pin_code && *pin_code != '\0')
-			inter->msg_to_fd(map_fd, u_fd, u_aid, "Password: %s (PIN:%s)", user_pass, pin_code);
-		else
-			inter->msg_to_fd(map_fd, u_fd, u_aid, "Password: %s", user_pass );
-	}
-#endif
+	inter->msg_to_fd(map_id, u_fd, u_aid, "Account e-mail: %s | Birthdate: %s",
+		email, birthdate);
+	inter->msg_to_fd(map_id, u_fd, u_aid, "Last IP: %s (%s)", last_ip,
+		geoip->getcountry(socket_io->str2ip(last_ip)));
+	inter->msg_to_fd(map_id, u_fd, u_aid, "This user has logged %d times, the "
+		"last time were at %s", logincount, lastlogin);
+	inter->msg_to_fd(map_id, u_fd, u_aid, "-- Character Details --");
 
-	inter->msg_to_fd(map_fd, u_fd, u_aid, "Account e-mail: %s | Birthdate: %s", email, birthdate);
-	inter->msg_to_fd(map_fd, u_fd, u_aid, "Last IP: %s (%s)", last_ip, geoip->getcountry(sockt->str2ip(last_ip)));
-	inter->msg_to_fd(map_fd, u_fd, u_aid, "This user has logged %d times, the last time were at %s", logincount, lastlogin);
-	inter->msg_to_fd(map_fd, u_fd, u_aid, "-- Character Details --");
-
-	if ( SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT `char_id`, `name`, `char_num`, `class`, `base_level`, `job_level`, `online` "
-	                                         "FROM `%s` WHERE `account_id` = '%d' ORDER BY `char_num` LIMIT %d", char_db, account_id, MAX_CHARS)
-	  || SQL->NumRows(inter->sql_handle) == 0 ) {
+	if ( SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT `char_id`, `name`, "
+		"`char_num`, `class`, `base_level`, `job_level`, `online` "
+	    "FROM `%s` WHERE `account_id` = '%d' ORDER BY `char_num` LIMIT %d",
+		char_db, account_id, MAX_CHARS)
+	  || SQL->NumRows(inter->sql_handle) == 0
+	) {
 		if (SQL->NumRows(inter->sql_handle) == 0) {
-			inter->msg_to_fd(map_fd, u_fd, u_aid, "This account doesn't have characters.");
+			inter->msg_to_fd(map_id, u_fd, u_aid, "This account doesn't have characters.");
 		} else {
-			inter->msg_to_fd(map_fd, u_fd, u_aid, "An error occurred, bother your admin about it.");
+			inter->msg_to_fd(map_id, u_fd, u_aid, "An error occurred, bother your admin about it.");
 			Sql_ShowDebug(inter->sql_handle);
 		}
 	} else {
@@ -555,7 +582,9 @@ static void inter_accinfo2(bool success, int map_fd, int u_fd, int u_aid, int ac
 			SQL->GetData(inter->sql_handle, 5, &data, NULL); job_level = atoi(data);
 			SQL->GetData(inter->sql_handle, 6, &data, NULL); online = atoi(data);
 
-			inter->msg_to_fd(map_fd, u_fd, u_aid, "[Slot/CID: %d/%d] %s | %s | Level: %d/%d | %s", char_num, char_id, name, inter->job_name(class), base_level, job_level, online?"On":"Off");
+			inter->msg_to_fd(map_id, u_fd, u_aid, "[Slot/CID: %d/%d] %s | %s | "
+				"Level: %d/%d | %s", char_num, char_id, name,
+				inter->job_name(class), base_level, job_level, online?"On":"Off");
 		}
 	}
 	SQL->FreeResult(inter->sql_handle);
@@ -574,12 +603,15 @@ static void inter_savereg(int account_id, int char_id, const char *key, unsigned
 	nullpo_retv(key);
 	/* to login server we go! */
 	if( key[0] == '#' && key[1] == '#' ) {/* global account reg */
-		if (sockt->session_is_valid(chr->login_fd))
-			chr->global_accreg_to_login_add(key,index,val,is_string);
+		if(chr->login_session)
+			loginif->save_accreg2_entry(key, index, val, is_string);
 		else {
-			ShowError("Login server unavailable, cant perform update on '%s' variable for AID:%d CID:%d\n",key,account_id,char_id);
+			ShowError("Login server unavailable, cant perform update on '%s' variable "
+				"for AID:%d CID:%d\n",key,account_id,char_id);
 		}
-	} else if ( key[0] == '#' ) {/* local account reg */
+		return;
+	}
+	if ( key[0] == '#' ) {/* local account reg */
 		if( is_string ) {
 			if( val ) {
 				SQL->EscapeString(inter->sql_handle, val_esq, (char*)val);
@@ -598,30 +630,42 @@ static void inter_savereg(int account_id, int char_id, const char *key, unsigned
 					Sql_ShowDebug(inter->sql_handle);
 			}
 		}
-	} else { /* char reg */
-		if( is_string ) {
-			if( val ) {
-				SQL->EscapeString(inter->sql_handle, val_esq, (char*)val);
-				if( SQL_ERROR == SQL->Query(inter->sql_handle, "REPLACE INTO `%s` (`char_id`,`key`,`index`,`value`) VALUES ('%d','%s','%u','%s')", char_reg_str_db, char_id, key, index, val_esq) )
-					Sql_ShowDebug(inter->sql_handle);
-			} else {
-				if( SQL_ERROR == SQL->Query(inter->sql_handle, "DELETE FROM `%s` WHERE `char_id` = '%d' AND `key` = '%s' AND `index` = '%u' LIMIT 1", char_reg_str_db, char_id, key, index) )
-					Sql_ShowDebug(inter->sql_handle);
-			}
+		return;
+	}
+
+	/* char reg */
+	if( is_string ) {
+		if( val ) {
+			SQL->EscapeString(inter->sql_handle, val_esq, (char*)val);
+			if( SQL_ERROR == SQL->Query(inter->sql_handle, "REPLACE INTO `%s` (`char_id`,`key`,`index`,`value`) VALUES ('%d','%s','%u','%s')", char_reg_str_db, char_id, key, index, val_esq) )
+				Sql_ShowDebug(inter->sql_handle);
 		} else {
-			if( val ) {
-				if( SQL_ERROR == SQL->Query(inter->sql_handle, "REPLACE INTO `%s` (`char_id`,`key`,`index`,`value`) VALUES ('%d','%s','%u','%d')", char_reg_num_db, char_id, key, index, (int)val) )
-					Sql_ShowDebug(inter->sql_handle);
-			} else {
-				if( SQL_ERROR == SQL->Query(inter->sql_handle, "DELETE FROM `%s` WHERE `char_id` = '%d' AND `key` = '%s' AND `index` = '%u' LIMIT 1", char_reg_num_db, char_id, key, index) )
-					Sql_ShowDebug(inter->sql_handle);
-			}
+			if( SQL_ERROR == SQL->Query(inter->sql_handle, "DELETE FROM `%s` WHERE `char_id` = '%d' AND `key` = '%s' AND `index` = '%u' LIMIT 1", char_reg_str_db, char_id, key, index) )
+				Sql_ShowDebug(inter->sql_handle);
+		}
+	} else {
+		if( val ) {
+			if( SQL_ERROR == SQL->Query(inter->sql_handle, "REPLACE INTO `%s` (`char_id`,`key`,`index`,`value`) VALUES ('%d','%s','%u','%d')", char_reg_num_db, char_id, key, index, (int)val) )
+				Sql_ShowDebug(inter->sql_handle);
+		} else {
+			if( SQL_ERROR == SQL->Query(inter->sql_handle, "DELETE FROM `%s` WHERE `char_id` = '%d' AND `key` = '%s' AND `index` = '%u' LIMIT 1", char_reg_num_db, char_id, key, index) )
+				Sql_ShowDebug(inter->sql_handle);
 		}
 	}
 }
 
-// Load account_reg from sql (type=2)
-static int inter_accreg_fromsql(int account_id, int char_id, int fd, int type)
+/**
+ * Sends all account-specific registry information (0x3804)
+ *  At least one packet per type is sent, and if either has more than 6000bytes it's broken into
+ *  more packets.
+ *  The last packet has <is complete> marked.
+ * 0x3804 <account_id>.L <char_id>.L <is complete>.B <var type>.B <count>.W {vessel type}
+ * @param type 1 account2 (login-server)
+ *             2 account
+ *             3 character
+ * This is the same packet as account_mmo_send_accreg2
+ **/
+static int inter_accreg_fromsql(int account_id, int char_id, struct socket_data *session, int type)
 {
 	char* data;
 	size_t len;
@@ -644,14 +688,14 @@ static int inter_accreg_fromsql(int account_id, int char_id, int fd, int type)
 			return 0;
 	}
 
-	WFIFOHEAD(fd, 60000 + 300);
-	WFIFOW(fd, 0) = 0x3804;
+	WFIFOHEAD(session, 60000 + 300, true);
+	WFIFOW(session, 0) = 0x3804;
 	/* 0x2 = length, set prior to being sent */
-	WFIFOL(fd, 4) = account_id;
-	WFIFOL(fd, 8) = char_id;
-	WFIFOB(fd, 12) = 0;/* var type (only set when all vars have been sent, regardless of type) */
-	WFIFOB(fd, 13) = 1;/* is string type */
-	WFIFOW(fd, 14) = 0;/* count */
+	WFIFOL(session, 4) = account_id;
+	WFIFOL(session, 8) = char_id;
+	WFIFOB(session, 12) = 0;/* var type (only set when all vars have been sent, regardless of type) */
+	WFIFOB(session, 13) = 1;/* is string type */
+	WFIFOW(session, 14) = 0;/* count */
 	plen = 16;
 
 	/**
@@ -664,48 +708,48 @@ static int inter_accreg_fromsql(int account_id, int char_id, int fd, int type)
 		SQL->GetData(inter->sql_handle, 0, &data, NULL);
 		len = strlen(data)+1;
 
-		WFIFOB(fd, plen) = (unsigned char)len;/* won't be higher; the column size is 32 */
+		WFIFOB(session, plen) = (unsigned char)len;/* won't be higher; the column size is 32 */
 		plen += 1;
 
-		safestrncpy(WFIFOP(fd,plen), data, len);
+		safestrncpy(WFIFOP(session,plen), data, len);
 		plen += len;
 
 		SQL->GetData(inter->sql_handle, 1, &data, NULL);
 
-		WFIFOL(fd, plen) = (unsigned int)atol(data);
+		WFIFOL(session, plen) = (unsigned int)atol(data);
 		plen += 4;
 
 		SQL->GetData(inter->sql_handle, 2, &data, NULL);
 		len = strlen(data);
 
-		WFIFOB(fd, plen) = (unsigned char)len; // Won't be higher; the column size is 255.
+		WFIFOB(session, plen) = (unsigned char)len; // Won't be higher; the column size is 255.
 		plen += 1;
 
-		safestrncpy(WFIFOP(fd, plen), data, len + 1);
+		safestrncpy(WFIFOP(session, plen), data, len + 1);
 		plen += len + 1;
 
-		WFIFOW(fd, 14) += 1;
+		WFIFOW(session, 14) += 1;
 
 		if( plen > 60000 ) {
-			WFIFOW(fd, 2) = plen;
-			WFIFOSET(fd, plen);
+			WFIFOW(session, 2) = plen;
+			WFIFOSET(session, plen);
 
 			/* prepare follow up */
-			WFIFOHEAD(fd, 60000 + 300);
-			WFIFOW(fd, 0) = 0x3804;
+			WFIFOHEAD(session, 60000 + 300, true);
+			WFIFOW(session, 0) = 0x3804;
 			/* 0x2 = length, set prior to being sent */
-			WFIFOL(fd, 4) = account_id;
-			WFIFOL(fd, 8) = char_id;
-			WFIFOB(fd, 12) = 0;/* var type (only set when all vars have been sent, regardless of type) */
-			WFIFOB(fd, 13) = 1;/* is string type */
-			WFIFOW(fd, 14) = 0;/* count */
+			WFIFOL(session, 4) = account_id;
+			WFIFOL(session, 8) = char_id;
+			WFIFOB(session, 12) = 0;/* var type (only set when all vars have been sent, regardless of type) */
+			WFIFOB(session, 13) = 1;/* is string type */
+			WFIFOW(session, 14) = 0;/* count */
 			plen = 16;
 		}
 	}
 
 	/* mark & go. */
-	WFIFOW(fd, 2) = plen;
-	WFIFOSET(fd, plen);
+	WFIFOW(session, 2) = plen;
+	WFIFOSET(session, plen);
 
 	SQL->FreeResult(inter->sql_handle);
 
@@ -725,14 +769,14 @@ static int inter_accreg_fromsql(int account_id, int char_id, int fd, int type)
 #endif // 0
 	}
 
-	WFIFOHEAD(fd, 60000 + 300);
-	WFIFOW(fd, 0) = 0x3804;
+	WFIFOHEAD(session, 60000 + 300, true);
+	WFIFOW(session, 0) = 0x3804;
 	/* 0x2 = length, set prior to being sent */
-	WFIFOL(fd, 4) = account_id;
-	WFIFOL(fd, 8) = char_id;
-	WFIFOB(fd, 12) = 0;/* var type (only set when all vars have been sent, regardless of type) */
-	WFIFOB(fd, 13) = 0;/* is int type */
-	WFIFOW(fd, 14) = 0;/* count */
+	WFIFOL(session, 4) = account_id;
+	WFIFOL(session, 8) = char_id;
+	WFIFOB(session, 12) = 0;/* var type (only set when all vars have been sent, regardless of type) */
+	WFIFOB(session, 13) = 0;/* is int type */
+	WFIFOW(session, 14) = 0;/* count */
 	plen = 16;
 
 	/**
@@ -745,45 +789,45 @@ static int inter_accreg_fromsql(int account_id, int char_id, int fd, int type)
 		SQL->GetData(inter->sql_handle, 0, &data, NULL);
 		len = strlen(data)+1;
 
-		WFIFOB(fd, plen) = (unsigned char)len;/* won't be higher; the column size is 32 */
+		WFIFOB(session, plen) = (unsigned char)len;/* won't be higher; the column size is 32 */
 		plen += 1;
 
-		safestrncpy(WFIFOP(fd,plen), data, len);
+		safestrncpy(WFIFOP(session,plen), data, len);
 		plen += len;
 
 		SQL->GetData(inter->sql_handle, 1, &data, NULL);
 
-		WFIFOL(fd, plen) = (unsigned int)atol(data);
+		WFIFOL(session, plen) = (unsigned int)atol(data);
 		plen += 4;
 
 		SQL->GetData(inter->sql_handle, 2, &data, NULL);
 
-		WFIFOL(fd, plen) = atoi(data);
+		WFIFOL(session, plen) = atoi(data);
 		plen += 4;
 
-		WFIFOW(fd, 14) += 1;
+		WFIFOW(session, 14) += 1;
 
 		if( plen > 60000 ) {
-			WFIFOW(fd, 2) = plen;
-			WFIFOSET(fd, plen);
+			WFIFOW(session, 2) = plen;
+			WFIFOSET(session, plen);
 
 			/* prepare follow up */
-			WFIFOHEAD(fd, 60000 + 300);
-			WFIFOW(fd, 0) = 0x3804;
+			WFIFOHEAD(session, 60000 + 300, true);
+			WFIFOW(session, 0) = 0x3804;
 			/* 0x2 = length, set prior to being sent */
-			WFIFOL(fd, 4) = account_id;
-			WFIFOL(fd, 8) = char_id;
-			WFIFOB(fd, 12) = 0;/* var type (only set when all vars have been sent, regardless of type) */
-			WFIFOB(fd, 13) = 0;/* is int type */
-			WFIFOW(fd, 14) = 0;/* count */
+			WFIFOL(session, 4) = account_id;
+			WFIFOL(session, 8) = char_id;
+			WFIFOB(session, 12) = 0;/* var type (only set when all vars have been sent, regardless of type) */
+			WFIFOB(session, 13) = 0;/* is int type */
+			WFIFOW(session, 14) = 0;/* count */
 			plen = 16;
 		}
 	}
 
 	/* mark as complete & go. */
-	WFIFOB(fd, 12) = type;
-	WFIFOW(fd, 2) = plen;
-	WFIFOSET(fd, plen);
+	WFIFOB(session, 12) = type;
+	WFIFOW(session, 2) = plen;
+	WFIFOSET(session, plen);
 
 	SQL->FreeResult(inter->sql_handle);
 	return 1;
@@ -938,7 +982,9 @@ static int inter_log(char *fmt, ...)
 	return ret;
 }
 
-// initialize
+/**
+ * Initializes inter SQL connection
+ **/
 static int inter_init_sql(const char *file)
 {
 	inter->config_read(file, false);
@@ -946,8 +992,9 @@ static int inter_init_sql(const char *file)
 	//DB connection initialized
 	inter->sql_handle = SQL->Malloc();
 	ShowInfo("Connect Character DB server.... (Character Server)\n");
-	if( SQL_ERROR == SQL->Connect(inter->sql_handle, char_server_id, char_server_pw, char_server_ip, (uint16)char_server_port, char_server_db) )
-	{
+	if( SQL_ERROR == SQL->Connect(inter->sql_handle, char_server_id,
+		char_server_pw, char_server_ip, (uint16)char_server_port, char_server_db)
+	) {
 		Sql_ShowDebug(inter->sql_handle);
 		SQL->Free(inter->sql_handle);
 		exit(EXIT_FAILURE);
@@ -995,73 +1042,16 @@ static void inter_final(void)
 	return;
 }
 
-static int inter_mapif_init(int fd)
+/**
+ * Called upon successful authentication of a map-server
+ * (currently only initialization inter_mapif)
+ **/
+static int inter_mapif_init(struct socket_data *session)
 {
 	return 0;
 }
 
 //--------------------------------------------------------
-
-/// Returns the length of the next complete packet to process,
-/// or 0 if no complete packet exists in the queue.
-///
-/// @param length The minimum allowed length, or -1 for dynamic lookup
-static int inter_check_length(int fd, int length)
-{
-	if( length == -1 )
-	{// variable-length packet
-		if( RFIFOREST(fd) < 4 )
-			return 0;
-		length = RFIFOW(fd,2);
-	}
-
-	if( (int)RFIFOREST(fd) < length )
-		return 0;
-
-	return length;
-}
-
-static int inter_parse_frommap(int fd)
-{
-	int cmd;
-	int len = 0;
-	cmd = RFIFOW(fd,0);
-	// Check is valid packet entry
-	if(cmd < 0x3000 || cmd >= 0x3000 + ARRAYLENGTH(inter_recv_packet_length) || inter_recv_packet_length[cmd - 0x3000] == 0)
-		return 0;
-
-	// Check packet length
-	if((len = inter->check_length(fd, inter_recv_packet_length[cmd - 0x3000])) == 0)
-		return 2;
-
-	switch(cmd) {
-	case 0x3004: mapif->parse_Registry(fd); break;
-	case 0x3005: mapif->parse_RegistryRequest(fd); break;
-	case 0x3006: mapif->parse_NameChangeRequest(fd); break;
-	case 0x3007: mapif->parse_accinfo(fd); break;
-	default:
-		if(  inter_party->parse_frommap(fd)
-		  || inter_guild->parse_frommap(fd)
-		  || inter_storage->parse_frommap(fd)
-		  || inter_pet->parse_frommap(fd)
-		  || inter_homunculus->parse_frommap(fd)
-		  || inter_mercenary->parse_frommap(fd)
-		  || inter_elemental->parse_frommap(fd)
-		  || inter_mail->parse_frommap(fd)
-		  || inter_auction->parse_frommap(fd)
-		  || inter_quest->parse_frommap(fd)
-		  || inter_rodex->parse_frommap(fd)
-		  || inter_clan->parse_frommap(fd)
-		  || inter_achievement->parse_frommap(fd)
-		   )
-			break;
-		else
-			return 0;
-	}
-
-	RFIFOSKIP(fd, len);
-	return 1;
-}
 
 void inter_defaults(void)
 {
@@ -1083,11 +1073,9 @@ void inter_defaults(void)
 	inter->log = inter_log;
 	inter->init_sql = inter_init_sql;
 	inter->mapif_init = inter_mapif_init;
-	inter->check_length = inter_check_length;
-	inter->parse_frommap = inter_parse_frommap;
 	inter->final = inter_final;
 	inter->config_read_log = inter_config_read_log;
 	inter->config_read_connection = inter_config_read_connection;
 	inter->accinfo = inter_accinfo;
-	inter->accinfo2 = inter_accinfo2;
+	inter->accinfo_ack = inter_accinfo_ack;
 }

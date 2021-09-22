@@ -232,9 +232,22 @@ void chclif_parse_delete2_accept(struct s_receive_action_data *act, struct char_
 		return;
 	}
 
-	int result = chr->can_delete(sd, char_id, birthdate);
+	int delete_date = 0;
+	int result = chr->can_delete(sd, char_id, birthdate, &delete_date);
 	if(result != 1) {
 		chr->delete2_accept_ack(act, char_id, result);
+		return;
+	}
+
+	if(!delete_date || delete_date>time(NULL)) { // not queued or delay not yet passed
+		// 4: Deleting not yet possible time
+		chr->delete2_accept_ack(act, char_id, 4);
+		return;
+	}
+
+	if(strcmp(sd->birthdate+2, birthdate)) { // +2 to cut off the century
+		// 5: Date of birth do not match
+		chr->delete2_accept_ack(act, char_id, 5);
 		return;
 	}
 
@@ -309,6 +322,11 @@ void chclif_parse_delete_char(struct s_receive_action_data *act, struct char_ses
 		sd->account_id, char_id);
 	memcpy(email, RFIFOP(act,6), 40);
 	email[39] = '\0';
+
+	if(chr->can_delete(char_id, NULL) != 1) {
+		chr->delete_char_failed(act->session, 3); // 3: Character deletion is denied
+		return;
+	}
 
 	// Check if e-mail is correct
 	if(strcmpi(email, sd->email) != 0  /* emails don't match */
@@ -535,18 +553,15 @@ void chclif_parse_enter(struct s_receive_action_data *act, int ipl)
  **/
 enum parsefunc_rcode chclif_parse(struct s_receive_action_data *act)
 {
-	// Deny any new connection authentication requests if no login-server
-	if(!chr->login_session) {
-		socket_io->session_disconnect_guard(act->session);
-		return PACKET_VALID;
-	}
 	struct char_session_data* sd;
 
 	mutex->lock(act->session->mutex);
 	uint32 ipl = act->session->client_addr;
 	sd = (struct char_session_data*)act->session->session_data;
 
-	if(socket_io->session_marked_removal(act->session)) {
+	if(socket_io->session_marked_removal(act->session)
+	|| !chr->login_session // Deny any new connection authentication requests if no login-server
+	) {
 		chr->disconnect(act->session, sd);
 		mutex->unlock(act->session->mutex);
 		return PACKET_VALID;
