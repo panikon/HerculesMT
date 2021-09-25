@@ -697,13 +697,11 @@ static int intif_guild_create(const char *name, const struct guild_member *maste
 	nullpo_ret(master);
 	nullpo_ret(name);
 
-	WFIFOHEAD(inter_fd,sizeof(struct guild_member)+(8+NAME_LENGTH));
+	WFIFOHEAD(inter_fd,sizeof(struct guild_member)+(NAME_LENGTH));
 	WFIFOW(inter_fd,0)=0x3030;
-	WFIFOW(inter_fd,2)=sizeof(struct guild_member)+(8+NAME_LENGTH);
-	WFIFOL(inter_fd,4)=master->account_id;
-	memcpy(WFIFOP(inter_fd,8),name,NAME_LENGTH);
-	memcpy(WFIFOP(inter_fd,8+NAME_LENGTH),master,sizeof(struct guild_member));
-	WFIFOSET(inter_fd,WFIFOW(inter_fd,2));
+	memcpy(WFIFOP(inter_fd,2),name,NAME_LENGTH);
+	memcpy(WFIFOP(inter_fd,2+NAME_LENGTH),master,sizeof(struct guild_member));
+	WFIFOSET(inter_fd,sizeof(struct guild_member)+(+NAME_LENGTH));
 	return 0;
 }
 
@@ -725,12 +723,11 @@ static int intif_guild_addmember(int guild_id, struct guild_member *m)
 	if (intif->CheckForCharServer())
 		return 0;
 	nullpo_ret(m);
-	WFIFOHEAD(inter_fd,sizeof(struct guild_member)+8);
+	WFIFOHEAD(inter_fd,sizeof(struct guild_member)+4);
 	WFIFOW(inter_fd,0) = 0x3032;
-	WFIFOW(inter_fd,2) = sizeof(struct guild_member)+8;
 	WFIFOL(inter_fd,4) = guild_id;
 	memcpy(WFIFOP(inter_fd,8),m,sizeof(struct guild_member));
-	WFIFOSET(inter_fd,WFIFOW(inter_fd,2));
+	WFIFOSET(inter_fd,sizeof(struct guild_member)+4));
 	return 0;
 }
 
@@ -741,12 +738,11 @@ static int intif_guild_change_gm(int guild_id, const char *name, int len)
 		return 0;
 	nullpo_ret(name);
 	Assert_ret(len > 0 && len < 32000);
-	WFIFOHEAD(inter_fd, len + 8);
+	WFIFOHEAD(inter_fd, 24+6);
 	WFIFOW(inter_fd, 0)=0x3033;
-	WFIFOW(inter_fd, 2)=len+8;
-	WFIFOL(inter_fd, 4)=guild_id;
-	memcpy(WFIFOP(inter_fd,8),name,len);
-	WFIFOSET(inter_fd,len+8);
+	WFIFOL(inter_fd, 2)=guild_id;
+	memcpy(WFIFOP(inter_fd,6),name,len);
+	WFIFOSET(inter_fd,24+6);
 	return 0;
 }
 
@@ -849,13 +845,12 @@ static bool intif_guild_position(int guild_id, int idx, struct guild_position *p
 		return false;
 	nullpo_ret(p);
 
-	WFIFOHEAD(inter_fd, sizeof(struct guild_position)+12);
+	WFIFOHEAD(inter_fd, sizeof(struct guild_position)+10);
 	WFIFOW(inter_fd,0)=0x303b;
-	WFIFOW(inter_fd,2)=sizeof(struct guild_position)+12;
-	WFIFOL(inter_fd,4)=guild_id;
-	WFIFOL(inter_fd,8)=idx;
-	memcpy(WFIFOP(inter_fd,12),p,sizeof(struct guild_position));
-	WFIFOSET(inter_fd,WFIFOW(inter_fd,2));
+	WFIFOL(inter_fd,2)=guild_id;
+	WFIFOL(inter_fd,6)=idx;
+	memcpy(WFIFOP(inter_fd,10),p,sizeof(struct guild_position));
+	WFIFOSET(inter_fd,sizeof(struct guild_position)+10);
 	return true;
 }
 
@@ -915,13 +910,12 @@ static int intif_guild_emblem(int guild_id, int len, const char *data)
 		return 0;
 	nullpo_ret(data);
 	Assert_ret(len >= 0 && len < 32000);
-	WFIFOHEAD(inter_fd,len + 12);
+	WFIFOHEAD(inter_fd,len + 8);
 	WFIFOW(inter_fd,0)=0x303f;
-	WFIFOW(inter_fd,2)=len+12;
+	WFIFOW(inter_fd,2)=len+8;
 	WFIFOL(inter_fd,4)=guild_id;
-	WFIFOL(inter_fd,8)=0;
-	memcpy(WFIFOP(inter_fd,12),data,len);
-	WFIFOSET(inter_fd,len+12);
+	memcpy(WFIFOP(inter_fd,8),data,len);
+	WFIFOSET(inter_fd,len+8);
 	return 0;
 }
 
@@ -2274,8 +2268,7 @@ static int intif_elemental_create(struct s_elemental *ele)
 	nullpo_ret(ele);
 	WFIFOHEAD(inter_fd,size);
 	WFIFOW(inter_fd,0) = 0x307c;
-	WFIFOW(inter_fd,2) = size;
-	memcpy(WFIFOP(inter_fd,4), ele, sizeof(struct s_elemental));
+	memcpy(WFIFOP(inter_fd,2), ele, sizeof(struct s_elemental));
 	WFIFOSET(inter_fd,size);
 	return 0;
 }
@@ -2334,8 +2327,7 @@ static int intif_elemental_save(struct s_elemental *ele)
 	nullpo_ret(ele);
 	WFIFOHEAD(inter_fd,size);
 	WFIFOW(inter_fd,0) = 0x307f;
-	WFIFOW(inter_fd,2) = size;
-	memcpy(WFIFOP(inter_fd,4), ele, sizeof(struct s_elemental));
+	memcpy(WFIFOP(inter_fd,2), ele, sizeof(struct s_elemental));
 	WFIFOSET(inter_fd,size);
 	return 0;
 }

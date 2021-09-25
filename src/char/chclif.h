@@ -31,7 +31,7 @@
  * @param ipl Client address
  * @see chclif_parse
  **/
-typedef void (ChclifParseFunc)(struct s_receive_action_data *act, struct character_session_data *sd, int ipl);
+typedef void (ChclifParseFunc)(struct s_receive_action_data *act, struct char_session_data *sd, int ipl);
 
 /**
  * Char client packet information
@@ -64,7 +64,6 @@ struct chclif_interface {
 	void (*parse_delete2_cancel)(struct s_receive_action_data *act, struct char_session_data *sd, int ipl);
 	void (*parse_delete_char)   (struct s_receive_action_data *act, struct char_session_data *sd, int ipl);
 
-	void (*parse_rename)        (struct s_receive_action_data *act, struct char_session_data *sd, int ipl);
 	void (*parse_rename)        (struct s_receive_action_data *act, struct char_session_data *sd, int ipl);
 
 	void (*parse_rename_confirm)(struct s_receive_action_data *act, struct char_session_data *sd, int ipl);

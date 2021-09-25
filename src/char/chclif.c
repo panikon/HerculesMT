@@ -49,9 +49,9 @@ static void chclif_parse_move_character(struct s_receive_action_data *act, struc
 	/* for some stupid reason it requires the char data again (gravity -_-) */
 	if(ret)
 #if PACKETVER_MAIN_NUM >= 20130522 || PACKETVER_RE_NUM >= 20130327 || defined(PACKETVER_ZERO)
-		chr->send_HC_ACK_CHARINFO_PER_PAGE(act, sd);
+		chr->send_HC_ACK_CHARINFO_PER_PAGE(act->session, sd);
 #else
-		chr->mmo_char_send_characters(act, sd);
+		chr->mmo_char_send_characters(act->session, sd);
 #endif
 }
 
@@ -61,7 +61,7 @@ static void chclif_parse_move_character(struct s_receive_action_data *act, struc
  **/
 static void chclif_parse_request_chars(struct s_receive_action_data *act, struct char_session_data *sd, int ipl)
 {
-	chr->send_HC_ACK_CHARINFO_PER_PAGE(act, sd);
+	chr->send_HC_ACK_CHARINFO_PER_PAGE(act->session, sd);
 }
 
 /**
@@ -114,7 +114,7 @@ void chclif_parse_rename_confirm(struct s_receive_action_data *act, struct char_
 void chclif_parse_rename(struct s_receive_action_data *act, struct char_session_data *sd, int ipl)
 {
 	int char_id;
-	char *name;
+	const char *name;
 
 	if(RFIFOW(act, 0) == HEADER_CH_REQ_IS_VALID_CHARNAME) {
 		char_id = RFIFOL(act, 2);
@@ -133,7 +133,7 @@ void chclif_parse_rename(struct s_receive_action_data *act, struct char_session_
 	int i;
 	ARR_FIND(0, MAX_CHARS, i, sd->found_char[i] == char_id);
 	if(i == MAX_CHARS) {
-		chr->allow_rename(act, false);
+		chr->allow_rename(act->session, false);
 		return; // Invalid character selection
 	}
 	if(sd->rename)
@@ -150,9 +150,10 @@ void chclif_parse_rename(struct s_receive_action_data *act, struct char_session_
 	chr->escape_normalize_name(name, sd->rename->new_name);
 	if(chr->check_char_name(name, sd->rename->new_name) != RMCE_CREATED) {
 		// Don't free rename data yet, the player probably will retry.
-		chr->allow_rename(act, false);
+		chr->allow_rename(act->session, false);
+		return;
 	}
-	chr->allow_rename(act, true);
+	chr->allow_rename(act->session, true);
 	/** Character renaming process
 	 * Asks if required name is valid or not
 	 * R C CH_REQ_IS_VALID_CHARNAME (chclif_parse_rename)
@@ -171,7 +172,7 @@ void chclif_parse_ping(struct s_receive_action_data *act, struct char_session_da
 {
 	// Answer with the same packet
 	WFIFOHEAD(act->session, sizeof(struct PACKET_CH_PING), true);
-	WFIFOB(act->session, 0) = HEADER_CH_PING;
+	WFIFOL(act->session, 0) = HEADER_CH_PING;
 	WFIFOL(act->session, 2) = RFIFOL(act, 2);
 	WFIFOSET(act->session, sizeof(struct PACKET_CH_PING));
 	return;
@@ -188,7 +189,7 @@ void chclif_parse_delete2_cancel(struct s_receive_action_data *act, struct char_
 	int i;
 	ARR_FIND(0, MAX_CHARS, i, sd->found_char[i] == char_id);
 	if(i == MAX_CHARS ) {// character not found
-		chr->delete2_cancel_ack(act->session, char_id, 2, 0); // 2: A database error occurred
+		chr->delete2_cancel_ack(act->session, char_id, 2); // 2: A database error occurred
 		return;
 	}
 
@@ -196,9 +197,9 @@ void chclif_parse_delete2_cancel(struct s_receive_action_data *act, struct char_
 	// queued for deletion, as the client prints an error message by
 	// itself, if it was not the case (@see chr->delete2_cancel_ack)
 	if(!chr->delete_remove_queue(char_id))
-		chr->delete2_cancel_ack(act, char_id, 2); // 2: A database error occurred
+		chr->delete2_cancel_ack(act->session, char_id, 2); // 2: A database error occurred
 	else
-		chr->delete2_cancel_ack(act, char_id, 1); // 1: success
+		chr->delete2_cancel_ack(act->session, char_id, 1); // 1: success
 }
 
 /**
@@ -228,37 +229,37 @@ void chclif_parse_delete2_accept(struct s_receive_action_data *act, struct char_
 
 	ARR_FIND(0, MAX_CHARS, i, sd->found_char[i] == char_id);
 	if(i == MAX_CHARS) {// character not found
-		chr->delete2_accept_ack(act, char_id, 3); // 3: A database error occurred
+		chr->delete2_accept_ack(act->session, char_id, 3); // 3: A database error occurred
 		return;
 	}
 
 	int delete_date = 0;
-	int result = chr->can_delete(sd, char_id, birthdate, &delete_date);
+	int result = chr->can_delete(char_id, &delete_date);
 	if(result != 1) {
-		chr->delete2_accept_ack(act, char_id, result);
+		chr->delete2_accept_ack(act->session, char_id, result);
 		return;
 	}
 
 	if(!delete_date || delete_date>time(NULL)) { // not queued or delay not yet passed
 		// 4: Deleting not yet possible time
-		chr->delete2_accept_ack(act, char_id, 4);
+		chr->delete2_accept_ack(act->session, char_id, 4);
 		return;
 	}
 
 	if(strcmp(sd->birthdate+2, birthdate)) { // +2 to cut off the century
 		// 5: Date of birth do not match
-		chr->delete2_accept_ack(act, char_id, 5);
+		chr->delete2_accept_ack(act->session, char_id, 5);
 		return;
 	}
 
 	if(chr->delete_char_sql(char_id) < 0 ) {
-		chr->delete2_accept_ack(act, char_id, 3); // 3: A database error occurred
+		chr->delete2_accept_ack(act->session, char_id, 3); // 3: A database error occurred
 		return;
 	}
 
 	// Refresh character list cache
 	sd->found_char[i] = -1;
-	chr->delete2_accept_ack(act, char_id, 1); // 1: success
+	chr->delete2_accept_ack(act->session, char_id, 1); // 1: success
 }
 
 /**
@@ -276,7 +277,7 @@ void chclif_parse_delete2_req(struct s_receive_action_data *act, struct char_ses
 	}
 	time_t delete_date = 0;
 	int result = chr->delete_insert_queue(char_id, &delete_date);
-	chr->delete2_ack(act, char_id, result, delete_date);
+	chr->delete2_ack(act->session, char_id, result, delete_date);
 
 	/**
 	 ** New deletion process
@@ -407,8 +408,9 @@ void chclif_parse_make_char(struct s_receive_action_data *act, struct char_sessi
 	 * we can be sure that any access to the data in char_data is safe.
 	 **/
 	struct mmo_charstatus char_dat;
-	chr->mmo_char_fromsql(char_id, &char_dat, false); //Only the short data is needed.
-	chr->creation_ok(act->session, &char_dat);
+	struct mmo_charstatus *cd = &char_dat;
+	chr->mmo_char_fromsql(char_id, &cd, false); //Only the short data is needed.
+	chr->creation_ok(act->session, cd);
 
 	// add new entry to the chars list
 	sd->found_char[char_dat.slot] = char_id;
@@ -623,7 +625,7 @@ void chclif_init(void)
 #define packet_def(name, fname) { HEADER_ ## name, sizeof(struct PACKET_ ## name), chclif->parse_ ## fname }
 #define packet_def2(name, fname, len) { HEADER_ ## name, (len), chclif->parse_ ## fname }
 #define packet_def3(name, fname) { HEADER_ ## name, sizeof(struct PACKET_ ## name), ## fname }
-		packet_def(CH_ENTER, enter),
+		// packet_def(CH_ENTER, enter), Handled by chr->parse_entry
 		packet_def(CH_SELECT_CHAR, select_char),
 		packet_def(CH_MAKE_CHAR, make_char),
 		packet_def(CH_DELETE_CHAR, delete_char),
@@ -682,9 +684,7 @@ void chclif_defaults(void)
 	chclif->parse_delete2_cancel = chclif_parse_delete2_cancel;
 	chclif->parse_delete_char    = chclif_parse_delete_char;
 
-	chclif->parse_rename         = chclif_parse_rename;   
-	chclif->parse_rename         = chclif_parse_rename;   
-
+	chclif->parse_rename         = chclif_parse_rename;
 	chclif->parse_rename_confirm = chclif_parse_rename_confirm;
 	chclif->parse_ping           = chclif_parse_ping;
 	chclif->parse_make_char      = chclif_parse_make_char;

@@ -341,7 +341,7 @@ void mapindex_defaults(void)
 	/* */
 	mapindex->db = NULL;
 	mapindex->default_map = MAP_DEFAULT;
-	mapindex->default_map_len = strlen(mapindex->default_map_len);
+	mapindex->default_map_len = strlen(mapindex->default_map);
 	mapindex->default_x = MAP_DEFAULT_X;
 	mapindex->default_y = MAP_DEFAULT_Y;
 	VECTOR_INIT(mapindex->list);

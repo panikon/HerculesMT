@@ -70,7 +70,7 @@ struct loginif_interface {
 	void (*set_all_offline) (void);
 	void (*set_account_online) (int account_id);
 	void (*set_account_offline) (int account_id);
-	void (*request_change_email) (int account_id, char current_email[40], char new_email[40]);
+	void (*request_change_email) (int account_id, const char current_email[40], const char new_email[40]);
 	void (*save_accreg2_head) (int account_id, int char_id);
 	void (*save_accreg2_entry)(const char *key, unsigned int index, intptr_t val, bool is_string);
 	void (*save_accreg2_send) (void);

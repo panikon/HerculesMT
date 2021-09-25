@@ -38,7 +38,7 @@ struct PACKET_SC_NOTIFY_BAN {
 	int16 packet_id;
 	unsigned char error_code;
 } __attribute__((packed));
-DEFINE_PACKET_HEADER(SC_NOTIFY_BAN, 0x81);
+DEFINE_PACKET_ID(SC_NOTIFY_BAN, 0x81);
 
 /**
  * Notifies a denial of authentication (one of the possible answers to CH_ENTER)
@@ -49,7 +49,7 @@ struct PACKET_HC_REFUSE_ENTER {
 	int16 packet_id;
 	unsigned char error_code;
 } __attribute__((packed));
-DEFINE_PACKET_HEADER(HC_REFUSE_ENTER, 0x6c);
+DEFINE_PACKET_ID(HC_REFUSE_ENTER, 0x6c);
 
 #if PACKETVER_MAIN_NUM >= 20130522 || PACKETVER_RE_NUM >= 20130327 || defined(PACKETVER_ZERO)
 struct PACKET_HC_ACK_CHARINFO_PER_PAGE {

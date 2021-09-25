@@ -64,17 +64,17 @@ struct mapif_interface {
 	struct mmo_map_server *(*on_connect) (struct socket_data *session, uint32 ip_, uint16 port_);
 
 	int (*sendall) (const unsigned char *buf, unsigned int len);
-	int (*sendallwos) (struct mmo_map_server *server, unsigned char *buf, unsigned int len);
+	int (*sendallwos) (struct mmo_map_server *server, const unsigned char *buf, unsigned int len);
 	int (*send) (struct mmo_map_server *server, unsigned char *buf, unsigned int len);
 
 	void (*accinfo_request) (int account_id, int u_fd, int u_aid, int u_group, int map_id);
 	void (*update_state) (int id, unsigned char flag, unsigned int state);
 	void (*char_ban) (int char_id, time_t timestamp);
 	void (*change_sex) (int account_id, int sex);
-	void (*fame_list)(struct socket_data *session, struct fame_list *smith, int smith_len, struct fame_list *chemist, int chemist_len, struct fame_list *taekwon, int taekwon_len);
+	void (*fame_list)(struct mmo_map_server *server, struct fame_list *smith, int smith_len, struct fame_list *chemist, int chemist_len, struct fame_list *taekwon, int taekwon_len);
 	void (*fame_list_update) (enum fame_list_type type, int index, int fame);
 	void (*map_received) (struct socket_data *session, char *wisp_server_name, uint8 flag);
-	void (*send_maps) (struct mmo_map_server *server, int16 *map_list);
+	void (*send_maps) (struct mmo_map_server *server, const uint16 *map_list);
 
 	void (*scdata_head) (struct socket_data *session, int aid, int cid, int count);
 	void (*scdata_data) (struct socket_data *session, struct status_change_data *data);
@@ -88,6 +88,7 @@ struct mapif_interface {
 	void (*pong)(struct socket_data *session);
 	void (*auth_ok) (struct socket_data *session, int account_id, struct char_auth_node *node, struct mmo_charstatus *cd);
 	void (*auth_failed) (struct socket_data *session, int account_id, int char_id, int login_id1, char sex, uint32 ip);
+	void (*login_map_server_ack) (struct socket_data *session, uint8 flag);
 
 	void (*send_users_count) (int users);
 	void (*pLoadAchievements) (int fd);
@@ -98,28 +99,27 @@ struct mapif_interface {
 
 	void (*auction_message) (int char_id, enum e_auction_result_message result);
 	void (*auction_sendlist) (struct socket_data *session, int char_id, short count, short pages, unsigned char *buf);
-	void (*parse_auction_requestlist) (struct s_receive_action_data *act);
+	void (*parse_auction_requestlist) (struct s_receive_action_data *act, struct mmo_map_server *server);
 	void (*auction_register) (struct socket_data *session, struct auction_data *auction);
-	void (*parse_auction_register) (struct s_receive_action_data *act);
+	void (*parse_auction_register) (struct s_receive_action_data *act, struct mmo_map_server *server);
 	void (*auction_cancel) (struct socket_data *session, int char_id, enum e_auction_cancel result);
-	void (*parse_auction_cancel) (struct s_receive_action_data *act);
+	void (*parse_auction_cancel) (struct s_receive_action_data *act, struct mmo_map_server *server);
 	void (*auction_close) (struct socket_data *session, int char_id, enum e_auction_cancel result);
-	void (*parse_auction_close) (struct s_receive_action_data *act);
+	void (*parse_auction_close) (struct s_receive_action_data *act, struct mmo_map_server *server);
 	void (*auction_bid) (struct socket_data *session, int char_id, int bid, enum e_auction_result_message result);
-	void (*parse_auction_bid) (struct s_receive_action_data *act);
+	void (*parse_auction_bid) (struct s_receive_action_data *act, struct mmo_map_server *server);
 
-	void (*elemental_send) (int fd, struct s_elemental *ele, unsigned char flag);
-	void (*parse_elemental_create) (int fd, const struct s_elemental *ele);
-	void (*parse_elemental_load) (int fd, int ele_id, int char_id);
-	void (*elemental_deleted) (int fd, unsigned char flag);
-	void (*parse_elemental_delete) (int fd, int ele_id);
-	void (*elemental_saved) (int fd, unsigned char flag);
-	void (*parse_elemental_save) (int fd, const struct s_elemental *ele);
+	void (*elemental_send) (struct socket_data *session, unsigned char flag, const uint8_t *elemental_data);
+	void (*parse_elemental_create) (struct s_receive_action_data *act, struct mmo_map_server *server);
+	void (*parse_elemental_load) (struct s_receive_action_data *act, struct mmo_map_server *server);
+	void (*elemental_deleted) (struct socket_data *session, unsigned char flag);
+	void (*parse_elemental_delete) (struct s_receive_action_data *act, struct mmo_map_server *server);
+	void (*elemental_saved) (struct socket_data *session, unsigned char flag);
+	void (*parse_elemental_save) (struct s_receive_action_data *act, struct mmo_map_server *server);
 
-	int (*guild_created) (int fd, int account_id, struct guild *g);
-	int (*guild_noinfo) (int fd, int guild_id);
-	int (*guild_info) (int fd, struct guild *g);
-	int (*guild_memberadded) (int fd, int guild_id, int account_id, int char_id, int flag);
+	int (*guild_created)     (struct socket_data *session, int account_id, struct guild *g);
+	void (*guild_info)       (struct mmo_map_server *server, struct guild *g, bool success);
+	int (*guild_memberadded) (struct socket_data *session, int guild_id, int account_id, int char_id, int flag);
 	int (*guild_withdraw) (int guild_id, int account_id, int char_id, int flag, const char *name, const char *mes);
 	int (*guild_memberinfoshort) (struct guild *g, int idx);
 	int (*guild_broken) (int guild_id, int flag);
@@ -131,23 +131,24 @@ struct mapif_interface {
 	int (*guild_notice) (struct guild *g);
 	int (*guild_emblem) (struct guild *g);
 	int (*guild_master_changed) (struct guild *g, int aid, int cid);
-	int (*guild_castle_dataload) (int fd, int sz, const int *castle_ids);
-	int (*parse_CreateGuild) (int fd, int account_id, const char *name, const struct guild_member *master);
-	int (*parse_GuildInfo) (int fd, int guild_id);
-	int (*parse_GuildAddMember) (int fd, int guild_id, const struct guild_member *m);
-	int (*parse_GuildLeave) (int fd, int guild_id, int account_id, int char_id, int flag, const char *mes);
-	int (*parse_GuildChangeMemberInfoShort) (int fd, int guild_id, int account_id, int char_id, int online, int lv, int class);
-	int (*parse_BreakGuild) (int fd, int guild_id);
-	int (*parse_GuildBasicInfoChange) (int fd, int guild_id, int type, const void *data, int len);
-	int (*parse_GuildMemberInfoChange) (int fd, int guild_id, int account_id, int char_id, int type, const char *data, int len);
-	int (*parse_GuildPosition) (int fd, int guild_id, int idx, const struct guild_position *p);
-	int (*parse_GuildSkillUp) (int fd, int guild_id, uint16 skill_id, int account_id, int max);
-	int (*parse_GuildAlliance) (int fd, int guild_id1, int guild_id2, int account_id1, int account_id2, int flag);
-	int (*parse_GuildNotice) (int fd, int guild_id, const char *mes1, const char *mes2);
-	int (*parse_GuildEmblem) (int fd, int len, int guild_id, int dummy, const char *data);
-	int (*parse_GuildCastleDataLoad) (int fd, int len, const int *castle_ids);
-	int (*parse_GuildCastleDataSave) (int fd, int castle_id, int index, int value);
-	int (*parse_GuildMasterChange) (int fd, int guild_id, const char* name, int len);
+	int (*guild_castle_dataload) (struct socket_data *session, const int *castle_ids, int num);
+	void (*parse_CreateGuild)                (struct s_receive_action_data *act, struct mmo_map_server *server);
+	void (*parse_GuildInfo)                  (struct s_receive_action_data *act, struct mmo_map_server *server);
+	void (*parse_GuildAddMember)             (struct s_receive_action_data *act, struct mmo_map_server *server);
+	void (*parse_GuildLeave)                 (struct s_receive_action_data *act, struct mmo_map_server *server);
+	void (*parse_GuildChangeMemberInfoShort) (struct s_receive_action_data *act, struct mmo_map_server *server);
+	void (*parse_BreakGuild)                 (struct s_receive_action_data *act, struct mmo_map_server *server);
+	void (*parse_GuildBasicInfoChange)       (struct s_receive_action_data *act, struct mmo_map_server *server);
+	void (*parse_GuildMemberInfoChange)      (struct s_receive_action_data *act, struct mmo_map_server *server);
+	void (*parse_GuildPosition)              (struct s_receive_action_data *act, struct mmo_map_server *server);
+	void (*parse_GuildSkillUp)               (struct s_receive_action_data *act, struct mmo_map_server *server);
+	void (*parse_GuildAlliance)              (struct s_receive_action_data *act, struct mmo_map_server *server);
+	void (*parse_GuildNotice)                (struct s_receive_action_data *act, struct mmo_map_server *server);
+	void (*parse_GuildEmblem)                (struct s_receive_action_data *act, struct mmo_map_server *server);
+	void (*parse_GuildCastleDataLoad)        (struct s_receive_action_data *act, struct mmo_map_server *server);
+	void (*parse_GuildCastleDataSave)        (struct s_receive_action_data *act, struct mmo_map_server *server);
+	void (*parse_GuildMasterChange)          (struct s_receive_action_data *act, struct mmo_map_server *server);
+
 	void (*homunculus_created) (int fd, int account_id, const struct s_homunculus *sh, unsigned char flag);
 	void (*homunculus_deleted) (int fd, int flag);
 	void (*homunculus_loaded) (int fd, int account_id, struct s_homunculus *hd);
@@ -231,7 +232,7 @@ struct mapif_interface {
 	void (*parse_ItemBoundRetrieve) (struct s_receive_action_data *act);
 	void (*parse_accinfo) (struct s_receive_action_data *act);
 	int (*account_reg_reply) (struct s_receive_action_data *act,int account_id,int char_id, int type);
-	int (*disconnectplayer)  (struct session_data *session, int account_id, int char_id, int reason);
+	int (*disconnectplayer)  (struct socket_data *session, int account_id, int char_id, int reason);
 	int (*parse_Registry) (struct s_receive_action_data *act);
 	int (*parse_RegistryRequest) (struct s_receive_action_data *act);
 	void (*namechange_ack) (struct s_receive_action_data *act, int account_id, int char_id, int type, int flag, const char *name);

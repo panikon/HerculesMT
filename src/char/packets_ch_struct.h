@@ -92,7 +92,7 @@ struct PACKET_CH_ENTER {
 struct PACKET_CH_SELECT_CHAR {
 	int16 packet_id;
 	uint8 char_slot;
-} __attribute((packed));
+} __attribute__((packed));
 
 /**
  * Character creation request
@@ -124,7 +124,7 @@ struct PACKET_CH_MAKE_CHAR {
 struct PACKET_CH_DELETE_CHAR {
 	int16 packet_id;
 	int32 char_id;
-	char key[40]
+	char key[40];
 } __attribute__((packed));
 
 /**
@@ -134,7 +134,7 @@ struct PACKET_CH_DELETE_CHAR {
 struct PACKET_CH_DELETE_CHAR2 {
 	int16 packet_id;
 	int32 char_id;
-	char key[50]
+	char key[50];
 } __attribute__((packed));
 
 /**

@@ -2298,6 +2298,10 @@ HPShared struct db_interface *DB;
  * INDEX_MAP_ADD                 - Adds entry, grows map if necessary.        *
  * INDEX_MAP_LENGTH              - Length of entry array.                     *
  * INDEX_MAP_EMPTY               - Next empty index.                          *
+ * INDEX_MAP_ITER_DECL           - Declares an iterator.                      *
+ * INDEX_MAP_ITER                - Creates a new iterator.                    *
+ * INDEX_MAP_ITER_FREE           - Frees an iterator.                         *
+ * INDEX_MAP_NEXT                - Returns next used index.                   *
  * INDEX_MAP_COUNT               - Number of valid entries.                   *
  * INDEX_MAP_INDEX               - Returns object.                            *
  ******************************************************************************/
@@ -2417,13 +2421,50 @@ HPShared struct db_interface *DB;
 	} while(false)
 
 /**
- * Finds next empty index
+ * Finds next empty index and clears it for use.
  *
  * @param _im Index map object
  * @return Next empty index
  * @retval -1 All entries occupied
  **/
 #define INDEX_MAP_EMPTY(_im) (find_first_set_array((_im)._free_index_, (_im)._free_index_length_, true))
+
+/**
+ * Declares an iterator.
+ **/
+#define INDEX_MAP_ITER_DECL(_name) uint32 *(_name) = NULL
+
+/**
+ * Creates a new iterator for the provided index map object
+ *
+ * @param _im Index map object
+ * @param _name Name of the iterator variable
+ * @remarks After an iterator is created the index map must not be changed,
+ * otherwise the iterator becomes invalid
+ * @remarks This iterator should be freed by calling INDEX_MAP_ITER_FREE
+ **/
+#define INDEX_MAP_ITER(_im, _name)                               \
+	do {                                                         \
+		size_t len = sizeof(uint32)*(_im)._free_index_length_;   \
+		(_name) = aMalloc(len);                                  \
+		for(int _i = 0; _i < (_im)._free_index_length_; _i++)    \
+			(_name)[_i] = ~((_im)._free_index_[_i]);             \
+	} while(false)
+
+/**
+ * Frees an iterator
+ **/
+#define INDEX_MAP_ITER_FREE(_iter) aFree(_iter)
+
+/**
+ * Finds next occupied index.
+ *
+ * @param _im  Index map object
+ * @param _id  Current index
+ * @return Next valid index
+ * @retval -1 No next occupied index
+ **/
+#define INDEX_MAP_NEXT(_im, _iter) (find_first_set_array((_iter), (_im)._free_index_length_, true))
 
 /**
  * Number of valid entries.

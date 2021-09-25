@@ -42,6 +42,7 @@
 #include "common/memmgr.h"
 #include "common/mmo.h"
 #include "common/nullpo.h"
+#include "common/utils.h"
 #include "common/random.h"
 #include "common/showmsg.h"
 #include "common/socket.h"
@@ -148,7 +149,8 @@ static void mapif_server_reset(struct mmo_map_server *server)
 	 * This information is broadcasted in fixed intervals
 	 * @see do_init_loginif
 	 **/
-	chr->online_char_db->foreach(chr->online_char_db, chr->db_setoffline, id); //Tag relevant chars as 'in disconnected' server.
+	chr->online_char_db->foreach(chr->online_char_db,
+		chr->db_setoffline, server->pos); //Tag relevant chars as 'in disconnected' server.
 	mapif->server_destroy(server);
 }
 
@@ -200,10 +202,11 @@ static int mapif_sendallwos(struct mmo_map_server *server, const unsigned char *
 
 	nullpo_ret(buf);
 	c = 0;
-	for(i = 0; i < INDEX_MAP_LENGTH(chr->map_server_list); i++) {
-		struct mmo_map_server *cur = &INDEX_MAP_INDEX(chr->map_server_list, i);
-		if(!cur)
-			continue;
+
+	INDEX_MAP_ITER_DECL(iter);
+	INDEX_MAP_ITER(chr->map_server_list, iter);
+	while((i = INDEX_MAP_NEXT(chr->map_server_list, iter)) != -1) {
+		struct mmo_map_server *cur = INDEX_MAP_INDEX(chr->map_server_list, i);
 		if(cur->session && cur != server) {
 			WFIFOHEAD(cur->session, len, true);
 			memcpy(WFIFOP(cur->session, 0), buf, len);
@@ -211,6 +214,7 @@ static int mapif_sendallwos(struct mmo_map_server *server, const unsigned char *
 			c++;
 		}
 	}
+	INDEX_MAP_ITER_FREE(iter);
 
 	return c;
 }
@@ -315,7 +319,7 @@ size_t mapif_fame_list_sub(uint8 *buf, struct fame_list *list, int len)
  *
  * @param session When set, sends list to only this server
  **/
-static int mapif_fame_list(struct socket_data *session,
+static int mapif_fame_list(struct mmo_map_server *server,
 	struct fame_list *smith, int smith_len,
 	struct fame_list *chemist, int chemist_len,
 	struct fame_list *taekwon, int taekwon_len
@@ -336,17 +340,17 @@ static int mapif_fame_list(struct socket_data *session,
 	WBUFW(buf,0) = HEADER_WZ_FAME_LIST;
 	len += mapif_fame_list_sub(&buf[len], smith, smith_len);
 	// add blacksmith's block length
-	WBUFW(buf, 6) = len;
+	WBUFW(buf, 6) = (uint16)len;
 	len += mapif_fame_list_sub(&buf[len], chemist, chemist_len);
 	// add alchemist's block length
-	WBUFW(buf, 4) = len;
+	WBUFW(buf, 4) = (uint16)len;
 	len += mapif_fame_list_sub(&buf[len], taekwon, taekwon_len);
 	// add total packet length
-	WBUFW(buf, 2) = len;
+	WBUFW(buf, 2) = (uint16)len;
 	assert(len == expected_len && "Buffer overflow");
 
-	if(session)
-		mapif->send(session, buf, len);
+	if(server)
+		mapif->send(server, buf, len);
 	else
 		mapif->sendall(buf, len);
 
@@ -401,7 +405,7 @@ static void mapif_send_maps(struct mmo_map_server *server, int16 *map_list)
 		CREATE_BUFFER(buf, uint8, expected_len);
 
 		WBUFW(buf,0) = HEADER_WZ_SEND_MAP;
-		WBUFW(buf,2) = expected_len;
+		WBUFW(buf,2) = (uint16)expected_len;
 		WBUFL(buf,4) = htonl(server->ip);
 		WBUFW(buf,8) = htons(server->port);
 		memcpy(WBUFP(buf,10), map_list, list_len);
@@ -409,11 +413,12 @@ static void mapif_send_maps(struct mmo_map_server *server, int16 *map_list)
 
 		DELETE_BUFFER(buf);
 	}
+
 	// Transmitting the maps of the other map-servers to the new map-server
-	for(k = 0; k < INDEX_MAP_LENGTH(chr->map_server_list); k++) {
-		struct mmo_map_server *cur = &INDEX_MAP_INDEX(chr->map_server_list, k);
-		if(!cur)
-			continue;
+	INDEX_MAP_ITER_DECL(iter);
+	INDEX_MAP_ITER(chr->map_server_list, iter);
+	while((k = INDEX_MAP_NEXT(chr->map_server_list, iter)) != -1) {
+		struct mmo_map_server *cur = INDEX_MAP_INDEX(chr->map_server_list, k);
 		if(cur == server)
 			continue;
 
@@ -421,7 +426,7 @@ static void mapif_send_maps(struct mmo_map_server *server, int16 *map_list)
 		WFIFOW(cur->session,0) = HEADER_WZ_SEND_MAP;
 		WFIFOL(cur->session,4) = htonl(cur->ip);
 		WFIFOW(cur->session,8) = htons(cur->port);
-		j = 0;
+		int j = 0;
 		for(i = 0; i < VECTOR_LENGTH(cur->maps); i++) {
 			uint16 m = VECTOR_INDEX(cur->maps, i);
 			if (m != 0)
@@ -432,6 +437,7 @@ static void mapif_send_maps(struct mmo_map_server *server, int16 *map_list)
 			WFIFOSET(cur->session, WFIFOW(cur->session,2));
 		}
 	}
+	INDEX_MAP_ITER_FREE(iter);
 }
 
 /**
@@ -444,7 +450,7 @@ static void mapif_scdata_send(struct socket_data *session)
 	if(expected_len != WFIFOW(session, 2)) {
 		ShowDebug("mapif_scdata_send: Expected length %zd, got %zd\n",
 			WFIFOW(session, 2), expected_len);
-		WFIFOW(session, 2) = expected_len;
+		WFIFOW(session, 2) = (uint16)expected_len;
 	}
 	WFIFOSET(session, WFIFOW(session, 2));
 }
@@ -466,7 +472,7 @@ static void mapif_scdata_data(struct socket_data *session, struct status_change_
 	pos += sizeof((WFIFOL(session,pos) = data->tick));
 	pos += sizeof((WFIFOL(session,pos) = data->total_tick));
 
-	WFIFOW(session, 12) = count + 1;
+	WFIFOW(session, 12) = (uint16)count + 1;
 }
 
 /**
@@ -479,7 +485,7 @@ static void mapif_scdata_head(struct socket_data *session, int aid, int cid, int
 	expected_len += sizeof(struct status_change_packet_data)*count;
 	WFIFOHEAD(session, expected_len, true);
 	WFIFOW(session, 0) = HEADER_WZ_STATUS_CHANGE;
-	WFIFOW(session, 2) = expected_len;
+	WFIFOW(session, 2) = (uint16)expected_len;
 	WFIFOL(session,4)  = aid;
 	WFIFOL(session,8)  = cid;
 	WFIFOW(session,12) = 0;
@@ -626,6 +632,20 @@ static void char_auth_failed(struct socket_data *session, int account_id, int ch
 	WFIFOSET(session,19);
 }
 
+/**
+ * WZ_MAP_AUTH_ACK
+ * @param flag 0 Ok
+ * @param flag 3 Error
+ **/
+static void mapif_login_map_server_ack(struct socket_data *session, uint8 flag)
+{
+	WFIFOHEAD(session, 3, true);
+	WFIFOW(session, 0) = HEADER_WZ_MAP_AUTH_ACK;
+	WFIFOB(session, 2) = flag;
+	WFIFOSET2(session, 3);
+}
+
+
 /*======================================
  * MAPIF : AUCTION
  *--------------------------------------*/
@@ -752,7 +772,7 @@ static void mapif_parse_auction_register(struct s_receive_action_data *act)
 	if( inter_auction->count(auction.seller_id, false) < 5 )
 		auction.auction_id = inter_auction->create(&auction);
 
-	mapif->auction_register(act, &auction);
+	mapif->auction_register(act->session, &auction);
 }
 
 /**
@@ -909,7 +929,7 @@ static void mapif_parse_auction_bid(struct s_receive_action_data *act)
 
 	if(bid >= auction->buynow) {
 		// Automatic won the auction
-		mapif->auction_bid(act, char_id, bid - auction->buynow, AUCTIONRESULT_BID_SUCCESS);
+		mapif->auction_bid(act->session, char_id, bid - auction->buynow, AUCTIONRESULT_BID_SUCCESS);
 
 		inter_mail->sendmail(0, "Auction Manager", auction->buyer_id,
 			auction->buyer_name,
@@ -932,125 +952,218 @@ static void mapif_parse_auction_bid(struct s_receive_action_data *act)
  * MAPIF : ELEMENTAL
  *--------------------------------------*/
 
-static void mapif_elemental_send(int fd, struct s_elemental *ele, unsigned char flag)
+/**
+ * WZ_ELEMENTAL_SEND
+ * Sends elemental information to map-server
+ **/
+static void mapif_elemental_send(struct socket_data *session, unsigned char flag, const uint8_t *elemental_data)
 {
 	int size = sizeof(struct s_elemental) + 5;
 
-	nullpo_retv(ele);
-	WFIFOHEAD(fd, size);
-	WFIFOW(fd, 0) = 0x387c;
-	WFIFOW(fd, 2) = size;
-	WFIFOB(fd, 4) = flag;
-	memcpy(WFIFOP(fd, 5), ele, sizeof(struct s_elemental));
-	WFIFOSET(fd, size);
+	WFIFOHEAD(session, size, true);
+	WFIFOW(session, 0) = 0x387c;
+	WFIFOW(session, 2) = size;
+	WFIFOB(session, 4) = flag;
+
+	memcpy(WFIFOP(session, 5), elemental_data, sizeof(struct s_elemental_packet_data));
+	WFIFOSET(session, size);
 }
 
-static void mapif_parse_elemental_create(int fd, const struct s_elemental *ele)
+/**
+ * ZW_ELEMENTAL_CREATE
+ * Parses elemental creation request
+ **/
+static void mapif_parse_elemental_create(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
-	struct s_elemental ele_;
 	bool result;
+	struct s_elemental ele = {
+		.elemental_id = RFIFOL(act, 2),
+		.char_id      = RFIFOL(act, 6),
+		.class_       = RFIFOL(act, 10),
+		.mode         = RFIFOL(act, 14),
+		.hp           = RFIFOL(act, 18),
+		.sp           = RFIFOL(act, 22),
+		.max_hp       = RFIFOL(act, 26),
+		.max_sp       = RFIFOL(act, 30),
+		.matk         = RFIFOL(act, 14),
+		.atk          = RFIFOL(act, 38),
+		.atk2         = RFIFOL(act, 42),
+		.hit          = RFIFOW(act, 46),
+		.flee         = RFIFOW(act, 48),
+		.amotion      = RFIFOW(act, 50),
+		.def          = RFIFOW(act, 52),
+		.mdef         = RFIFOW(act, 54),
+		.life_time    = RFIFOL(act, 56),
+	};
 
-	memcpy(&ele_, ele, sizeof(ele_));
-
-	result = inter_elemental->create(&ele_);
-	mapif->elemental_send(fd, &ele_, result);
+	result = inter_elemental->create(&ele);
+	mapif->elemental_send(act->session, result, RFIFOP(act, 2));
 }
 
-static void mapif_parse_elemental_load(int fd, int ele_id, int char_id)
+/**
+ * ZW_ELEMENTAL_LOAD
+ * Load elemental request
+ **/
+static void mapif_parse_elemental_load(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	struct s_elemental ele;
-	bool result = inter_elemental->load(ele_id, char_id, &ele);
-	mapif->elemental_send(fd, &ele, result);
+	bool result = inter_elemental->load(RFIFOL(act,2), RFIFOL(act,6), &ele);
+	mapif->elemental_send(act->session, result,
+		(uint8_t*)&(struct s_elemental_packet_data) {
+			.elemental_id = ele.elemental_id,
+			.char_id      = ele.char_id,
+			.class_       = ele.class_,
+			.mode         = ele.mode,
+			.hp           = ele.hp,
+			.sp           = ele.sp,
+			.max_hp       = ele.max_hp,
+			.max_sp       = ele.max_sp,
+			.matk         = ele.matk,
+			.atk          = ele.atk,
+			.atk2         = ele.atk2,
+			.hit          = ele.hit,
+			.flee         = ele.flee,
+			.amotion      = ele.amotion,
+			.def          = ele.def,
+			.mdef         = ele.mdef,
+			.life_time    = ele.life_time,
+		}
+	);
 }
 
-static void mapif_elemental_deleted(int fd, unsigned char flag)
+/**
+ * WZ_ELEMENTAL_DELETE_ACK
+ * @param flag (bool) success
+ **/
+static void mapif_elemental_deleted(struct socket_data *session, unsigned char flag)
 {
-	WFIFOHEAD(fd, 3);
-	WFIFOW(fd, 0) = 0x387d;
-	WFIFOB(fd, 2) = flag;
-	WFIFOSET(fd, 3);
+	WFIFOHEAD(session, 3, true);
+	WFIFOW(session, 0) = 0x387d;
+	WFIFOB(session, 2) = flag;
+	WFIFOSET(session, 3);
 }
 
-static void mapif_parse_elemental_delete(int fd, int ele_id)
+/**
+ * ZW_ELEMENTAL_DELETE
+ * Elemental delete request
+ **/
+static void mapif_parse_elemental_delete(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
-	bool result = inter_elemental->delete(ele_id);
-	mapif->elemental_deleted(fd, result);
+	bool result = inter_elemental->delete(RFIFOL(act, 2));
+	mapif->elemental_deleted(act->session, result);
 }
 
-static void mapif_elemental_saved(int fd, unsigned char flag)
+/**
+ * WZ_ELEMENTAL_SAVE_ACK
+ * @param flag (bool) success
+ **/
+static void mapif_elemental_saved(struct socket_data *session, unsigned char flag)
 {
-	WFIFOHEAD(fd, 3);
-	WFIFOW(fd, 0) = 0x387e;
-	WFIFOB(fd, 2) = flag;
-	WFIFOSET(fd, 3);
+	WFIFOHEAD(session, 3, true);
+	WFIFOW(session, 0) = 0x387e;
+	WFIFOB(session, 2) = flag;
+	WFIFOSET(session, 3);
 }
 
-static void mapif_parse_elemental_save(int fd, const struct s_elemental *ele)
+/**
+ * ZW_ELEMENTAL_SAVE
+ * Elemental save request
+ **/
+static void mapif_parse_elemental_save(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
-	bool result = inter_elemental->save(ele);
-	mapif->elemental_saved(fd, result);
+	struct s_elemental ele = {
+		.elemental_id = RFIFOL(act, 2),
+		.char_id      = RFIFOL(act, 6),
+		.class_       = RFIFOL(act, 10),
+		.mode         = RFIFOL(act, 14),
+		.hp           = RFIFOL(act, 18),
+		.sp           = RFIFOL(act, 22),
+		.max_hp       = RFIFOL(act, 26),
+		.max_sp       = RFIFOL(act, 30),
+		.matk         = RFIFOL(act, 14),
+		.atk          = RFIFOL(act, 38),
+		.atk2         = RFIFOL(act, 42),
+		.hit          = RFIFOW(act, 46),
+		.flee         = RFIFOW(act, 48),
+		.amotion      = RFIFOW(act, 50),
+		.def          = RFIFOW(act, 52),
+		.mdef         = RFIFOW(act, 54),
+		.life_time    = RFIFOL(act, 56),
+	};
+	bool result = inter_elemental->save(&ele);
+	mapif->elemental_saved(act->session, result);
 }
 
-static int mapif_guild_created(int fd, int account_id, struct guild *g)
+/*======================================
+ * MAPIF : GUILD
+ *--------------------------------------*/
+
+/**
+ * WZ_GUILD_CREATE_ACK
+ **/
+static int mapif_guild_created(struct socket_data *session, int account_id, struct guild *g)
 {
-	WFIFOHEAD(fd, 10);
-	WFIFOW(fd, 0) = 0x3830;
-	WFIFOL(fd, 2) = account_id;
+	WFIFOHEAD(session, 10, true);
+	WFIFOW(session, 0) = 0x3830;
+	WFIFOL(session, 2) = account_id;
 	if (g != NULL) {
-		WFIFOL(fd, 6) = g->guild_id;
+		WFIFOL(session, 6) = g->guild_id;
 		ShowInfo("int_guild: Guild created (%d - %s)\n", g->guild_id, g->name);
 	} else {
-		WFIFOL(fd, 6) = 0;
+		WFIFOL(session, 6) = 0;
 	}
 
-	WFIFOSET(fd, 10);
+	WFIFOSET(session, 10);
 	return 0;
 }
 
-// Guild not found
-static int mapif_guild_noinfo(int fd, int guild_id)
+/**
+ * WZ_GUILD_INFO_ACK 0x3831 <len>.W <guild_id>.L {<guild_data}.*B
+ * Sends complete guild information.
+ *
+ * @param server Map-server to send information (when NULL sends to all maps)
+ * @param success Was the guild information found?
+ * @remarks Guild data is only sent when success is true
+ **/
+static void mapif_guild_info(struct mmo_map_server *server, struct guild *g, bool success)
 {
 	unsigned char buf[12];
 	WBUFW(buf, 0) = 0x3831;
-	WBUFW(buf, 2) = 8;
-	WBUFL(buf, 4) = guild_id;
-	ShowWarning("int_guild: info not found %d\n", guild_id);
-	if (fd < 0)
+	if(!success) {
+		WBUFW(buf, 2) = 8;
+		WBUFL(buf, 4) = g->guild_id;
+		ShowWarning("int_guild: info not found %d\n", g->guild_id);
+	} else {
+		// TODO/FIXME: Copy of a padded struct
+		WBUFW(buf, 2) = 4 + sizeof(struct guild);
+		memcpy(buf + 4, g, sizeof(struct guild));
+	}
+	if (!server)
 		mapif->sendall(buf, 8);
 	else
-		mapif->send(fd,buf, 8);
-	return 0;
+		mapif->send(server, buf, 8);
 }
 
-// Send guild info
-static int mapif_guild_info(int fd, struct guild *g)
+/**
+ * WZ_GUILD_MEMBER_ADD_ACK 0x3832
+ * Member addition ack
+ **/
+static int mapif_guild_memberadded(struct socket_data *session, int guild_id, int account_id, int char_id, int flag)
 {
-	unsigned char buf[8 + sizeof(struct guild)];
-	nullpo_ret(g);
-	WBUFW(buf, 0) = 0x3831;
-	WBUFW(buf, 2) = 4 + sizeof(struct guild);
-	memcpy(buf + 4, g, sizeof(struct guild));
-	if (fd < 0)
-		mapif->sendall(buf, WBUFW(buf, 2));
-	else
-		mapif->send(fd, buf, WBUFW(buf, 2));
-	return 0;
+	WFIFOHEAD(session, 15, true);
+	WFIFOW(session, 0) = 0x3832;
+	WFIFOL(session, 2) = guild_id;
+	WFIFOL(session, 6) = account_id;
+	WFIFOL(session, 10) = char_id;
+	WFIFOB(session, 14) = flag;
+	WFIFOSET(session, 15);
+	// TODO/FIXME: Shouldn't this packet be sent to all map-servers as map_guild_withdraw is?
 }
 
-// ACK member add
-static int mapif_guild_memberadded(int fd, int guild_id, int account_id, int char_id, int flag)
-{
-	WFIFOHEAD(fd, 15);
-	WFIFOW(fd, 0) = 0x3832;
-	WFIFOL(fd, 2) = guild_id;
-	WFIFOL(fd, 6) = account_id;
-	WFIFOL(fd, 10) = char_id;
-	WFIFOB(fd, 14) = flag;
-	WFIFOSET(fd, 15);
-	return 0;
-}
-
-// ACK member leave
+/**
+ * WZ_GUILD_WITHDRAW_ACK 0x3834
+ * Member leave ack
+ **/
 static int mapif_guild_withdraw(int guild_id, int account_id, int char_id, int flag, const char *name, const char *mes)
 {
 	unsigned char buf[55 + NAME_LENGTH];
@@ -1174,7 +1287,7 @@ static int mapif_guild_position(struct guild *g, int idx)
 	WBUFW(buf, 2) = sizeof(struct guild_position)+12;
 	WBUFL(buf, 4) = g->guild_id;
 	WBUFL(buf, 8) = idx;
-	memcpy(WBUFP(buf, 12), &g->position[idx], sizeof(struct guild_position));
+	memcpy(WBUFP(buf, 12), &g->position[idx], sizeof(struct guild_position)); // TODO/FIXME: Copy of a padded struct
 	mapif->sendall(buf, WBUFW(buf, 2));
 	return 0;
 }
@@ -1218,156 +1331,250 @@ static int mapif_guild_master_changed(struct guild *g, int aid, int cid)
 	return 0;
 }
 
-static int mapif_guild_castle_dataload(int fd, int sz, const int *castle_ids)
+/**
+ * WZ_GUILD_CASTLE_LOAD_ACK
+ * @param castle_ids Array of castle ids to be sent
+ * @param len        Length of castle_ids
+ **/
+static int mapif_guild_castle_dataload(struct socket_data *session, const int *castle_ids, int num)
 {
 	struct guild_castle *gc = NULL;
-	int num = (sz - 4) / sizeof(int);
 	int len = 4 + num * sizeof(*gc);
 	int i;
 
 	nullpo_ret(castle_ids);
-	WFIFOHEAD(fd, len);
-	WFIFOW(fd, 0) = 0x3840;
-	WFIFOW(fd, 2) = len;
+	WFIFOHEAD(session, len, true);
+	WFIFOW(session, 0) = 0x3840;
+	WFIFOW(session, 2) = len;
 	for (i = 0; i < num; i++) {
 		gc = inter_guild->castle_fromsql(*(castle_ids++));
-		memcpy(WFIFOP(fd, 4 + i * sizeof(*gc)), gc, sizeof(*gc));
+		// TODO/FIXME: Copy of a padded struct
+		memcpy(WFIFOP(session, 4 + i * sizeof(*gc)), gc, sizeof(*gc));
 	}
-	WFIFOSET(fd, len);
-	return 0;
-}
-
-// Guild creation request
-static int mapif_parse_CreateGuild(int fd, int account_id, const char *name, const struct guild_member *master)
-{
-	struct guild *g;
-	nullpo_ret(name);
-	nullpo_ret(master);
-
-	g = inter_guild->create(name, master);
-
-	// Report to client
-	mapif->guild_created(fd,account_id,g);
-	if (g != NULL) {
-		mapif->guild_info(fd,g);
-	}
-
-	return 0;
-}
-
-// Return guild info to client
-static int mapif_parse_GuildInfo(int fd, int guild_id)
-{
-	struct guild * g = inter_guild->fromsql(guild_id); //We use this because on start-up the info of castle-owned guilds is required. [Skotlex]
-	if (g != NULL) {
-		if (!inter_guild->calcinfo(g))
-			mapif->guild_info(fd, g);
-	} else {
-		mapif->guild_noinfo(fd, guild_id); // Failed to load info
-	}
-	return 0;
-}
-
-// Add member to guild
-static int mapif_parse_GuildAddMember(int fd, int guild_id, const struct guild_member *m)
-{
-	nullpo_ret(m);
-
-	inter_guild->add_member(guild_id, m, fd);
-	return 0;
-}
-
-// Delete member from guild
-static int mapif_parse_GuildLeave(int fd, int guild_id, int account_id, int char_id, int flag, const char *mes)
-{
-	inter_guild->leave(guild_id, account_id, char_id, flag, mes, fd);
-	return 0;
-}
-
-// Change member info
-static int mapif_parse_GuildChangeMemberInfoShort(int fd, int guild_id, int account_id, int char_id, int online, int lv, int class)
-{
-	inter_guild->update_member_info_short(guild_id, account_id, char_id, online, lv, class);
-	return 0;
-}
-
-// BreakGuild
-static int mapif_parse_BreakGuild(int fd, int guild_id)
-{
-	inter_guild->disband(guild_id);
+	WFIFOSET(session, len);
 	return 0;
 }
 
 /**
+ * ZW_GUILD_CREATE
+ * Guild creation request
+ **/
+static void mapif_parse_CreateGuild(struct s_receive_action_data *act, struct mmo_map_server *server)
+{
+	struct guild *g;
+	int master_account_id = RFIFOL(act, 26);
+	struct guild_member m = {
+			.account_id = RFIFOL(act, 26),
+			.char_id    = RFIFOL(act, 30),
+			.hair       = RFIFOW(act, 34),
+			.hair_color = RFIFOW(act, 36),
+			.gender     = RFIFOW(act, 38),
+			.class      = RFIFOL(act, 40),
+			.lv         = RFIFOW(act, 44),
+			.exp        = RFIFOQ(act, 46),
+			.exp_payper = RFIFOL(act, 54),
+			.online     = RFIFOW(act, 58),
+			.position   = RFIFOW(act, 60),
+			//.name       = RFIFOP(act, 62),
+			.modified   = RFIFOB(act, 86),
+		};
+	memcpy(m.name, RFIFOP(act, 62), sizeof(m.name));
+	g = inter_guild->create(RFIFOP(act, 2), &m);
+
+	// Report to client
+	mapif->guild_created(act->session, master_account_id,g);
+	if (g != NULL) {
+		mapif->guild_info(server, g, true);
+	}
+}
+
+/**
+ * ZW_GUILD_INFO
+ * Guild information request
+ **/
+static void mapif_parse_GuildInfo(struct s_receive_action_data *act, struct mmo_map_server *server)
+{
+	//We use this because on start-up the info of castle-owned guilds is required. [Skotlex]
+	struct guild * g = inter_guild->fromsql(RFIFOL(act, 2));
+	if(g != NULL) {
+		if(!inter_guild->calcinfo(g))
+			mapif->guild_info(server, g, true);
+	} else {
+		// Failed to load info
+		mapif->guild_info(server, &(struct guild){.guild_id = RFIFOL(act, 2)}, false);
+	}
+}
+
+/**
+ * ZW_GUILD_MEMBER
+ * Add a new guild member
+ **/
+static void mapif_parse_GuildAddMember(struct s_receive_action_data *act, struct mmo_map_server *server)
+{
+	struct guild_member m = {
+		.account_id = RFIFOL(act, 6),
+		.char_id    = RFIFOL(act, 10),
+		.hair       = RFIFOW(act, 14),
+		.hair_color = RFIFOW(act, 16),
+		.gender     = RFIFOW(act, 18),
+		.class      = RFIFOL(act, 20),
+		.lv         = RFIFOW(act, 24),
+		.exp        = RFIFOQ(act, 26),
+		.exp_payper = RFIFOL(act, 34),
+		.online     = RFIFOW(act, 38),
+		.position   = RFIFOW(act, 40),
+		//.name       = RFIFOP(act, 42),
+		.modified   = RFIFOB(act, 66),
+	};
+	memcpy(m.name, RFIFOP(act, 42), sizeof(m.name));
+	inter_guild->add_member(RFIFOL(act, 2), &m, server);
+}
+
+/**
+ * ZW_GUILD_WITHDRAW
+ * Delete member from guild
+ **/
+static void mapif_parse_GuildLeave(struct s_receive_action_data *act, struct mmo_map_server *server)
+{
+	inter_guild->leave(RFIFOL(act, 2), RFIFOL(act, 6),
+		RFIFOL(act, 10), RFIFOB(act, 14), RFIFOP(act, 15), server);
+}
+
+/**
+ * ZW_GUILD_MEMBER_UPDATE_SHORT
+ * Change member info
+ **/
+static void mapif_parse_GuildChangeMemberInfoShort(struct s_receive_action_data *act, struct mmo_map_server *server)
+{
+	inter_guild->update_member_info_short(RFIFOL(act, 2), RFIFOL(act, 6),
+		RFIFOL(act, 10), RFIFOB(act, 14), RFIFOL(act, 15), RFIFOL(act, 19));
+}
+
+/**
+ * ZW_GUILD_MEMBER_UPDATE_FIELD
+ * Update member information request
+ **/
+static void mapif_parse_GuildMemberInfoChange(struct s_receive_action_data *act, struct mmo_map_server *server)
+{
+	int field_length = RFIFOW(act,2) - sizeof(struct PACKET_ZW_GUILD_MEMBER_UPDATE_FIELD) - sizeof(intptr);
+	Assert(field_length > 0 && "Malformed ZW_GUILD_MEMBER_UPDATE_FIELD");
+	inter_guild->update_member_info(RFIFOL(act, 4), RFIFOL(act, 8),
+		RFIFOL(act, 12), RFIFOW(act, 16), RFIFOP(act, 18), field_length);
+}
+
+/**
+ * ZW_GUILD_BREAK
+ * BreakGuild
+ **/
+static void mapif_parse_BreakGuild(struct s_receive_action_data *act, struct mmo_map_server *server)
+{
+	inter_guild->disband(RFIFOL(act, 2));
+}
+
+/**
+ * ZW_GUILD_INFO_UPDATE
  * Changes basic guild information
  * The types are available in mmo.h::guild_basic_info
  **/
-static int mapif_parse_GuildBasicInfoChange(int fd, int guild_id, int type, const void *data, int len)
+static void mapif_parse_GuildBasicInfoChange(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
-	inter_guild->update_basic_info(guild_id, type, data, len);
+	int field_length = RFIFOW(act,2) - sizeof(struct PACKET_ZW_GUILD_INFO_UPDATE) - sizeof(intptr);
+	Assert(field_length > 0 && "Malformed PACKET_ZW_GUILD_INFO_UPDATE");
+	inter_guild->update_basic_info(RFIFOL(act, 4), RFIFOW(act, 8),
+		RFIFOP(act, 10), field_length);
 	// Information is already sent in mapif->guild_info
 	//mapif->guild_basicinfochanged(guild_id,type,data,len);
-	return 0;
 }
 
-// Modification of the guild
-static int mapif_parse_GuildMemberInfoChange(int fd, int guild_id, int account_id, int char_id, int type, const char *data, int len)
+/**
+ * ZW_GUILD_TITLE_UPDATE
+ * Update a guild title
+ **/
+static void mapif_parse_GuildPosition(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
-	inter_guild->update_member_info(guild_id, account_id, char_id, type, data, len);
-	return 0;
+	struct guild_position p = {
+		//.name     = RFIFOP(act, 6),
+		.mode     = RFIFOL(act, 30),
+		.exp_mode = RFIFOL(act, 34),
+		.modified = 0x1,
+	};
+	memcpy(p.name, RFIFOP(act, 6), sizeof(p.name));
+	inter_guild->update_position(RFIFOL(act, 2), RFIFOW(act, 4), &p);
 }
 
-// Change a position desc
-static int mapif_parse_GuildPosition(int fd, int guild_id, int idx, const struct guild_position *p)
+/**
+ * ZW_GUILD_SKILL_UP
+ * Guild Skill UP
+ **/
+static void mapif_parse_GuildSkillUp(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
-	nullpo_ret(p);
-	inter_guild->update_position(guild_id, idx, p);
-	return 0;
+	inter_guild->use_skill_point(RFIFOL(act, 2), RFIFOL(act, 6),
+		RFIFOL(act, 10), RFIFOL(act, 14));
 }
 
-// Guild Skill UP
-static int mapif_parse_GuildSkillUp(int fd, int guild_id, uint16 skill_id, int account_id, int max)
+/**
+ * ZW_GUILD_ALLY_UPDATE
+ * Alliance modification
+ **/
+static void mapif_parse_GuildAlliance(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
-	inter_guild->use_skill_point(guild_id, skill_id, account_id, max);
-	return 0;
+	inter_guild->change_alliance(RFIFOL(act, 2), RFIFOL(act, 6),
+		RFIFOL(act,10), RFIFOL(act,14), RFIFOB(act,18));
 }
 
-// Alliance modification
-static int mapif_parse_GuildAlliance(int fd, int guild_id1, int guild_id2, int account_id1, int account_id2, int flag)
+/**
+ * ZW_GUILD_NOTICE
+ * Change guild message
+ **/
+static void mapif_parse_GuildNotice(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
-	inter_guild->change_alliance(guild_id1, guild_id2, account_id1, account_id2, flag);
-	return 0;
+	inter_guild->update_notice(RFIFOL(act, 2),
+		RFIFOP(act, 6), RFIFOP(act, 6+MAX_GUILDMES1));
 }
 
-// Change guild message
-static int mapif_parse_GuildNotice(int fd, int guild_id, const char *mes1, const char *mes2)
+/**
+ * ZW_GUILD_EMBLEM
+ * Update emblem request
+ **/
+static void mapif_parse_GuildEmblem(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
-	inter_guild->update_notice(guild_id, mes1, mes2);
-	return 0;
+	int emblem_len = RFIFOW(act, 2) - sizeof(struct PACKET_ZW_GUILD_EMBLEM)-sizeof(intptr);
+	Assert(emblem_len > 0 && "Malformed ZW_GUILD_EMBLEM");
+	inter_guild->update_emblem(RFIFOL(act, 4), RFIFOP(act, 8), emblem_len);
 }
 
-static int mapif_parse_GuildEmblem(int fd, int len, int guild_id, int dummy, const char *data)
+/**
+ * ZW_GUILD_CASTLE_LOAD
+ * Request castle data
+ **/
+static void mapif_parse_GuildCastleDataLoad(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
-	inter_guild->update_emblem(len, guild_id, data);
-	return 0;
+	int castle_count = RFIFOW(act,2) - sizeof(struct PACKET_ZW_GUILD_CASTLE_LOAD) - sizeof(intptr);
+	castle_count = castle_count/sizeof(int32);
+	mapif->guild_castle_dataload(act->session, RFIFOP(act, 4), castle_count);
 }
 
-static int mapif_parse_GuildCastleDataLoad(int fd, int len, const int *castle_ids)
+/**
+ * ZW_GUILD_CASTLE_SAVE
+ * Save castle data
+ **/
+static void mapif_parse_GuildCastleDataSave(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
-	return mapif->guild_castle_dataload(fd, len, castle_ids);
+	inter_guild->update_castle_data(RFIFOW(act, 2), RFIFOB(act, 4), RFIFOL(act, 5));
 }
 
-static int mapif_parse_GuildCastleDataSave(int fd, int castle_id, int index, int value)
+/**
+ * ZW_GUILD_MASTER
+ * Change guild master
+ **/
+static void mapif_parse_GuildMasterChange(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
-	inter_guild->update_castle_data(castle_id, index, value);
-	return 0;
+	inter_guild->change_leader(RFIFOL(act, 2), RFIFOP(act, 6), strnlen(RFIFOP(act, 6), NAME_LENGTH));
 }
 
-static int mapif_parse_GuildMasterChange(int fd, int guild_id, const char* name, int len)
-{
-	inter_guild->change_leader(guild_id, name, len);
-	return 0;
-}
+/*======================================
+ * MAPIF : HOMUNCULUS
+ *--------------------------------------*/
 
 static void mapif_homunculus_created(int fd, int account_id, const struct s_homunculus *sh, unsigned char flag)
 {

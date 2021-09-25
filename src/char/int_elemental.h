@@ -30,7 +30,6 @@
 struct inter_elemental_interface {
 	void (*sql_init) (void);
 	void (*sql_final) (void);
-	int (*parse_frommap) (int fd);
 
 	bool (*create) (struct s_elemental *ele);
 	bool (*save) (const struct s_elemental *ele);

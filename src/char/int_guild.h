@@ -48,7 +48,7 @@ struct inter_guild_interface {
 	struct DBMap *castle_db;
 	unsigned int exp[MAX_GUILDLEVEL];
 
-	int (*save_timer) (int tid, int64 tick, int id, intptr_t data);
+	int (*save_timer) (struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data);
 	int (*removemember_tosql) (int account_id, int char_id);
 	bool (*tosql) (struct guild *g, int flag);
 	struct guild* (*fromsql) (int guild_id);
@@ -58,7 +58,7 @@ struct inter_guild_interface {
 	int (*CharOnline) (int char_id, int guild_id);
 	int (*CharOffline) (int char_id, int guild_id);
 	int (*sql_init) (void);
-	int (*db_final) (union DBKey key, struct DBData *data, va_list ap);
+	int (*db_final) (const struct DBKey_s *key, struct DBData *data, va_list args);
 	void (*sql_final) (void);
 	int (*search_guildname) (const char *str);
 	bool (*check_empty) (struct guild *g);
@@ -67,11 +67,11 @@ struct inter_guild_interface {
 	int (*calcinfo) (struct guild *g);
 	int (*sex_changed) (int guild_id, int account_id, int char_id, short gender);
 	int (*charname_changed) (int guild_id, int account_id, int char_id, char *name);
-	int (*parse_frommap) (int fd);
+
 	int (*broken) (int guild_id);
 	struct guild *(*create) (const char *name, const struct guild_member *master);
-	bool (*add_member) (int guild_id, const struct guild_member *member, int map_fd);
-	bool (*leave) (int guild_id, int account_id, int char_id, int flag, const char *mes, int map_fd);
+	bool (*add_member) (int guild_id, const struct guild_member *member, struct mmo_map_server *server);
+	bool (*leave) (int guild_id, int account_id, int char_id, int flag, const char *mes, struct mmo_map_server *server);
 	bool (*update_member_info_short) (int guild_id, int account_id, int char_id, int online, int lv, int class);
 	bool (*update_member_info) (int guild_id, int account_id, int char_id, enum guild_member_info type, const char *data, int len);
 	bool (*disband) (int guild_id);
@@ -81,7 +81,7 @@ struct inter_guild_interface {
 	bool (*remove_alliance) (struct guild *g, int guild_id, int account_id1, int account_id2, int flag);
 	bool (*change_alliance) (int guild_id1, int guild_id2, int account_id1, int account_id2, int flag);
 	bool (*update_notice) (int guild_id, const char *mes1, const char *mes2);
-	bool (*update_emblem) (int len, int guild_id, const char *data);
+	bool (*update_emblem) (int guild_id, const char *emblem, int emblem_len);
 	bool (*update_castle_data) (int castle_id, int index, int value);
 	bool (*change_leader) (int guild_id, const char *name, int len);
 };

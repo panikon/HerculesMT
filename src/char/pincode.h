@@ -119,7 +119,7 @@ struct pincode_interface {
 	void (*window) (struct s_receive_action_data *act, struct char_session_data *sd, int ipl);
 	bool (*isBlacklisted) (const char *pin);
 	enum pincode_compare_result  (*compare) (struct socket_data *session, struct char_session_data* sd, const char* pin);
-	void (*check)   (struct s_receive_action_data *act, struct char_session_data* sd);
+	void (*check)   (struct s_receive_action_data *act, struct char_session_data* sd, int ipl);
 	bool (*config_read) (const char *filename, const struct config_t *config, bool imported);
 	void (*init) (void);
 	void (*final) (void);
