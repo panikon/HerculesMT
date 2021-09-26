@@ -164,6 +164,7 @@
     <ClInclude Include="..\src\common\nullpo.h" />
     <ClInclude Include="..\src\common\packets_aw_struct.h" />
     <ClInclude Include="..\src\common\packets_wa_struct.h" />
+    <ClInclude Include="..\src\common\packets_wz_struct.h" />
     <ClInclude Include="..\src\common\packets_zw_struct.h" />
     <ClInclude Include="..\src\common\random.h" />
     <ClInclude Include="..\src\common\rwlock.h" />
