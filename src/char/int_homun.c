@@ -220,46 +220,33 @@ static bool inter_homunculus_delete(int homun_id)
 	return true;
 }
 
-static bool inter_homunculus_rename(const char *name)
+/**
+ * Renames a homunculus
+ **/
+static bool inter_homunculus_rename(int homun_id, const char *name_)
 {
-	int i;
+	char name[NAME_LENGTH];
+	char esc_name[NAME_LENGTH*2+1];
 
-	nullpo_ret(name);
-	// Check Authorized letters/symbols in the name of the homun
-	if( char_name_option == 1 )
-	{// only letters/symbols in char_name_letters are authorized
-		for( i = 0; i < NAME_LENGTH && name[i]; i++ )
-			if( strchr(char_name_letters, name[i]) == NULL )
-				return false;
-	} else
-	if( char_name_option == 2 )
-	{// letters/symbols in char_name_letters are forbidden
-		for( i = 0; i < NAME_LENGTH && name[i]; i++ )
-			if( strchr(char_name_letters, name[i]) != NULL )
-				return false;
+	safestrncpy(name, name_, NAME_LENGTH);
+	if(chr->check_symbols(name))
+		return false; // Invalid letters/symbols in homun name
+	chr->escape_normalize_name(name, esc_name);
+
+	int sql_result = 
+	SQL->Query(inter->sql_handle,
+		"UPDATE `%s` SET `name` = '%s', `rename_flag`='1' WHERE `homun_id` = '%d'",
+		homunculus_db, esc_name, homun_id);
+	if(SQL_ERROR == sql_result) {
+		Sql_ShowDebug(inter->sql_handle);
+		return false;
 	}
+	if(SQL->NumAffectedRows(inter->sql_handle) <= 0)
+		return false;
 
 	return true;
 }
 
-/*==========================================
- * Inter Packets
- *------------------------------------------*/
-static int inter_homunculus_parse_frommap(int fd)
-{
-	unsigned short cmd = RFIFOW(fd,0);
-
-	switch (cmd) {
-		case 0x3090: mapif->parse_homunculus_create(fd, RFIFOW(fd,2), RFIFOL(fd,4), RFIFOP(fd,8)); break;
-		case 0x3091: mapif->parse_homunculus_load  (fd, RFIFOL(fd,2), RFIFOL(fd,6)); break;
-		case 0x3092: mapif->parse_homunculus_save  (fd, RFIFOW(fd,2), RFIFOL(fd,4), RFIFOP(fd,8)); break;
-		case 0x3093: mapif->parse_homunculus_delete(fd, RFIFOL(fd,2)); break;
-		case 0x3094: mapif->parse_homunculus_rename(fd, RFIFOL(fd,2), RFIFOL(fd,6), RFIFOP(fd,10)); break;
-		default:
-			return 0;
-	}
-	return 1;
-}
 
 void inter_homunculus_defaults(void)
 {
@@ -267,7 +254,6 @@ void inter_homunculus_defaults(void)
 
 	inter_homunculus->sql_init = inter_homunculus_sql_init;
 	inter_homunculus->sql_final = inter_homunculus_sql_final;
-	inter_homunculus->parse_frommap = inter_homunculus_parse_frommap;
 
 	inter_homunculus->create = inter_homunculus_create;
 	inter_homunculus->save = inter_homunculus_save;

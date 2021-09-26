@@ -1576,98 +1576,211 @@ static void mapif_parse_GuildMasterChange(struct s_receive_action_data *act, str
  * MAPIF : HOMUNCULUS
  *--------------------------------------*/
 
-static void mapif_homunculus_created(int fd, int account_id, const struct s_homunculus *sh, unsigned char flag)
+/**
+ * WZ_HOMUNCULUS_CREATE_ACK
+ * Notifies map-server of a homunculus creation request status
+ *
+ * @param flag boolean success
+ **/
+static void mapif_homunculus_created(struct socket_data *session, int account_id, const struct s_homunculus *sh, unsigned char flag)
 {
 	nullpo_retv(sh);
-	WFIFOHEAD(fd, sizeof(struct s_homunculus) + 9);
-	WFIFOW(fd, 0) = 0x3890;
-	WFIFOW(fd, 2) = sizeof(struct s_homunculus) + 9;
-	WFIFOL(fd, 4) = account_id;
-	WFIFOB(fd, 8) = flag;
-	memcpy(WFIFOP(fd, 9), sh, sizeof(struct s_homunculus));
-	WFIFOSET(fd, WFIFOW(fd, 2));
+	WFIFOHEAD(session, sizeof(struct s_homunculus) + 9, true);
+	WFIFOW(session, 0) = 0x3890;
+	WFIFOW(session, 2) = sizeof(struct s_homunculus) + 9;
+	WFIFOL(session, 4) = account_id;
+	WFIFOB(session, 8) = flag;
+	memcpy(WFIFOP(session, 9), sh, sizeof(struct s_homunculus));// TODO/FIXME: Copy of a padded struct
+	WFIFOSET(session, WFIFOW(session, 2));
 }
 
-static void mapif_homunculus_deleted(int fd, int flag)
+/**
+ * WZ_HOMUNCULUS_DELETE_ACK
+ * Notifies map-server of a homunculus delete request status
+ *
+ * @param flag boolean success
+ **/
+static void mapif_homunculus_deleted(struct socket_data *session, int flag)
 {
-	WFIFOHEAD(fd, 3);
-	WFIFOW(fd, 0) = 0x3893;
-	WFIFOB(fd,2) = flag; //Flag 1 = success
-	WFIFOSET(fd, 3);
+	WFIFOHEAD(session, 3, true);
+	WFIFOW(session, 0) = 0x3893;
+	WFIFOB(session,2) = flag; //Flag 1 = success
+	WFIFOSET(session, 3);
 }
 
-static void mapif_homunculus_loaded(int fd, int account_id, struct s_homunculus *hd)
+/**
+ * WZ_HOMUNCULUS_LOAD_ACK
+ * Sends requested homunculus data
+ **/
+static void mapif_homunculus_loaded(struct socket_data *session, int account_id, struct s_homunculus *hd)
 {
-	WFIFOHEAD(fd, sizeof(struct s_homunculus) + 9);
-	WFIFOW(fd, 0) = 0x3891;
-	WFIFOW(fd, 2) = sizeof(struct s_homunculus) + 9;
-	WFIFOL(fd, 4) = account_id;
+	WFIFOHEAD(session, sizeof(struct s_homunculus) + 9, true);
+	WFIFOW(session, 0) = 0x3891;
+	WFIFOW(session, 2) = sizeof(struct s_homunculus) + 9;
+	WFIFOL(session, 4) = account_id;
 	if (hd != NULL) {
-		WFIFOB(fd, 8) = 1; // success
-		memcpy(WFIFOP(fd, 9), hd, sizeof(struct s_homunculus));
+		WFIFOB(session, 8) = 1; // success
+		memcpy(WFIFOP(session, 9), hd, sizeof(struct s_homunculus)); // TODO/FIXME: Copy of a padded struct
 	} else {
-		WFIFOB(fd, 8) = 0; // not found.
-		memset(WFIFOP(fd, 9), 0, sizeof(struct s_homunculus));
+		WFIFOB(session, 8) = 0; // not found.
+		memset(WFIFOP(session, 9), 0, sizeof(struct s_homunculus));
 	}
-	WFIFOSET(fd, sizeof(struct s_homunculus) + 9);
+	WFIFOSET(session, sizeof(struct s_homunculus) + 9);
 }
 
-static void mapif_homunculus_saved(int fd, int account_id, bool flag)
+/**
+ * WZ_HOMUNCULUS_SAVE_ACK
+ * Result of a save request
+ **/
+static void mapif_homunculus_saved(struct socket_data *session, int account_id, bool flag)
 {
-	WFIFOHEAD(fd, 7);
-	WFIFOW(fd, 0) = 0x3892;
-	WFIFOL(fd, 2) = account_id;
-	WFIFOB(fd, 6) = flag; // 1:success, 0:failure
-	WFIFOSET(fd, 7);
+	WFIFOHEAD(session, 7, true);
+	WFIFOW(session, 0) = 0x3892;
+	WFIFOL(session, 2) = account_id;
+	WFIFOB(session, 6) = flag; // 1:success, 0:failure
+	WFIFOSET(session, 7);
 }
 
-static void mapif_homunculus_renamed(int fd, int account_id, int char_id, unsigned char flag, const char *name)
+/**
+ * WZ_HOMUNCULUS_RENAME_ACK
+ * Result of a rename request
+ **/
+static void mapif_homunculus_renamed(struct socket_data *session, int account_id, int homun_id, unsigned char flag, const char *name)
 {
 	nullpo_retv(name);
-	WFIFOHEAD(fd, NAME_LENGTH + 12);
-	WFIFOW(fd, 0) = 0x3894;
-	WFIFOL(fd, 2) = account_id;
-	WFIFOL(fd, 6) = char_id;
-	WFIFOB(fd, 10) = flag;
-	safestrncpy(WFIFOP(fd, 11), name, NAME_LENGTH);
-	WFIFOSET(fd, NAME_LENGTH + 12);
+	WFIFOHEAD(session, NAME_LENGTH + 12, true);
+	WFIFOW(session, 0) = 0x3894;
+	WFIFOL(session, 2) = account_id;
+	WFIFOL(session, 6) = homun_id;
+	WFIFOB(session, 10) = flag;
+	safestrncpy(WFIFOP(session, 11), name, NAME_LENGTH);
+	WFIFOSET(session, NAME_LENGTH + 12);
 }
 
-static void mapif_parse_homunculus_create(int fd, int len, int account_id, const struct s_homunculus *phd)
+/**
+ * ZW_HOMUNCULUS_CREATE
+ * Create homunculus request
+ **/
+static void mapif_parse_homunculus_create(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
-	struct s_homunculus shd;
 	bool result;
+	int32 account_id = RFIFOL(act, 2);
+	struct s_homunculus hd = {
+		.char_id = RFIFOL(act, 6),
+		//.name = RFIFOP(act, 10),
+		.class_     = RFIFOL(act, 34),
+		.hp         = RFIFOL(act, 38),
+		.max_hp     = RFIFOL(act, 42),
+		.sp         = RFIFOL(act, 46),
+		.max_sp     = RFIFOL(act, 50),
+		.level      = RFIFOW(act, 54),
+		.hunger     = RFIFOW(act, 56),
+		.intimacy   = RFIFOL(act, 58),
+		.str        = RFIFOL(act, 62),
+		.agi        = RFIFOL(act, 66),
+		.vit        = RFIFOL(act, 70),
+		.int_       = RFIFOL(act, 74),
+		.dex        = RFIFOL(act, 78),
+		.luk        = RFIFOL(act, 82),
+	};
+	memcpy(hd.name, RFIFOP(act, 10), NAME_LENGTH);
 
-	memcpy(&shd, phd, sizeof(shd));
-
-	result = inter_homunculus->create(&shd);
-	mapif->homunculus_created(fd, account_id, &shd, result);
+	result = inter_homunculus->create(&hd);
+	mapif->homunculus_created(act->session, account_id, &hd, result);
 }
 
-static void mapif_parse_homunculus_delete(int fd, int homun_id)
+/**
+ * ZW_HOMUNCULUS_DELETE
+ * Delete homunculus request
+ **/
+static void mapif_parse_homunculus_delete(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
-	bool result = inter_homunculus->delete(homun_id);
-	mapif->homunculus_deleted(fd, result);
+	bool result = inter_homunculus->delete(RFIFOL(act, 2));
+	mapif->homunculus_deleted(act->session, result);
 }
 
-static void mapif_parse_homunculus_load(int fd, int account_id, int homun_id)
+/**
+ * ZW_HOMUNCULUS_LOAD
+ * Load homunculus request
+ **/
+static void mapif_parse_homunculus_load(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	struct s_homunculus hd;
-	bool result = inter_homunculus->load(homun_id, &hd);
-	mapif->homunculus_loaded(fd, account_id, (result ? &hd : NULL));
+	bool result = inter_homunculus->load(RFIFOL(act, 6), &hd);
+	mapif->homunculus_loaded(act->session, RFIFOL(act, 2), (result ? &hd : NULL));
 }
 
-static void mapif_parse_homunculus_save(int fd, int len, int account_id, const struct s_homunculus *phd)
+/**
+ * ZW_HOMUNCULUS_SAVE
+ * Save homunculus request
+ *
+ * TODO: Too much information is sent every time a save request is made, maybe
+ * we could use a similar to guild system instead, only sending what was really
+ * updated.
+ **/
+static void mapif_parse_homunculus_save(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
-	bool result = inter_homunculus->save(phd);
-	mapif->homunculus_saved(fd, account_id, result);
+	int account_id = RFIFOL(act, 2);
+	size_t hskill_len = SIZEOF_MEMBER(struct s_homunculus_packet_data, hskill);
+	struct s_homunculus hd = {
+		//.name = RFIFOP(act, 6),
+		.hom_id      = RFIFOL(act, 30),
+		.char_id     = RFIFOL(act, 34),
+		.class_      = RFIFOL(act, 38),
+		.prev_class  = RFIFOL(act, 42),
+		.hp          = RFIFOL(act, 46),
+		.max_hp      = RFIFOL(act, 50),
+		.sp          = RFIFOL(act, 54),
+		.max_sp      = RFIFOL(act, 58),
+		.intimacy    = RFIFOL(act, 62),
+		.hunger      = RFIFOW(act, 66),
+		//.hskill = RFIFOP(act, 68),
+		.skillpts     = RFIFOW(act, hskill_len+68+0),
+		.level        = RFIFOW(act, hskill_len+68+2),
+		.exp          = RFIFOQ(act, hskill_len+68+4),
+		.rename_flag  = RFIFOW(act, hskill_len+68+12),
+		.vaporize     = RFIFOW(act, hskill_len+68+14),
+		.str          = RFIFOL(act, hskill_len+68+16),
+		.agi          = RFIFOL(act, hskill_len+68+20),
+		.vit          = RFIFOL(act, hskill_len+68+24),
+		.int_         = RFIFOL(act, hskill_len+68+28),
+		.dex          = RFIFOL(act, hskill_len+68+32),
+		.luk          = RFIFOL(act, hskill_len+68+36),
+		.str_value    = RFIFOL(act, hskill_len+68+40),
+		.agi_value    = RFIFOL(act, hskill_len+68+44),
+		.vit_value    = RFIFOL(act, hskill_len+68+48),
+		.int_value    = RFIFOL(act, hskill_len+68+52),
+		.dex_value    = RFIFOL(act, hskill_len+68+56),
+		.luk_value    = RFIFOL(act, hskill_len+68+60),
+		.spiritball   = RFIFOB(act, hskill_len+68+64),
+		.autofeed     = RFIFOL(act, hskill_len+68+65),
+	};
+	memcpy(hd.name,   RFIFOP(act, 6), NAME_LENGTH);
+	memcpy(hd.hskill, RFIFOP(act, 68), hskill_len);
+	bool result = inter_homunculus->save(&hd);
+	mapif->homunculus_saved(act->session, account_id, result);
 }
 
-static void mapif_parse_homunculus_rename(int fd, int account_id, int char_id, const char *name)
+/**
+ * ZW_HOMUNCULUS_RENAME
+ * Homunculus rename request
+ *
+ * TODO: This doesn't seem to be implemented in map-server
+ * Currently all rename requests are handled by 0x3006 (parse_NameChangeRequest),
+ * but all char-server is doing now is verifying if the names are valid or not
+ * without actually updating the database...
+ **/
+static void mapif_parse_homunculus_rename(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
-	bool result = inter_homunculus->rename(name);
-	mapif->homunculus_renamed(fd, account_id, char_id, result, name);
+	int account_id = RFIFOL(act, 2);
+	int homun_id   = RFIFOL(act, 6);
+	bool result = inter_homunculus->rename(homun_id, RFIFOP(act, 10));
+	mapif->homunculus_renamed(act->session, account_id, homun_id, result, RFIFOP(act, 10));
 }
+
+/*======================================
+ * MAPIF : MAIL
+ *--------------------------------------*/
 
 static void mapif_mail_sendinbox(int fd, int char_id, unsigned char flag, struct mail_data *md)
 {

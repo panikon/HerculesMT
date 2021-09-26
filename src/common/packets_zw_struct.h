@@ -101,12 +101,14 @@ enum inter_packet_zw_id {
     0x3081, // mapif->parse_LoadPet(f
     0x3082, // mapif->parse_SavePet(f
     0x3083, // mapif->parse_DeletePet
+#endif
 	// inter_homunculus_parse_frommap
-	0x3090, // mapif->parse_homunculus_create
-    0x3091, // mapif->parse_homunculus_load  
-    0x3092, // mapif->parse_homunculus_save  
-    0x3093, // mapif->parse_homunculus_delete
-    0x3094, // mapif->parse_homunculus_rename
+	HEADER_ZW_HOMUNCULUS_CREATE = 0x3090, // mapif->parse_homunculus_create
+	HEADER_ZW_HOMUNCULUS_LOAD   = 0x3091, // mapif->parse_homunculus_load  
+	HEADER_ZW_HOMUNCULUS_SAVE   = 0x3092, // mapif->parse_homunculus_save  
+	HEADER_ZW_HOMUNCULUS_DELETE = 0x3093, // mapif->parse_homunculus_delete
+	HEADER_ZW_HOMUNCULUS_RENAME = 0x3094, // mapif->parse_homunculus_rename
+#if 0
 	// inter_mercenary_parse_frommap
 	0x3070, // mapif->parse_mercenary_create
     0x3071, // mapif->parse_mercenary_load(f
@@ -751,6 +753,108 @@ struct PACKET_ZW_GUILD_MASTER {
 	int16 packet_id;
 	int32 guild_id;
 	uint8 name[NAME_LENGTH];
+} __attribute__((packed));
+
+/**
+ * Homunculus data used in inter-server operations
+ * @see s_homunculus
+ **/
+struct s_homunculus_packet_data {
+	uint8 name[NAME_LENGTH];
+	int32 hom_id;
+	int32 char_id;
+	int32 class_;
+	int32 prev_class;
+	int32 hp,max_hp,sp,max_sp;
+	uint32 intimacy;
+	int16 hunger;
+	struct {
+		uint16 id;
+		uint8 lv;
+		uint8 flag;
+	} hskill[MAX_HOMUNSKILL];
+	int16 skillpts;
+	int16 level;
+	uint64 exp;
+	int16 rename_flag;
+	int16 vaporize;
+	int32 str;
+	int32 agi;
+	int32 vit;
+	int32 int_;
+	int32 dex;
+	int32 luk;
+
+	int32 str_value;
+	int32 agi_value;
+	int32 vit_value;
+	int32 int_value;
+	int32 dex_value;
+	int32 luk_value;
+
+	int8 spiritball;
+	int32 autofeed;
+} __attribute__((packed));
+
+/**
+ * Create homunculus request
+ **/
+struct PACKET_ZW_HOMUNCULUS_CREATE {
+	int16 packet_id;
+	int32 account_id;
+	int32 char_id;
+
+	uint8 name[NAME_LENGTH];
+	int32 class_;
+	int32 hp;
+	int32 max_hp;
+	int32 sp;
+	int32 max_sp;
+	int16 level;
+	int16 hunger;
+	uint32 intimacy;
+	int32 str;
+	int32 agi;
+	int32 vit;
+	int32 int_;
+	int32 dex;
+	int32 luk;
+} __attribute__((packed));
+
+/**
+ * Delete homunculus request
+ **/
+struct PACKET_ZW_HOMUNCULUS_DELETE {
+	int16 packet_id;
+	int32 homun_id;
+} __attribute__((packed));
+
+/**
+ * Load homunculus request
+ **/
+struct PACKET_ZW_HOMUNCULUS_LOAD {
+	int16 packet_id;
+	int32 account_id;
+	int32 homun_id;
+} __attribute__((packed));
+
+/**
+ * ZW_HOMUNCULUS_SAVE
+ * Save homunculus request
+ **/
+struct PACKET_ZW_HOMUNCULUS_SAVE {
+	int16 packet_id;
+	int32 account_id;
+	struct s_homunculus_packet_data data;
+} __attribute__((packed));
+
+/**
+ * ZW_HOMUNCULUS_RENAME
+ * Rename homunculus request
+ **/
+struct PACKET_ZW_HOMUNCULUS_RENAME {
+	int16 packet_id;
+	int32 account_id;
 } __attribute__((packed));
 
 #if !defined(sun) && (!defined(__NETBSD__) || __NetBSD_Version__ >= 600000000) // NetBSD 5 and Solaris don't like pragma pack but accept the packed attribute

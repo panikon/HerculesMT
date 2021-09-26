@@ -149,16 +149,17 @@ struct mapif_interface {
 	void (*parse_GuildCastleDataSave)        (struct s_receive_action_data *act, struct mmo_map_server *server);
 	void (*parse_GuildMasterChange)          (struct s_receive_action_data *act, struct mmo_map_server *server);
 
-	void (*homunculus_created) (int fd, int account_id, const struct s_homunculus *sh, unsigned char flag);
-	void (*homunculus_deleted) (int fd, int flag);
-	void (*homunculus_loaded) (int fd, int account_id, struct s_homunculus *hd);
-	void (*homunculus_saved) (int fd, int account_id, bool flag);
-	void (*homunculus_renamed) (int fd, int account_id, int char_id, unsigned char flag, const char *name);
-	void (*parse_homunculus_create) (int fd, int len, int account_id, const struct s_homunculus *phd);
-	void (*parse_homunculus_delete) (int fd, int homun_id);
-	void (*parse_homunculus_load) (int fd, int account_id, int homun_id);
-	void (*parse_homunculus_save) (int fd, int len, int account_id, const struct s_homunculus *phd);
-	void (*parse_homunculus_rename) (int fd, int account_id, int char_id, const char *name);
+	void (*homunculus_created) (struct socket_data *session, int account_id, const struct s_homunculus *sh, unsigned char flag);
+	void (*homunculus_deleted) (struct socket_data *session, int flag);
+	void (*homunculus_loaded)  (struct socket_data *session, int account_id, struct s_homunculus *hd);
+	void (*homunculus_saved)   (struct socket_data *session, int account_id, bool flag);
+	void (*homunculus_renamed) (struct socket_data *session, int account_id, int homun_id, unsigned char flag, const char *name);
+	void (*parse_homunculus_create) (struct s_receive_action_data *act, struct mmo_map_server *server);
+	void (*parse_homunculus_delete) (struct s_receive_action_data *act, struct mmo_map_server *server);
+	void (*parse_homunculus_load)   (struct s_receive_action_data *act, struct mmo_map_server *server);
+	void (*parse_homunculus_save)   (struct s_receive_action_data *act, struct mmo_map_server *server);
+	void (*parse_homunculus_rename) (struct s_receive_action_data *act, struct mmo_map_server *server);
+
 	void (*mail_sendinbox) (int fd, int char_id, unsigned char flag, struct mail_data *md);
 	void (*parse_mail_requestinbox) (int fd);
 	void (*parse_mail_read) (int fd);

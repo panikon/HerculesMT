@@ -259,6 +259,7 @@ struct char_interface {
 	bool (*char_slotchange) (struct char_session_data *sd, struct socket_data *session, unsigned short from, unsigned short to);
 	enum change_charname_result (*rename_char_sql) (struct char_session_data *sd, int char_id);
 	bool (*name_exists) (const char *name, const char *esc_name);
+	bool (*check_symbols)(const char *name);
 	enum refuse_make_char_errorcode (*check_char_name) (const char *name, const char *esc_name);
 	enum refuse_make_char_errorcode (*make_new_char_sql) (struct char_session_data *sd, const char *name_, int str, int agi, int vit, int int_, int dex, int luk, int slot, int hair_color, int hair_style, int starting_job, uint8 sex, int *out_char_id);
 	int (*divorce_char_sql) (int partner_id1, int partner_id2);

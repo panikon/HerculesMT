@@ -57,6 +57,8 @@
 #   define WARN(exp) GCC warning (exp)
 #endif
 
+#define SIZEOF_MEMBER(type, member) sizeof(((type *)0)->member)
+
 //Caps values to min/max
 #define cap_value(a, min, max) (((a) >= (max)) ? (max) : ((a) <= (min)) ? (min) : (a))
 
