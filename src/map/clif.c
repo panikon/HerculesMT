@@ -17785,6 +17785,7 @@ static void clif_parse_Auction_setitem(int fd, struct map_session_data *sd)
 ///     7 = You have failed to win the auction
 ///     8 = You do not have enough Zeny
 ///     9 = You cannot place more than 5 bids at a time
+/// @see enum e_auction_result_message
 static void clif_Auction_message(int fd, unsigned char flag)
 {
 	WFIFOHEAD(fd,packet_len(0x250));
@@ -17969,6 +17970,7 @@ static void clif_parse_Auction_search(int fd, struct map_session_data *sd) __att
 ///     3 = misc
 ///     4 = name search
 ///     5 = auction id search
+/// @see enum e_auction_search_type
 static void clif_parse_Auction_search(int fd, struct map_session_data *sd)
 {
 	if (sd->state.trading || pc_isdead(sd) || pc_isvending(sd))
@@ -17993,6 +17995,7 @@ static void clif_parse_Auction_buysell(int fd, struct map_session_data *sd) __at
 /// type:
 ///     0 = sell (own auctions)
 ///     1 = buy (own bids)
+/// @see enum e_auction_search_type
 static void clif_parse_Auction_buysell(int fd, struct map_session_data *sd)
 {
 	if (sd->state.trading || pc_isdead(sd) || pc_isvending(sd))

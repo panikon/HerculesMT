@@ -128,12 +128,14 @@ enum inter_packet_zw_id {
 	0x304b, // mapif->parse_mail_delete(fd); 
 	0x304c, // mapif->parse_mail_return(fd); 
 	0x304d, // mapif->parse_mail_send(fd); br
+#endif
 	// inter_auction_parse_frommap
-	0x3050, // mapif->parse_auction_requestlist
-    0x3051, // mapif->parse_auction_register(ac
-    0x3052, // mapif->parse_auction_cancel(act)
-    0x3053, // mapif->parse_auction_close(act);
-    0x3055, // mapif->parse_auction_bid(act); b
+	HEADER_ZW_AUCTION_REQUEST_LIST = 0x3050, // mapif->parse_auction_requestlist
+	HEADER_ZW_AUCTION_REGISTER     = 0x3051, // mapif->parse_auction_register(ac
+	HEADER_ZW_AUCTION_CANCEL       = 0x3052, // mapif->parse_auction_cancel(act)
+	HEADER_ZW_AUCTION_CLOSE        = 0x3053, // mapif->parse_auction_close(act);
+	HEADER_ZW_AUCTION_BID_ACK      = 0x3055, // mapif->parse_auction_bid(act); b
+#if 0
 	// inter_quest_parse_frommap
 	0x3060, // mapif->parse_quest_load
 	0x3061, // mapif->parse_quest_save
@@ -855,6 +857,85 @@ struct PACKET_ZW_HOMUNCULUS_SAVE {
 struct PACKET_ZW_HOMUNCULUS_RENAME {
 	int16 packet_id;
 	int32 account_id;
+} __attribute__((packed));
+
+/**
+ * ZW_AUCTION_REQUEST_LIST
+ * Request of information of an auction list
+ *
+ * @param type enum e_auction_search_type
+ **/
+struct PACKET_ZW_AUCTION_REQUEST_LIST {
+	int16 packet_id;
+	int32 char_id;
+	int16 type;
+	int32 price;
+	int16 page;
+	uint8 search[NAME_LENGTH];
+} __attribute__((packed));
+
+/**
+ * ZW_AUCTION_REGISTER
+ * Request auction registration
+ **/
+struct PACKET_ZW_AUCTION_REGISTER {
+	int16 packet_id;
+	// @copydoc struct auction_data
+	struct {
+		int32 seller_id;
+		uint32 auction_id;
+		uint8 seller_name[NAME_LENGTH];
+		int32 buyer_id;
+		uint8 buyer_name[NAME_LENGTH];
+		// @copydoc struct item
+		struct {
+			int32 id;
+			int32 nameid;
+			int16 amount;
+			int32 equip;
+			uint8 identify;
+			uint8 refine;
+			uint8 attribute;
+			int32 card[MAX_SLOTS];
+			int32 expire_time;
+			uint8 favorite;
+			uint8 bound;
+			uint64 unique_id;
+			// @copydoc item_option
+			struct {
+				int16 index;
+				int16 value;
+				uint8 param;
+			} option[MAX_ITEM_OPTIONS];
+		} item;
+		uint8 item_name[ITEM_NAME_LENGTH];
+		int16 type;
+		uint16 hours;
+		int32 price;
+		int32 buynow;
+		uint64 timestamp;
+		int32 auction_end_timer;
+	} data;
+} __attribute__((packed));
+
+struct ZW_AUCTION_CANCEL {
+	int16 packet_id;
+	int32 char_id;
+	int32 auction_id;
+} __attribute__((packed));
+
+struct ZW_AUCTION_CLOSE {
+	int16 packet_id;
+	int32 char_id;
+	uint8 result;
+} __attribute__((packed));
+
+struct ZW_AUCTION_BID {
+	int16 packet_id;
+	int32 char_id;
+	int32 auction_id;
+	int32 bid;
+	uint8 buyer_name[NAME_LENGTH];
 } __attribute__((packed));
 
 #if !defined(sun) && (!defined(__NETBSD__) || __NetBSD_Version__ >= 600000000) // NetBSD 5 and Solaris don't like pragma pack but accept the packed attribute

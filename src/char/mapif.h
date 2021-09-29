@@ -100,7 +100,7 @@ struct mapif_interface {
 	void (*auction_message) (int char_id, enum e_auction_result_message result);
 	void (*auction_sendlist) (struct socket_data *session, int char_id, short count, short pages, unsigned char *buf);
 	void (*parse_auction_requestlist) (struct s_receive_action_data *act, struct mmo_map_server *server);
-	void (*auction_register) (struct socket_data *session, struct auction_data *auction);
+	void (*auction_register) (struct socket_data *session, unsigned int auction_id, unsigned int auction_hours, const uint8 *item_data);
 	void (*parse_auction_register) (struct s_receive_action_data *act, struct mmo_map_server *server);
 	void (*auction_cancel) (struct socket_data *session, int char_id, enum e_auction_cancel result);
 	void (*parse_auction_cancel) (struct s_receive_action_data *act, struct mmo_map_server *server);

@@ -91,24 +91,39 @@ static void inter_auction_save(struct auction_data *auction)
 	StrBuf->Destroy(&buf);
 }
 
-static unsigned int inter_auction_create(struct auction_data *auction)
+/**
+ * Inserts an auction into online database and internal database.
+ *
+ * @remarks timestamp is ignored and is generated using auction->hours
+ * @return auction id
+ * @retval 0 Failed
+ **/
+static unsigned int inter_auction_create(const struct auction_data *auction)
 {
 	int j;
 	StringBuf buf;
 	struct SqlStmt *stmt;
+	unsigned int id = 0;
 
 	nullpo_ret(auction);
 
-	auction->timestamp = time(NULL) + (auction->hours * 3600);
+	uint64 timestamp = time(NULL) + (auction->hours * 3600);
 
 	StrBuf->Init(&buf);
-	StrBuf->Printf(&buf, "INSERT INTO `%s` (`seller_id`,`seller_name`,`buyer_id`,`buyer_name`,`price`,`buynow`,`hours`,`timestamp`,`nameid`,`item_name`,`type`,`refine`,`attribute`,`unique_id`", auction_db);
+	StrBuf->Printf(&buf, "INSERT INTO `%s` (`seller_id`,`seller_name`,"
+		"`buyer_id`,`buyer_name`,`price`,`buynow`,`hours`,`timestamp`,`nameid`,"
+		"`item_name`,`type`,`refine`,`attribute`,`unique_id`",
+		auction_db);
 	for (j = 0; j < MAX_SLOTS; j++)
 		StrBuf->Printf(&buf, ",`card%d`", j);
 	for (j = 0; j < MAX_ITEM_OPTIONS; j++)
 		StrBuf->Printf(&buf, ", `opt_idx%d`, `opt_val%d`", j, j);
-	StrBuf->Printf(&buf, ") VALUES ('%d',?,'%d',?,'%d','%d','%d','%lu','%d',?,'%d','%d','%d','%"PRIu64"'",
-		auction->seller_id, auction->buyer_id, auction->price, auction->buynow, auction->hours, (unsigned long)auction->timestamp, auction->item.nameid, auction->type, auction->item.refine, auction->item.attribute, auction->item.unique_id);
+	StrBuf->Printf(&buf,
+		") VALUES ('%d',?,'%d',?,'%d','%d','%d','%lu','%d',?,'%d','%d','%d','%"PRIu64"'",
+		auction->seller_id, auction->buyer_id, auction->price, auction->buynow,
+		auction->hours, (unsigned long)timestamp, auction->item.nameid,
+		auction->type, auction->item.refine, auction->item.attribute,
+		auction->item.unique_id);
 	for (j = 0; j < MAX_SLOTS; j++)
 		StrBuf->Printf(&buf, ",'%d'", auction->item.card[j]);
 	for (j = 0; j < MAX_ITEM_OPTIONS; j++)
@@ -124,43 +139,52 @@ static unsigned int inter_auction_create(struct auction_data *auction)
 	||  SQL_SUCCESS != SQL->StmtExecute(stmt))
 	{
 		SqlStmt_ShowDebug(stmt);
-		auction->auction_id = 0;
+		id = 0;
 	} else {
 		struct auction_data *auction_;
 		int64 tick = (int64)auction->hours * 3600000;
 
-		auction->item.amount = 1;
-		auction->item.identify = 1;
-		auction->item.expire_time = 0;
+		id = (unsigned int)SQL->StmtLastInsertId(stmt);
+		int end_timer = timer->add( timer->gettick() + tick , inter_auction->end_timer, id, 0);
 
-		auction->auction_id = (unsigned int)SQL->StmtLastInsertId(stmt);
-		auction->auction_end_timer = timer->add( timer->gettick() + tick , inter_auction->end_timer, auction->auction_id, 0);
-		ShowInfo("New Auction %u | time left %"PRId64" ms | By %s.\n", auction->auction_id, tick, auction->seller_name);
+		ShowInfo("New Auction %u | time left %"PRId64" ms | By %s.\n", id, tick, auction->seller_name);
 
 		CREATE(auction_, struct auction_data, 1);
 		memcpy(auction_, auction, sizeof(struct auction_data));
+		auction_->item.amount = 1;
+		auction_->item.identify = 1;
+		auction_->item.expire_time = 0;
+		auction_->timestamp = timestamp;
+		auction_->auction_id = id;
+		auction_->auction_end_timer = end_timer;
 		idb_put(inter_auction->db, auction_->auction_id, auction_);
 	}
 
 	SQL->StmtFree(stmt);
 	StrBuf->Destroy(&buf);
 
-	return auction->auction_id;
+	return id;
 }
 
-static int inter_auction_end_timer(int tid, int64 tick, int id, intptr_t data)
+static int inter_auction_end_timer(struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data)
 {
 	struct auction_data *auction;
 	if( (auction = (struct auction_data *)idb_get(inter_auction->db, id)) != NULL )
 	{
 		if( auction->buyer_id )
 		{
-			inter_mail->sendmail(0, "Auction Manager", auction->buyer_id, auction->buyer_name, "Auction", "Thanks, you won the auction!.", 0, &auction->item);
+			inter_mail->sendmail(0, "Auction Manager", auction->buyer_id,
+				auction->buyer_name, "Auction", "Thanks, you won the auction!.",
+				0, &auction->item);
 			mapif->auction_message(auction->buyer_id, 6); // You have won the auction
-			inter_mail->sendmail(0, "Auction Manager", auction->seller_id, auction->seller_name, "Auction", "Payment for your auction!.", auction->price, NULL);
+			inter_mail->sendmail(0, "Auction Manager", auction->seller_id,
+				auction->seller_name, "Auction", "Payment for your auction!.",
+				auction->price, NULL);
 		}
 		else
-			inter_mail->sendmail(0, "Auction Manager", auction->seller_id, auction->seller_name, "Auction", "No buyers have been found for your auction.", 0, &auction->item);
+			inter_mail->sendmail(0, "Auction Manager", auction->seller_id,
+				auction->seller_name, "Auction", "No buyers have been found for your auction.",
+				0, &auction->item);
 
 		ShowInfo("Auction End: id %u.\n", auction->auction_id);
 
@@ -260,25 +284,6 @@ static void inter_auctions_fromsql(void)
 	SQL->FreeResult(inter->sql_handle);
 }
 
-/**
- * Parsing entry point (from map-server)
- * @see inter_parse_frommap
- **/
-static enum parsefunc_rcode inter_auction_parse_frommap(struct s_receive_action_data *act)
-{
-	switch(RFIFOW(act,0))
-	{
-		case 0x3050: mapif->parse_auction_requestlist(act); break;
-		case 0x3051: mapif->parse_auction_register(act); break;
-		case 0x3052: mapif->parse_auction_cancel(act); break;
-		case 0x3053: mapif->parse_auction_close(act); break;
-		case 0x3055: mapif->parse_auction_bid(act); break;
-		default:
-			return PACKET_INCOMPLETE;
-	}
-	return PACKET_VALID;
-}
-
 static int inter_auction_sql_init(void)
 {
 	inter_auction->db = idb_alloc(DB_OPT_RELEASE_DATA);
@@ -306,7 +311,6 @@ void inter_auction_defaults(void)
 	inter_auction->end_timer = inter_auction_end_timer;
 	inter_auction->delete_ = inter_auction_delete;
 	inter_auction->fromsql = inter_auctions_fromsql;
-	inter_auction->parse_frommap = inter_auction_parse_frommap;
 	inter_auction->sql_init = inter_auction_sql_init;
 	inter_auction->sql_final = inter_auction_sql_final;
 }

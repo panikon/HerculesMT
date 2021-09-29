@@ -2012,17 +2012,14 @@ static void intif_parse_AuctionResults(int fd)
 
 static int intif_Auction_register(struct auction_data *auction)
 {
-	int len = sizeof(struct auction_data) + 4;
-
 	if( intif->CheckForCharServer() )
 		return 0;
 
 	nullpo_ret(auction);
-	WFIFOHEAD(inter_fd,len);
+	WFIFOHEAD(inter_fd, sizeof(struct auction_data) + 2);
 	WFIFOW(inter_fd,0) = 0x3051;
-	WFIFOW(inter_fd,2) = len;
-	memcpy(WFIFOP(inter_fd,4), auction, sizeof(struct auction_data));
-	WFIFOSET(inter_fd,len);
+	memcpy(WFIFOP(inter_fd,2), auction, sizeof(struct auction_data));
+	WFIFOSET(inter_fd,sizeof(struct auction_data) + 2);
 
 	return 1;
 }

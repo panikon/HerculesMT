@@ -70,7 +70,7 @@ static struct mmo_map_server *mapif_server_find(struct socket_data *session)
 	if(!session->session_data)
 		return NULL;
 	struct mmo_map_server *server;
-	uint32 server_pos = *(uint32*)session->session_data;
+	int32 server_pos = *(uint32*)session->session_data;
 
 	if(server_pos >= INDEX_MAP_LENGTH(chr->map_server_list))
 		return NULL;
@@ -739,40 +739,86 @@ static void mapif_parse_auction_requestlist(struct s_receive_action_data *act)
 }
 
 /**
- * 0x3851 WZ_AUCTION_REGISTER_ACK <len>.W <struct auction_data>
+ * 0x3851 WZ_AUCTION_REGISTER_ACK <auction_id>.L <auction_hours>.L <item_data>.*B
  * Notifies map-server of a successful registration of an auction (answer of 0x3051 ZW_AUCTION_REGISTER)
+ *
+ * @param auction_id    Generated id (when 0 the creation failed)
+ * @param auction_hours Auction duration in hours
+ * @param item_data     struct PACKET_ZW_AUCTION_REGISTER, data.item from received packet
+ * @see mapif_parse_auction_register
  **/
-static void mapif_auction_register(struct socket_data *session, struct auction_data *auction)
-{
-	int len = sizeof(struct auction_data) + 4;
-
-	nullpo_retv(auction);
-
+static void mapif_auction_register(struct socket_data *session,
+	unsigned int auction_id, unsigned int auction_hours, const uint8 *item_data
+) {
+	size_t len = SIZEOF_MEMBER(struct PACKET_ZW_AUCTION_REGISTER, data.item) + 10;
 	WFIFOHEAD(session, len, true);
 	WFIFOW(session, 0) = 0x3851;
-	WFIFOW(session, 2) = len;
-	memcpy(WFIFOP(session, 4), auction, sizeof(struct auction_data));
+	WFIFOL(session, 2) = auction_id;
+	WFIFOL(session, 6) = auction_hours;
+	memcpy(WFIFOP(session, 10), item_data,
+		SIZEOF_MEMBER(struct PACKET_ZW_AUCTION_REGISTER, data.item));
 	WFIFOSET(session, len);
 }
 
 /**
- * 0x3051 ZW_AUCTION_REGISTER <len>.W <struct auction_data>
+ * 0x3051 ZW_AUCTION_REGISTER
  * Parses map-server request to register an auction
  **/
 static void mapif_parse_auction_register(struct s_receive_action_data *act)
 {
-	struct auction_data auction;
-	if( RFIFOW(act, 2) != sizeof(struct auction_data) + 4 ) {
-		ShowError("mapif_parse_auction_register: data size mismatch %d != %"PRIuS"\n",
-			RFIFOW(act,2) - 4, sizeof(struct auction_data));
-		return;
+	size_t pos = 2;
+	struct auction_data a = {0};
+	offsetof(struct PACKET_ZW_AUCTION_REGISTER, data.seller_id);
+	pos += sizeof((a.seller_id  = RFIFOL(act, pos)));
+	if(inter_auction->count(a.seller_id, false) < 5) {
+		pos += sizeof((a.auction_id = RFIFOL(act, pos)));
+		memcpy(a.seller_name, RFIFOP(act, pos), NAME_LENGTH);
+		pos += NAME_LENGTH;
+		pos += sizeof((a.buyer_id   = RFIFOL(act, pos)));
+		memcpy(a.buyer_name, RFIFOP(act, pos), NAME_LENGTH);
+		pos += NAME_LENGTH;
+		pos += sizeof((a.item.id        = RFIFOL(act, pos)));
+		pos += sizeof((a.item.nameid    = RFIFOL(act, pos)));
+		pos += sizeof((a.item.amount    = RFIFOW(act, pos)));
+		pos += sizeof((a.item.equip     = RFIFOL(act, pos)));
+		pos += sizeof((a.item.identify  = RFIFOB(act, pos)));
+		pos += sizeof((a.item.refine    = RFIFOB(act, pos)));
+		pos += sizeof((a.item.attribute = RFIFOB(act, pos)));
+		memcpy(a.item.card, RFIFOP(act, pos),
+			SIZEOF_MEMBER(struct PACKET_ZW_AUCTION_REGISTER,
+			              data.item.card));
+		pos += SIZEOF_MEMBER(struct PACKET_ZW_AUCTION_REGISTER,
+			              data.item.card);
+		pos += sizeof((a.item.expire_time = RFIFOL(act, pos)));
+		pos += sizeof((a.item.favorite    = RFIFOB(act, pos)));
+		pos += sizeof((a.item.bound       = RFIFOB(act, pos)));
+		pos += sizeof((a.item.unique_id   = RFIFOQ(act, pos)));
+		memcpy(a.item.option, RFIFOP(act, pos),
+			SIZEOF_MEMBER(struct PACKET_ZW_AUCTION_REGISTER,
+				          data.item.option));
+		pos += SIZEOF_MEMBER(struct PACKET_ZW_AUCTION_REGISTER,
+			                 data.item.option);
+		memcpy(a.item_name, RFIFOP(act, pos),
+			SIZEOF_MEMBER(struct PACKET_ZW_AUCTION_REGISTER,
+				          data.item_name));
+		pos += SIZEOF_MEMBER(struct PACKET_ZW_AUCTION_REGISTER,
+			                 data.item_name);
+		pos += sizeof((a.type             = RFIFOW(act, pos)));
+		pos += sizeof((a.hours            = RFIFOW(act, pos)));
+		pos += sizeof((a.price            = RFIFOL(act, pos)));
+		pos += sizeof((a.buynow           = RFIFOL(act, pos)));
+		pos += sizeof((a.timestamp        = RFIFOQ(act, pos)));
+		pos += sizeof((a.auction_end_timer= RFIFOL(act, pos)));
+
+		a.auction_id = inter_auction->create(&a);
 	}
 
-	memcpy(&auction, RFIFOP(act, 4), sizeof(struct auction_data));
-	if( inter_auction->count(auction.seller_id, false) < 5 )
-		auction.auction_id = inter_auction->create(&auction);
-
-	mapif->auction_register(act->session, &auction);
+	mapif->auction_register(act->session,
+		a.auction_id,
+		// Other fields aren't always parsed from the packet
+		RFIFOL(act, offsetof(struct PACKET_ZW_AUCTION_REGISTER, data.hours)),
+		RFIFOP(act, offsetof(struct PACKET_ZW_AUCTION_REGISTER, data.item))
+	);
 }
 
 /**
@@ -823,7 +869,7 @@ static void mapif_parse_auction_cancel(struct s_receive_action_data *act)
 }
 
 /**
- * 0x3853 ZW_AUCTION_CLOSE_ACK <char_id>.L <result>.B
+ * 0x3853 WZ_AUCTION_CLOSE_ACK <char_id>.L <result>.B
  **/
 static void mapif_auction_close(struct socket_data *session, int char_id, enum e_auction_cancel result)
 {
@@ -884,7 +930,7 @@ static void mapif_auction_bid(struct socket_data *session, int char_id, int bid,
 }
 
 /**
- * 0x3055 ZW_AUCTION_BID_ACK <char_id>.L <auction_id>.L <bid>.L <buyer_name>
+ * 0x3055 ZW_AUCTION_BID <char_id>.L <auction_id>.L <bid>.L <buyer_name>
  **/
 static void mapif_parse_auction_bid(struct s_receive_action_data *act)
 {
@@ -1937,6 +1983,10 @@ static void mapif_parse_mail_send(int fd)
 	mapif->mail_new(&msg); // notify recipient
 }
 
+/*==========================================
+ * MAPIF : MERCENARY
+ *------------------------------------------*/
+
 static void mapif_mercenary_send(int fd, struct s_mercenary *merc, unsigned char flag)
 {
 	int size = sizeof(struct s_mercenary) + 5;
@@ -1995,6 +2045,10 @@ static void mapif_parse_mercenary_save(int fd, const struct s_mercenary *merc)
 	bool result = inter_mercenary->save(merc);
 	mapif->mercenary_saved(fd, result);
 }
+
+/*==========================================
+ * MAPIF : PARTY
+ *------------------------------------------*/
 
 // Create a party whether or not
 static int mapif_party_created(int fd, int account_id, int char_id, struct party *p)
@@ -2203,6 +2257,10 @@ static int mapif_parse_PartyLeaderChange(int fd, int party_id, int account_id, i
 	return 1;
 }
 
+/*==========================================
+ * MAPIF : PET
+ *------------------------------------------*/
+
 static int mapif_pet_created(int fd, int account_id, struct s_pet *p)
 {
 	WFIFOHEAD(fd, 14);
@@ -2351,6 +2409,10 @@ static int mapif_parse_DeletePet(int fd)
 	return 0;
 }
 
+/*==========================================
+ * MAPIF : QUEST
+ *------------------------------------------*/
+
 static void mapif_quest_save_ack(int fd, int char_id, bool success)
 {
 	WFIFOHEAD(fd, 7);
@@ -2424,7 +2486,9 @@ static int mapif_parse_quest_load(int fd)
 	return 0;
 }
 
-/* RoDEX */
+/*==========================================
+ * MAPIF : RoDEX
+ *------------------------------------------*/
 
 /*==========================================
  * Inbox Request
@@ -2599,6 +2663,33 @@ static void mapif_rodex_checkname(int fd, int reqchar_id, int target_char_id, in
 	safestrncpy(WFIFOP(fd, 18), name, NAME_LENGTH);
 	WFIFOSET(fd, 18 + NAME_LENGTH);
 }
+
+static void mapif_rodex_getzenyack(int fd, int char_id, int64 mail_id, uint8 opentype, int64 zeny)
+{
+	WFIFOHEAD(fd, 23);
+	WFIFOW(fd, 0) = 0x3899;
+	WFIFOL(fd, 2) = char_id;
+	WFIFOQ(fd, 6) = zeny;
+	WFIFOQ(fd, 14) = mail_id;
+	WFIFOB(fd, 22) = opentype;
+	WFIFOSET(fd, 23);
+}
+
+static void mapif_rodex_getitemsack(int fd, int char_id, int64 mail_id, uint8 opentype, int count, const struct rodex_item *items)
+{
+	WFIFOHEAD(fd, 15 + sizeof(struct rodex_item) * RODEX_MAX_ITEM);
+	WFIFOW(fd, 0) = 0x389a;
+	WFIFOL(fd, 2) = char_id;
+	WFIFOQ(fd, 6) = mail_id;
+	WFIFOB(fd, 14) = opentype;
+	WFIFOB(fd, 15) = count;
+	memcpy(WFIFOP(fd, 16), items, sizeof(struct rodex_item) * RODEX_MAX_ITEM);
+	WFIFOSET(fd, 16 + sizeof(struct rodex_item) * RODEX_MAX_ITEM);
+}
+
+/*==========================================
+ * MAPIF : STORAGE
+ *------------------------------------------*/
 
 /**
  * Sends loaded guild storage to a map-server.
@@ -2849,6 +2940,10 @@ static int mapif_parse_SaveGuildStorage(int fd)
 	return 0;
 }
 
+/*==========================================
+ * MAPIF : BOUND ITEMS
+ *------------------------------------------*/
+
 static int mapif_itembound_ack(int fd, int aid, int guild_id)
 {
 #ifdef GP_BOUND_ITEMS
@@ -2880,6 +2975,10 @@ static void mapif_parse_ItemBoundRetrieve(int fd)
 	/* tell map server the operation is over and it can unlock the storage */
 	mapif->itembound_ack(fd, RFIFOL(fd, 6), RFIFOW(fd, 10));
 }
+
+/*==========================================
+ * MAPIF : General player requests
+ *------------------------------------------*/
 
 /**
  * 0x3007 ZW_ACCINFO_REQUEST <requester fd>.L <target aid>.L <requester group lvl>.W <target name>.NAME_LENGTH
@@ -3049,6 +3148,10 @@ static int mapif_parse_NameChangeRequest(int fd)
 	return 0;
 }
 
+/*==========================================
+ * MAPIF : CLAN
+ *------------------------------------------*/
+
 // Clan System
 static int mapif_parse_ClanMemberKick(int fd, int clan_id, int kick_interval)
 {
@@ -3075,6 +3178,9 @@ static int mapif_parse_ClanMemberCount(int fd, int clan_id, int kick_interval)
 	return 0;
 }
 
+/*==========================================
+ * MAPIF : ACHIEVEMENT
+ *------------------------------------------*/
 // Achievement System
 /**
  * Parse achievement load request from the map server
@@ -3187,29 +3293,6 @@ static void mapif_achievement_save(int char_id, struct char_achievements *p)
 
 	if (VECTOR_LENGTH(*p)) /* Save current achievements. */
 		inter_achievement->tosql(char_id, cp, p);
-}
-
-static void mapif_rodex_getzenyack(int fd, int char_id, int64 mail_id, uint8 opentype, int64 zeny)
-{
-	WFIFOHEAD(fd, 23);
-	WFIFOW(fd, 0) = 0x3899;
-	WFIFOL(fd, 2) = char_id;
-	WFIFOQ(fd, 6) = zeny;
-	WFIFOQ(fd, 14) = mail_id;
-	WFIFOB(fd, 22) = opentype;
-	WFIFOSET(fd, 23);
-}
-
-static void mapif_rodex_getitemsack(int fd, int char_id, int64 mail_id, uint8 opentype, int count, const struct rodex_item *items)
-{
-	WFIFOHEAD(fd, 15 + sizeof(struct rodex_item) * RODEX_MAX_ITEM);
-	WFIFOW(fd, 0) = 0x389a;
-	WFIFOL(fd, 2) = char_id;
-	WFIFOQ(fd, 6) = mail_id;
-	WFIFOB(fd, 14) = opentype;
-	WFIFOB(fd, 15) = count;
-	memcpy(WFIFOP(fd, 16), items, sizeof(struct rodex_item) * RODEX_MAX_ITEM);
-	WFIFOSET(fd, 16 + sizeof(struct rodex_item) * RODEX_MAX_ITEM);
 }
 
 /**

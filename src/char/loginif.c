@@ -35,6 +35,8 @@
 #include "common/showmsg.h"
 #include "common/socket.h"
 #include "common/timer.h"
+#include "common/strlib.h"
+#include "common/memmgr.h"
 
 #include "common/rwlock.h"
 #include "common/mutex.h"
@@ -80,8 +82,6 @@ static void loginif_on_disconnect(void)
  **/
 static void loginif_on_ready(void)
 {
-	int i;
-
 	loginif->check_shutdown();
 
 	//Send online accounts to login server.
@@ -335,7 +335,7 @@ static void loginif_set_account_offline(int account_id)
  * WA_REQUEST_CHANGE_EMAIL
  * Requests login-server to update the e-mail of an account (this is relayed from map-server)
  **/
-static void loginif_request_change_email(int account_id, char current_email[40], char new_email[40])
+static void loginif_request_change_email(int account_id, const char current_email[40], const char new_email[40])
 {
 	Assert_retv(chr->login_session);
 	WFIFOHEAD(chr->login_session, sizeof(struct PACKET_WA_REQUEST_CHANGE_EMAIL), true);
@@ -390,7 +390,7 @@ static void loginif_save_accreg2_entry(const char *key, unsigned int index, intp
 	size_t count = WFIFOW(chr->login_session, 2);
 	size_t key_len = strlen(key)+1;
 
-	count += sizeof((WFIFOB(chr->login_session, count) = min(key_len, SCRIPT_VARNAME_LENGTH + 1)));
+	count += sizeof((WFIFOB(chr->login_session, count) = min((uint8)key_len, SCRIPT_VARNAME_LENGTH + 1)));
 
 	safestrncpy(WFIFOP(chr->login_session, count), key, key_len);
 	count += key_len;
@@ -408,7 +408,7 @@ static void loginif_save_accreg2_entry(const char *key, unsigned int index, intp
 			char *sval = (char*)val;
 			size_t val_len = strlen(sval)+1;
 
-			count += sizeof(WFIFOB(chr->login_session, count) = min(val_len-1, 255));
+			count += sizeof(WFIFOB(chr->login_session, count) = min((uint8)val_len-1, 255));
 
 			safestrncpy(WFIFOP(chr->login_session, count), sval, val_len);
 			count += val_len;
@@ -421,7 +421,7 @@ static void loginif_save_accreg2_entry(const char *key, unsigned int index, intp
 
 	WFIFOW(chr->login_session,12) += 1; // Increase entry count
 
-	WFIFOW(chr->login_session, 2) = count; // Update packet length
+	WFIFOW(chr->login_session, 2) = (uint8)count; // Update packet length
 	if( WFIFOW(chr->login_session, 2) > 60000 ) {
 		int account_id = WFIFOL(chr->login_session,4);
 		int char_id = WFIFOL(chr->login_session,8);
@@ -728,10 +728,10 @@ static void loginif_parse_auth_state(struct s_receive_action_data *act)
 				flag = NBE_DISCONNECTED;
 				goto failed_auth;
 			}
-			chr->auth_ok(client_fd, sd);
+			chr->auth_ok(client_session, sd);
 			break;
 		case 1:// auth failed
-			chr->auth_error(client_fd, 0);
+			chr->auth_error(client_session, 0);
 			break;
 	}
 	return;
@@ -752,9 +752,9 @@ static void loginif_parse_account_data(struct s_receive_action_data *act)
 	struct socket_data *client_session;
 	enum notify_ban_errorcode flag = NBE_SUCCESS;
 
-	int32 account_id = RFIFO(act, 2);
-	int32 request_id = RFIFO(act, 6);
-	uint8 result     = RFIFO(act,10);
+	int32 account_id = RFIFOL(act, 2);
+	int32 request_id = RFIFOL(act, 6);
+	uint8 result     = RFIFOB(act,10);
 
 	client_session = socket_io->session_from_id(request_id);
 	if(!client_session)

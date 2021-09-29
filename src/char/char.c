@@ -1782,8 +1782,6 @@ static bool char_check_symbols(const char *name)
  */
 static enum refuse_make_char_errorcode char_check_char_name(const char *name, const char *esc_name)
 {
-	int i;
-
 	nullpo_retr(RMCE_DENIED, name);
 
 	// check length of character name
@@ -3560,7 +3558,6 @@ static void char_parse_frommap_ping(struct s_receive_action_data *act, struct mm
  **/
 static void char_parse_frommap_auth_request(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
-	struct mmo_charstatus char_dat;
 	struct char_auth_node* node;
 	struct mmo_charstatus* cd;
 
@@ -3571,8 +3568,8 @@ static void char_parse_frommap_auth_request(struct s_receive_action_data *act, s
 	uint32 ip       = ntohl(RFIFOL(act,15));
 	char standalone = RFIFOB(act, 19);
 
-	node = (struct char_auth_node*)idb_get(auth_db, account_id);
-	cd = (struct mmo_charstatus*)uidb_get(chr->char_db_,char_id);
+	node = idb_get(auth_db, account_id);
+	cd = uidb_get(chr->char_db_,char_id);
 
 	if( cd == NULL ) //Really shouldn't happen.
 		chr->mmo_char_fromsql(char_id, &cd, true);
