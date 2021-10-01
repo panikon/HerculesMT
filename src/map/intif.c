@@ -1915,7 +1915,7 @@ static void intif_parse_MailReturn(int fd)
  *------------------------------------------*/
 static int intif_Mail_send(int account_id, struct mail_message *msg)
 {
-	int len = sizeof(struct mail_message) + 8;
+	int len = sizeof(struct mail_message) + 6;
 
 	if (intif->CheckForCharServer())
 		return 0;
@@ -1923,9 +1923,8 @@ static int intif_Mail_send(int account_id, struct mail_message *msg)
 	nullpo_ret(msg);
 	WFIFOHEAD(inter_fd,len);
 	WFIFOW(inter_fd,0) = 0x304d;
-	WFIFOW(inter_fd,2) = len;
-	WFIFOL(inter_fd,4) = account_id;
-	memcpy(WFIFOP(inter_fd,8), msg, sizeof(struct mail_message));
+	WFIFOL(inter_fd,2) = account_id;
+	memcpy(WFIFOP(inter_fd,6), msg, sizeof(struct mail_message));
 	WFIFOSET(inter_fd,len);
 
 	return 1;
@@ -2176,11 +2175,10 @@ static int intif_mercenary_create(struct s_mercenary *merc)
 		return 0;
 
 	nullpo_ret(merc);
-	WFIFOHEAD(inter_fd,size);
+	WFIFOHEAD(inter_fd,0);
 	WFIFOW(inter_fd,0) = 0x3070;
-	WFIFOW(inter_fd,2) = size;
-	memcpy(WFIFOP(inter_fd,4), merc, sizeof(struct s_mercenary));
-	WFIFOSET(inter_fd,size);
+	memcpy(WFIFOP(inter_fd,2), merc, sizeof(struct s_mercenary));
+	WFIFOSET(inter_fd,0);
 	return 0;
 }
 
@@ -2218,10 +2216,13 @@ static int intif_mercenary_delete(int merc_id)
 	WFIFOHEAD(inter_fd,6);
 	WFIFOW(inter_fd,0) = 0x3072;
 	WFIFOL(inter_fd,2) = merc_id;
+	//char_id
 	WFIFOSET(inter_fd,6);
 	return 0;
 }
-/* Really? Whats the point, shouldn't be sent when successful then [Ind] */
+/* Really? Whats the point, shouldn't be sent when successful then [Ind] 
+   TODO: Only finish deleting when the deletion was successful [panikon]
+   WZ_MERCENARY_DELETE_ACK <merc_id>.L <char_id>.L <success>.B */
 static void intif_parse_MercenaryDeleted(int fd)
 {
 	if( RFIFOB(fd,2) != 1 )

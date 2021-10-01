@@ -645,6 +645,33 @@ static void mapif_login_map_server_ack(struct socket_data *session, uint8 flag)
 	WFIFOSET2(session, 3);
 }
 
+/**
+ * Parses an item_packet_data field of provided packet
+ *
+ * @param pos  Offset of item_packet_data in provided packet
+ * @param item item object to be filled
+ * @return Current buffer position
+ **/
+static int mapif_parse_item_data(struct s_receive_action_data *act, int pos, struct item *out)
+{
+	pos += sizeof((out->id        = RFIFOL(act, pos)));
+	pos += sizeof((out->nameid    = RFIFOL(act, pos)));
+	pos += sizeof((out->amount    = RFIFOW(act, pos)));
+	pos += sizeof((out->equip     = RFIFOL(act, pos)));
+	pos += sizeof((out->identify  = RFIFOB(act, pos)));
+	pos += sizeof((out->refine    = RFIFOB(act, pos)));
+	pos += sizeof((out->attribute = RFIFOB(act, pos)));
+	memcpy(out->card, RFIFOP(act, pos),
+		SIZEOF_MEMBER(struct item_packet_data, card));
+	pos += SIZEOF_MEMBER(struct item_packet_data, card);
+	pos += sizeof((out->expire_time = RFIFOL(act, pos)));
+	pos += sizeof((out->favorite    = RFIFOB(act, pos)));
+	pos += sizeof((out->bound       = RFIFOB(act, pos)));
+	pos += sizeof((out->unique_id   = RFIFOQ(act, pos)));
+	memcpy(out->option, RFIFOP(act, pos),
+		SIZEOF_MEMBER(struct item_packet_data, option));
+	pos += SIZEOF_MEMBER(struct item_packet_data, option);
+}
 
 /*======================================
  * MAPIF : AUCTION
@@ -777,27 +804,7 @@ static void mapif_parse_auction_register(struct s_receive_action_data *act)
 		pos += sizeof((a.buyer_id   = RFIFOL(act, pos)));
 		memcpy(a.buyer_name, RFIFOP(act, pos), NAME_LENGTH);
 		pos += NAME_LENGTH;
-		pos += sizeof((a.item.id        = RFIFOL(act, pos)));
-		pos += sizeof((a.item.nameid    = RFIFOL(act, pos)));
-		pos += sizeof((a.item.amount    = RFIFOW(act, pos)));
-		pos += sizeof((a.item.equip     = RFIFOL(act, pos)));
-		pos += sizeof((a.item.identify  = RFIFOB(act, pos)));
-		pos += sizeof((a.item.refine    = RFIFOB(act, pos)));
-		pos += sizeof((a.item.attribute = RFIFOB(act, pos)));
-		memcpy(a.item.card, RFIFOP(act, pos),
-			SIZEOF_MEMBER(struct PACKET_ZW_AUCTION_REGISTER,
-			              data.item.card));
-		pos += SIZEOF_MEMBER(struct PACKET_ZW_AUCTION_REGISTER,
-			              data.item.card);
-		pos += sizeof((a.item.expire_time = RFIFOL(act, pos)));
-		pos += sizeof((a.item.favorite    = RFIFOB(act, pos)));
-		pos += sizeof((a.item.bound       = RFIFOB(act, pos)));
-		pos += sizeof((a.item.unique_id   = RFIFOQ(act, pos)));
-		memcpy(a.item.option, RFIFOP(act, pos),
-			SIZEOF_MEMBER(struct PACKET_ZW_AUCTION_REGISTER,
-				          data.item.option));
-		pos += SIZEOF_MEMBER(struct PACKET_ZW_AUCTION_REGISTER,
-			                 data.item.option);
+		pos += mapif->parse_item_data(act, pos, &a.item);
 		memcpy(a.item_name, RFIFOP(act, pos),
 			SIZEOF_MEMBER(struct PACKET_ZW_AUCTION_REGISTER,
 				          data.item_name));
@@ -1828,89 +1835,111 @@ static void mapif_parse_homunculus_rename(struct s_receive_action_data *act, str
  * MAPIF : MAIL
  *--------------------------------------*/
 
-static void mapif_mail_sendinbox(int fd, int char_id, unsigned char flag, struct mail_data *md)
-{
-	nullpo_retv(md);
+/**
+ * WZ_MAIL_SENDINBOX 0x3848 <len>.W <char_id>.L <flag>.B <mail_data>.*
+ * Notify map-server of a received e-mail
+ **/
+static void mapif_mail_sendinbox(struct socket_data *session, int char_id,
+	unsigned char flag, const struct mail_data *md
+) {
 	//FIXME: dumping the whole structure like this is unsafe [ultramage]
-	WFIFOHEAD(fd, sizeof(struct mail_data) + 9);
-	WFIFOW(fd, 0) = 0x3848;
-	WFIFOW(fd, 2) = sizeof(struct mail_data) + 9;
-	WFIFOL(fd, 4) = char_id;
-	WFIFOB(fd, 8) = flag;
-	memcpy(WFIFOP(fd, 9),md,sizeof(struct mail_data));
-	WFIFOSET(fd,WFIFOW(fd, 2));
+	// TODO/FIXME: Copy of a padded struct
+	WFIFOHEAD(session, sizeof(struct mail_data) + 9, true);
+	WFIFOW(session, 0) = 0x3848;
+	WFIFOW(session, 2) = sizeof(struct mail_data) + 9;
+	WFIFOL(session, 4) = char_id;
+	WFIFOB(session, 8) = flag;
+	memcpy(WFIFOP(session, 9),md,sizeof(struct mail_data));
+	WFIFOSET(session,WFIFOW(session, 2));
 }
 
-/*==========================================
+/**
+ * ZW_MAIL_INBOX_REQUEST
  * Client Inbox Request
- *------------------------------------------*/
-static void mapif_parse_mail_requestinbox(int fd)
+ **/
+static void mapif_parse_mail_requestinbox(struct s_receive_action_data *act)
 {
-	int char_id = RFIFOL(fd, 2);
-	unsigned char flag = RFIFOB(fd, 6);
-	struct mail_data md;
-	memset(&md, 0, sizeof(md));
+	int char_id = RFIFOL(act, 2);
+	unsigned char flag = RFIFOB(act, 6);
+
+	struct mail_data md = {0};
 	inter_mail->fromsql(char_id, &md);
-	mapif->mail_sendinbox(fd, char_id, flag, &md);
+	mapif->mail_sendinbox(act->session, char_id, flag, &md);
 }
 
-/*==========================================
+/**
+ * ZW_MAIL_READ
  * Mark mail as 'Read'
- *------------------------------------------*/
-static void mapif_parse_mail_read(int fd)
+ **/
+static void mapif_parse_mail_read(struct s_receive_action_data *act)
 {
-	int mail_id = RFIFOL(fd, 2);
+	int mail_id = RFIFOL(act, 2);
 	inter_mail->mark_read(mail_id);
 }
 
-static void mapif_mail_sendattach(int fd, int char_id, struct mail_message *msg)
-{
+/**
+ * WZ_MAIL_ATTACHMENT_ACK 0x384a <len>.W <char_id>.L <zeny>.L <item>.*
+ * Returns attachment of an email (answer)
+ **/
+static void mapif_mail_sendattach(struct socket_data *session, int char_id,
+	const struct mail_message *msg
+) {
 	nullpo_retv(msg);
-	WFIFOHEAD(fd, sizeof(struct item) + 12);
-	WFIFOW(fd, 0) = 0x384a;
-	WFIFOW(fd, 2) = sizeof(struct item) + 12;
-	WFIFOL(fd, 4) = char_id;
-	WFIFOL(fd, 8) = (msg->zeny > 0) ? msg->zeny : 0;
-	memcpy(WFIFOP(fd, 12), &msg->item, sizeof(struct item));
-	WFIFOSET(fd,WFIFOW(fd, 2));
+	WFIFOHEAD(session, sizeof(struct item) + 12, true);
+	WFIFOW(session, 0) = 0x384a;
+	WFIFOW(session, 2) = sizeof(struct item) + 12;
+	WFIFOL(session, 4) = char_id;
+	WFIFOL(session, 8) = (msg->zeny > 0) ? msg->zeny : 0;
+	// TODO/FIXME: Copy of a padded struct
+	memcpy(WFIFOP(session, 12), &msg->item, sizeof(struct item));
+	WFIFOSET(session,WFIFOW(session, 2));
 }
 
-static void mapif_parse_mail_getattach(int fd)
+/**
+ * ZW_MAIL_ATTACHMENT
+ * Attachment request
+ **/
+static void mapif_parse_mail_getattach(struct s_receive_action_data *act)
 {
 	struct mail_message msg = { 0 };
-	int char_id = RFIFOL(fd, 2);
-	int mail_id = RFIFOL(fd, 6);
+	int char_id = RFIFOL(act, 2);
+	int mail_id = RFIFOL(act, 6);
 
 	if (!inter_mail->get_attachment(char_id, mail_id, &msg))
 		return;
 
-	mapif->mail_sendattach(fd, char_id, &msg);
+	mapif->mail_sendattach(act->session, char_id, &msg);
 }
 
-/*==========================================
- * Delete Mail
- *------------------------------------------*/
-static void mapif_mail_delete(int fd, int char_id, int mail_id, bool failed)
+/**
+ * WZ_MAIL_DELETE_ACK 0x384b <char_id>.L <mail_id>.L <failed>.B
+ **/
+static void mapif_mail_delete(struct socket_data *session, int char_id, int mail_id, bool failed)
 {
-	WFIFOHEAD(fd, 11);
-	WFIFOW(fd, 0) = 0x384b;
-	WFIFOL(fd, 2) = char_id;
-	WFIFOL(fd, 6) = mail_id;
-	WFIFOB(fd, 10) = failed;
-	WFIFOSET(fd, 11);
+	WFIFOHEAD(session, 11, true);
+	WFIFOW(session, 0) = 0x384b;
+	WFIFOL(session, 2) = char_id;
+	WFIFOL(session, 6) = mail_id;
+	WFIFOB(session, 10) = failed;
+	WFIFOSET(session, 11);
 }
 
-static void mapif_parse_mail_delete(int fd)
+/**
+ * ZW_MAIL_DELETE
+ * Mail deletion request
+ **/
+static void mapif_parse_mail_delete(struct s_receive_action_data *act)
 {
-	int char_id = RFIFOL(fd, 2);
-	int mail_id = RFIFOL(fd, 6);
+	int char_id = RFIFOL(act, 2);
+	int mail_id = RFIFOL(act, 6);
 	bool failed = !inter_mail->delete(char_id, mail_id);
-	mapif->mail_delete(fd, char_id, mail_id, failed);
+	mapif->mail_delete(act->session, char_id, mail_id, failed);
 }
 
-/*==========================================
- * Report New Mail to Map Server
- *------------------------------------------*/
+/**
+ * WZ_MAIL_NEW <dest_id>.L <mail_id>.L <send_name>.24B <title>.40B
+ * Reports New Mail to Map Server
+ **/
 static void mapif_mail_new(struct mail_message *msg)
 {
 	unsigned char buf[74];
@@ -1926,60 +1955,89 @@ static void mapif_mail_new(struct mail_message *msg)
 	mapif->sendall(buf, 74);
 }
 
-/*==========================================
- * Return Mail
- *------------------------------------------*/
-static void mapif_mail_return(int fd, int char_id, int mail_id, int new_mail)
+/**
+ * WZ_MAIL_RETURN_ACK <char_id>.L <mail_id>.L <flag>.B
+ * Answer to return message request
+ *
+ * @param new_mail New mail id (0 if no mail)
+ **/
+static void mapif_mail_return(struct socket_data *session, int char_id, int mail_id, int new_mail)
 {
-	WFIFOHEAD(fd, 11);
-	WFIFOW(fd, 0) = 0x384c;
-	WFIFOL(fd, 2) = char_id;
-	WFIFOL(fd, 6) = mail_id;
-	WFIFOB(fd, 10) = (new_mail == 0);
-	WFIFOSET(fd, 11);
+	WFIFOHEAD(session, 11, true);
+	WFIFOW(session, 0) = 0x384c;
+	WFIFOL(session, 2) = char_id;
+	WFIFOL(session, 6) = mail_id;
+	WFIFOB(session, 10) = (new_mail == 0);
+	WFIFOSET(session, 11);
 }
 
-static void mapif_parse_mail_return(int fd)
+/**
+ * ZW_MAIL_RETURN
+ * Return message request
+ **/
+static void mapif_parse_mail_return(struct s_receive_action_data *act)
 {
-	int char_id = RFIFOL(fd, 2);
-	int mail_id = RFIFOL(fd, 6);
+	int char_id = RFIFOL(act, 2);
+	int mail_id = RFIFOL(act, 6);
 	int new_mail = 0;
 
 	if (!inter_mail->return_message(char_id, mail_id, &new_mail))
 		return;
 
-	mapif->mail_return(fd, char_id, mail_id, new_mail);
+	mapif->mail_return(act->session, char_id, mail_id, new_mail);
 }
 
-/*==========================================
- * Send Mail
- *------------------------------------------*/
-static void mapif_mail_send(int fd, struct mail_message* msg)
+/**
+ * WZ_MAIL_SEND_ACK 0x384d <len>.W <mail_message>.*
+ * Answer to send request
+ **/
+static void mapif_mail_send(struct socket_data *session, struct mail_message* msg)
 {
 	int len = sizeof(struct mail_message) + 4;
 
 	nullpo_retv(msg);
-	WFIFOHEAD(fd, len);
-	WFIFOW(fd, 0) = 0x384d;
-	WFIFOW(fd, 2) = len;
-	memcpy(WFIFOP(fd, 4), msg, sizeof(struct mail_message));
-	WFIFOSET(fd,len);
+	WFIFOHEAD(session, len, true);
+	WFIFOW(session, 0) = 0x384d;
+	WFIFOW(session, 2) = len;
+	// TODO/FIXME: Copy of a padded struct
+	memcpy(WFIFOP(session, 4), msg, sizeof(struct mail_message));
+	WFIFOSET(session,len);
 }
 
-static void mapif_parse_mail_send(int fd)
+/**
+ * ZW_MAIL_SEND
+ * Send a mail
+ **/
+static void mapif_parse_mail_send(struct s_receive_action_data *act)
 {
 	struct mail_message msg;
 	int account_id = 0;
+	int pos = 2;
 
-	if (RFIFOW(fd, 2) != 8 + sizeof(struct mail_message))
-		return;
-
-	account_id = RFIFOL(fd, 4);
-	memcpy(&msg, RFIFOP(fd, 8), sizeof(struct mail_message));
+	pos += sizeof((account_id  = RFIFOL(act, pos)));
+	pos += sizeof((msg.id      = RFIFOL(act, pos)));
+	pos += sizeof((msg.send_id = RFIFOL(act, pos)));
+	memcpy(msg.send_name, RFIFOP(act, pos),
+		SIZEOF_MEMBER(struct mail_message_packet_data, send_name));
+	pos += SIZEOF_MEMBER(struct mail_message_packet_data, send_name);
+	pos += sizeof((msg.dest_id = RFIFOL(act, pos)));
+	memcpy(msg.dest_name, RFIFOP(act, pos),
+		SIZEOF_MEMBER(struct mail_message_packet_data, dest_name));
+	pos += SIZEOF_MEMBER(struct mail_message_packet_data, dest_name);
+	memcpy(msg.title, RFIFOP(act, pos),
+		SIZEOF_MEMBER(struct mail_message_packet_data, title));
+	pos += SIZEOF_MEMBER(struct mail_message_packet_data, title);
+	memcpy(msg.body, RFIFOP(act, pos),
+		SIZEOF_MEMBER(struct mail_message_packet_data, body));
+	pos += SIZEOF_MEMBER(struct mail_message_packet_data, body);
+	pos += sizeof((msg.status    = RFIFOB(act, pos)));
+	pos += sizeof((msg.timestamp = RFIFOQ(act, pos)));
+	pos += sizeof((msg.zeny      = RFIFOL(act, pos)));
+	pos += mapif->parse_item_data(act, pos, &msg.item);
 
 	inter_mail->send(account_id, &msg);
 
-	mapif->mail_send(fd, &msg); // notify sender
+	mapif->mail_send(act->session, &msg); // notify sender
 	mapif->mail_new(&msg); // notify recipient
 }
 
@@ -1987,63 +2045,124 @@ static void mapif_parse_mail_send(int fd)
  * MAPIF : MERCENARY
  *------------------------------------------*/
 
-static void mapif_mercenary_send(int fd, struct s_mercenary *merc, unsigned char flag)
+/**
+ * WZ_MERCENARY_SEND 0x3870 <flag>.B <s_mercenary_packet_data>.*
+ * Sends mercenary data
+ *
+ * @param result true mercenary data is complete (success state)
+ **/
+static void mapif_mercenary_send(struct socket_data *session, const struct s_mercenary *merc, bool result)
 {
-	int size = sizeof(struct s_mercenary) + 5;
-
-	nullpo_retv(merc);
-	WFIFOHEAD(fd, size);
-	WFIFOW(fd, 0) = 0x3870;
-	WFIFOW(fd, 2) = size;
-	WFIFOB(fd, 4) = flag;
-	memcpy(WFIFOP(fd, 5), merc, sizeof(struct s_mercenary));
-	WFIFOSET(fd,size);
+	WFIFOHEAD(session, sizeof(struct s_mercenary_packet_data)+3, true);
+	WFIFOW(session, 0) = 0x3870;
+	WFIFOB(session, 2) = result;
+	WFIFOL(session, 3) = merc->mercenary_id;
+	WFIFOL(session, 7) = merc->char_id;
+	WFIFOL(session, 11) = merc->class_;
+	WFIFOL(session, 15) = merc->hp;
+	WFIFOL(session, 19) = merc->sp;
+	WFIFOL(session, 23) = merc->kill_count;
+	WFIFOL(session, 27) = merc->life_time;
+	WFIFOSET(session, sizeof(struct s_mercenary_packet_data)+3);
 }
 
-static void mapif_parse_mercenary_create(int fd, const struct s_mercenary *merc)
+/**
+ * Parses a s_mercenary_packet_data object of provided packet
+ *
+ * @param pos  Offset of data in packet
+ * @param out  Object to be filled
+ * @return pos Position in buffer after filling
+ **/
+static int mapif_parse_mercenary_data(struct s_receive_action_data *act,
+	int pos, struct s_mercenary *out
+) {
+	pos += sizeof((out->mercenary_id = RFIFOL(act,pos)));
+	pos += sizeof((out->char_id      = RFIFOL(act,pos)));
+	pos += sizeof((out->class_       = RFIFOL(act,pos)));
+	pos += sizeof((out->hp           = RFIFOL(act,pos)));
+	pos += sizeof((out->sp           = RFIFOL(act,pos)));
+	pos += sizeof((out->kill_count   = RFIFOL(act,pos)));
+	pos += sizeof((out->life_time    = RFIFOL(act,pos)));
+	return pos;
+}
+
+/**
+ * ZW_MERCENARY_CREATE
+ * Request to create a mercenary
+ **/
+static void mapif_parse_mercenary_create(struct s_receive_action_data *act)
 {
-	struct s_mercenary merc_;
+	struct s_mercenary merc = {0};
 	bool result;
 
-	memcpy(&merc_, merc, sizeof(merc_));
+	mapif->parse_mercenary_data(act, 2, &merc);
 
-	result = inter_mercenary->create(&merc_);
-	mapif->mercenary_send(fd, &merc_, result);
+	result = inter_mercenary->create(&merc);
+	mapif->mercenary_send(act->session, &merc, result);
 }
 
-static void mapif_parse_mercenary_load(int fd, int merc_id, int char_id)
+/**
+ * ZW_MERCENARY_LOAD
+ * Mercenary load request
+ **/
+static void mapif_parse_mercenary_load(struct s_receive_action_data *act)
 {
-	struct s_mercenary merc;
-	bool result = inter_mercenary->load(merc_id, char_id, &merc);
-	mapif->mercenary_send(fd, &merc, result);
+	struct s_mercenary merc = {0};
+	bool result = inter_mercenary->load(RFIFOL(act, 2), RFIFOL(act, 6), &merc);
+	mapif->mercenary_send(act->session, &merc, result);
 }
 
-static void mapif_mercenary_deleted(int fd, unsigned char flag)
+/**
+ * WZ_MERCENARY_DELETE_ACK <merc_id>.L <char_id>.L <success>.B
+ * Delete response
+ **/
+static void mapif_mercenary_deleted(struct socket_data *session, int char_id, int merc_id, bool success)
 {
-	WFIFOHEAD(fd, 3);
-	WFIFOW(fd, 0) = 0x3871;
-	WFIFOB(fd, 2) = flag;
-	WFIFOSET(fd, 3);
+	WFIFOHEAD(session, 11, true);
+	WFIFOW(session, 0) = 0x3871;
+	WFIFOL(session, 2) = merc_id;
+	WFIFOL(session, 6) = char_id;
+	WFIFOB(session, 10) = success;
+	WFIFOSET(session, 11);
 }
 
-static void mapif_parse_mercenary_delete(int fd, int merc_id)
+/**
+ * ZW_MERCENARY_DELETE
+ * Deletion request
+ **/
+static void mapif_parse_mercenary_delete(struct s_receive_action_data *act)
 {
+	int merc_id = RFIFOL(act, 2);
+	int char_id = RFIFOL(act, 6);
 	bool result = inter_mercenary->delete(merc_id);
-	mapif->mercenary_deleted(fd, result);
+	mapif->mercenary_deleted(act->session, char_id, merc_id, result);
 }
 
-static void mapif_mercenary_saved(int fd, unsigned char flag)
+/**
+ * WZ_MERCENARY_SAVE_ACK
+ * Answer of save request
+ **/
+static void mapif_mercenary_saved(struct socket_data *session, int char_id, int merc_id, bool success)
 {
-	WFIFOHEAD(fd, 3);
-	WFIFOW(fd, 0) = 0x3872;
-	WFIFOB(fd, 2) = flag;
-	WFIFOSET(fd, 3);
+	WFIFOHEAD(session, 11, true);
+	WFIFOW(session, 0) = 0x3872;
+	WFIFOL(session, 2) = merc_id;
+	WFIFOL(session, 6) = char_id;
+	WFIFOB(session, 10) = success;
+	WFIFOSET(session, 11);
 }
 
-static void mapif_parse_mercenary_save(int fd, const struct s_mercenary *merc)
+/**
+ * ZW_MERCENARY_SAVE
+ * Save request
+ **/
+static void mapif_parse_mercenary_save(struct s_receive_action_data *act)
 {
-	bool result = inter_mercenary->save(merc);
-	mapif->mercenary_saved(fd, result);
+	struct s_mercenary merc = {0};
+	mapif->parse_mercenary_data(act, 2, &merc);
+
+	bool result = inter_mercenary->save(&merc);
+	mapif->mercenary_saved(act->session, merc.char_id, merc.mercenary_id, result);
 }
 
 /*==========================================
@@ -3391,7 +3510,8 @@ void mapif_defaults(void)
 	mapif->sendallwos = mapif_sendallwos;
 	mapif->send = mapif_send;
 
-	mapif->send_users_count = mapif_send_users_count;
+	mapif->parse_item_data = mapif_parse_item_data;
+	mapif->send_users_count = mapif_users_count;
 	mapif->pLoadAchievements = mapif_parse_load_achievements;
 	mapif->sAchievementsToMap = mapif_send_achievements_to_map;
 	mapif->pSaveAchievements = mapif_parse_save_achievements;
@@ -3416,7 +3536,6 @@ void mapif_defaults(void)
 	mapif->elemental_saved = mapif_elemental_saved;
 	mapif->parse_elemental_save = mapif_parse_elemental_save;
 	mapif->guild_created = mapif_guild_created;
-	mapif->guild_noinfo = mapif_guild_noinfo;
 	mapif->guild_info = mapif_guild_info;
 	mapif->guild_memberadded = mapif_guild_memberadded;
 	mapif->guild_withdraw = mapif_guild_withdraw;
@@ -3476,6 +3595,7 @@ void mapif_defaults(void)
 	mapif->parse_mercenary_delete = mapif_parse_mercenary_delete;
 	mapif->mercenary_saved = mapif_mercenary_saved;
 	mapif->parse_mercenary_save = mapif_parse_mercenary_save;
+	mapif->parse_mercenary_data = mapif_parse_mercenary_data;
 	mapif->party_created = mapif_party_created;
 	mapif->party_noinfo = mapif_party_noinfo;
 	mapif->party_info = mapif_party_info;

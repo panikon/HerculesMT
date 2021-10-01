@@ -108,27 +108,27 @@ enum inter_packet_zw_id {
 	HEADER_ZW_HOMUNCULUS_SAVE   = 0x3092, // mapif->parse_homunculus_save  
 	HEADER_ZW_HOMUNCULUS_DELETE = 0x3093, // mapif->parse_homunculus_delete
 	HEADER_ZW_HOMUNCULUS_RENAME = 0x3094, // mapif->parse_homunculus_rename
-#if 0
+
 	// inter_mercenary_parse_frommap
-	0x3070, // mapif->parse_mercenary_create
-    0x3071, // mapif->parse_mercenary_load(f
-    0x3072, // mapif->parse_mercenary_delete
-    0x3073, // mapif->parse_mercenary_save(f
-#endif
+	HEADER_ZW_MERCENARY_CREATE = 0x3070, // mapif->parse_mercenary_create
+	HEADER_ZW_MERCENARY_LOAD   = 0x3071, // mapif->parse_mercenary_load(f
+	HEADER_ZW_MERCENARY_DELETE = 0x3072, // mapif->parse_mercenary_delete
+	HEADER_ZW_MERCENARY_SAVE   = 0x3073, // mapif->parse_mercenary_save(f
+
 	// inter_elemental_parse_frommap
 	HEADER_ZW_ELEMENTAL_CREATE = 0x307c, // mapif->parse_elemental_create
 	HEADER_ZW_ELEMENTAL_LOAD   = 0x307d, // mapif->parse_elemental_load(f
 	HEADER_ZW_ELEMENTAL_DELETE =0x307e, // mapif->parse_elemental_delete
 	HEADER_ZW_ELEMENTAL_SAVE   =0x307f, // mapif->parse_elemental_save(f
-#if 0
+
 	// inter_mail_parse_frommap
-	0x3048, // mapif->parse_mail_requestinbox
-	0x3049, // mapif->parse_mail_read(fd); br
-	0x304a, // mapif->parse_mail_getattach(fd
-	0x304b, // mapif->parse_mail_delete(fd); 
-	0x304c, // mapif->parse_mail_return(fd); 
-	0x304d, // mapif->parse_mail_send(fd); br
-#endif
+	HEADER_ZW_MAIL_INBOX_REQUEST = 0x3048, // mapif->parse_mail_requestinbox
+	HEADER_ZW_MAIL_READ          = 0x3049, // mapif->parse_mail_read(fd); br
+	HEADER_ZW_MAIL_ATTACHMENT    = 0x304a, // mapif->parse_mail_getattach(fd
+	HEADER_ZW_MAIL_DELETE        = 0x304b, // mapif->parse_mail_delete(fd); 
+	HEADER_ZW_MAIL_RETURN        = 0x304c, // mapif->parse_mail_return(fd); 
+	HEADER_ZW_MAIL_SEND          = 0x304d, // mapif->parse_mail_send(fd); br
+
 	// inter_auction_parse_frommap
 	HEADER_ZW_AUCTION_REQUEST_LIST = 0x3050, // mapif->parse_auction_requestlist
 	HEADER_ZW_AUCTION_REGISTER     = 0x3051, // mapif->parse_auction_register(ac
@@ -874,6 +874,29 @@ struct PACKET_ZW_AUCTION_REQUEST_LIST {
 	uint8 search[NAME_LENGTH];
 } __attribute__((packed));
 
+
+// @copydoc struct item
+struct item_packet_data {
+	int32 id;
+	int32 nameid;
+	int16 amount;
+	int32 equip;
+	uint8 identify;
+	uint8 refine;
+	uint8 attribute;
+	int32 card[MAX_SLOTS];
+	int32 expire_time;
+	uint8 favorite;
+	uint8 bound;
+	uint64 unique_id;
+	// @copydoc item_option
+	struct {
+		int16 index;
+		int16 value;
+		uint8 param;
+	} option[MAX_ITEM_OPTIONS];
+} __attribute__((packed));
+
 /**
  * ZW_AUCTION_REGISTER
  * Request auction registration
@@ -887,27 +910,7 @@ struct PACKET_ZW_AUCTION_REGISTER {
 		uint8 seller_name[NAME_LENGTH];
 		int32 buyer_id;
 		uint8 buyer_name[NAME_LENGTH];
-		// @copydoc struct item
-		struct {
-			int32 id;
-			int32 nameid;
-			int16 amount;
-			int32 equip;
-			uint8 identify;
-			uint8 refine;
-			uint8 attribute;
-			int32 card[MAX_SLOTS];
-			int32 expire_time;
-			uint8 favorite;
-			uint8 bound;
-			uint64 unique_id;
-			// @copydoc item_option
-			struct {
-				int16 index;
-				int16 value;
-				uint8 param;
-			} option[MAX_ITEM_OPTIONS];
-		} item;
+		struct item_packet_data item;
 		uint8 item_name[ITEM_NAME_LENGTH];
 		int16 type;
 		uint16 hours;
@@ -918,24 +921,142 @@ struct PACKET_ZW_AUCTION_REGISTER {
 	} data;
 } __attribute__((packed));
 
-struct ZW_AUCTION_CANCEL {
+struct PACKET_ZW_AUCTION_CANCEL {
 	int16 packet_id;
 	int32 char_id;
 	int32 auction_id;
 } __attribute__((packed));
 
-struct ZW_AUCTION_CLOSE {
+struct PACKET_ZW_AUCTION_CLOSE {
 	int16 packet_id;
 	int32 char_id;
 	uint8 result;
 } __attribute__((packed));
 
-struct ZW_AUCTION_BID {
+struct PACKET_ZW_AUCTION_BID {
 	int16 packet_id;
 	int32 char_id;
 	int32 auction_id;
 	int32 bid;
 	uint8 buyer_name[NAME_LENGTH];
+} __attribute__((packed));
+
+// @copydoc mail_message
+struct mail_message_packet_data {
+	int32 id;
+	int32 send_id;
+	uint8 send_name[NAME_LENGTH];
+	int32 dest_id;
+	uint8 dest_name[NAME_LENGTH];
+	uint8 title[MAIL_TITLE_LENGTH];
+	uint8 body[MAIL_BODY_LENGTH];
+	uint8 status; // @copydoc mail_status
+	uint64 timestamp;
+
+	uint32 zeny;
+	struct item_packet_data item;
+} __attribute__((packed));
+
+/**
+ * Inbox request
+ *
+ * @param flag 0 Update inbox
+ * @param flag 1 Open mail
+ **/
+struct PACKET_ZW_MAIL_INBOX_REQUEST {
+	int16 packet_id;
+	int32 char_id;
+	uint8 flag;
+} __attribute__((packed));
+
+/**
+ * Read mail
+ **/
+struct PACKET_ZW_MAIL_READ {
+	int16 packet_id;
+	int32 mail_id;
+} __attribute__((packed));
+
+/**
+ * Attachment request
+ *
+ * @param char_id Character that requested the attachment
+ **/
+struct PACKET_ZW_MAIL_ATTACHMENT {
+	int16 packet_id;
+	int32 char_id;
+	int32 mail_id;
+} __attribute__((packed));
+
+/**
+ * Mail deletion request
+ **/
+struct PACKET_ZW_MAIL_DELETE {
+	int16 packet_id;
+	int32 char_id;
+	int32 mail_id;
+} __attribute__((packed));
+
+/**
+ * Mail return request
+ **/
+struct PACKET_ZW_MAIL_RETURN {
+	int16 packet_id;
+	int32 char_id;
+	int32 mail_id;
+} __attribute__((packed));
+
+/**
+ * Mail send
+ **/
+struct PACKET_ZW_MAIL_SEND {
+	int16 packet_id;
+	int32 account_id;
+	struct mail_message_packet_data data;
+} __attribute__((packed));
+
+// @copydoc s_mercenary
+struct s_mercenary_packet_data {
+	int32 mercenary_id;
+	int32 char_id;
+	int32 class_;
+	int32 hp, sp;
+	uint32 kill_count;
+	uint32 life_time;
+} __attribute__((packed));
+
+/**
+ * Mercenary creation request
+ **/
+struct PACKET_ZW_MERCENARY_CREATE {
+	int16 packet_id;
+	struct s_mercenary_packet_data data;
+} __attribute__((packed));
+
+/**
+ * Mercenary load request
+ **/
+struct PACKET_ZW_MERCENARY_LOAD {
+	int16 packet_id;
+	int32 merc_id;
+	int32 char_id;
+} __attribute__((packed));
+
+/**
+ * Mercenary delete request
+ **/
+struct PACKET_ZW_MERCENARY_DELETE {
+	int16 packet_id;
+	int32 merc_id;
+	int32 char_id;
+} __attribute__((packed));
+
+/**
+ * Mercenary save request
+ **/
+struct PACKET_ZW_MERCENARY_SAVE {
+	int16 packet_id;
+	struct s_mercenary_packet_data data;
 } __attribute__((packed));
 
 #if !defined(sun) && (!defined(__NETBSD__) || __NetBSD_Version__ >= 600000000) // NetBSD 5 and Solaris don't like pragma pack but accept the packed attribute

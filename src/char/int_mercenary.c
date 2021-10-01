@@ -195,24 +195,6 @@ static void inter_mercenary_sql_final(void)
 	return;
 }
 
-/*==========================================
- * Inter Packets
- *------------------------------------------*/
-static int inter_mercenary_parse_frommap(int fd)
-{
-	unsigned short cmd = RFIFOW(fd,0);
-
-	switch (cmd) {
-		case 0x3070: mapif->parse_mercenary_create(fd, RFIFOP(fd,4)); break;
-		case 0x3071: mapif->parse_mercenary_load(fd, RFIFOL(fd,2), RFIFOL(fd,6)); break;
-		case 0x3072: mapif->parse_mercenary_delete(fd, RFIFOL(fd,2)); break;
-		case 0x3073: mapif->parse_mercenary_save(fd, RFIFOP(fd,4)); break;
-		default:
-			return 0;
-	}
-	return 1;
-}
-
 void inter_mercenary_defaults(void)
 {
 	inter_mercenary = &inter_mercenary_s;
@@ -223,7 +205,6 @@ void inter_mercenary_defaults(void)
 
 	inter_mercenary->sql_init = inter_mercenary_sql_init;
 	inter_mercenary->sql_final = inter_mercenary_sql_final;
-	inter_mercenary->parse_frommap = inter_mercenary_parse_frommap;
 
 	inter_mercenary->create = inter_mercenary_create;
 	inter_mercenary->load = inter_mercenary_load;

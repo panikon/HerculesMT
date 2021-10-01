@@ -40,15 +40,20 @@
 static struct inter_mail_interface inter_mail_s;
 struct inter_mail_interface *inter_mail;
 
-static int inter_mail_fromsql(int char_id, struct mail_data *md)
+/**
+ * Get mail data of a given character from database
+ *
+ * @param char_id Target character
+ * @param md      Mail data to be filled (initiated to 0), out
+ **/
+static void inter_mail_fromsql(int char_id, struct mail_data *md)
 {
 	int i, j;
 	struct mail_message *msg;
 	char *data;
 	StringBuf buf;
 
-	nullpo_ret(md);
-	memset(md, 0, sizeof(struct mail_data));
+	nullpo_retv(md);
 	md->amount = 0;
 	md->full = false;
 
@@ -61,6 +66,7 @@ static int inter_mail_fromsql(int char_id, struct mail_data *md)
 		StrBuf->Printf(&buf, ", `opt_idx%d`, `opt_val%d`", i, i);
 
 	// I keep the `status` < 3 just in case someone forget to apply the sqlfix
+	// TODO: Review this section, probably this verification is not needed anymore [Panikon]
 	StrBuf->Printf(&buf, " FROM `%s` WHERE `dest_id`='%d' AND `status` < 3 ORDER BY `id` LIMIT %d",
 		mail_db, char_id, MAIL_MAX_INBOX + 1);
 
@@ -129,7 +135,6 @@ static int inter_mail_fromsql(int char_id, struct mail_data *md)
 	}
 
 	ShowInfo("mail load complete from DB - id: %d (total: %d)\n", char_id, md->amount);
-	return 1;
 }
 
 /// Stores a single message in the database.
@@ -177,8 +182,10 @@ static int inter_mail_savemessage(struct mail_message *msg)
 	return msg->id;
 }
 
-/// Retrieves a single message from the database.
-/// Returns true if the operation succeeds (or false if it fails).
+/**
+ * Retrieves a single message from the database.
+ * Returns true if the operation succeeds (or false if it fails).
+ **/
 static bool inter_mail_loadmessage(int mail_id, struct mail_message *msg)
 {
 	int j;
@@ -242,9 +249,9 @@ static bool inter_mail_loadmessage(int mail_id, struct mail_message *msg)
 	return true;
 }
 
-/*==========================================
+/**
  * Mark mail as 'Read'
- *------------------------------------------*/
+ **/
 static bool inter_mail_mark_read(int mail_id)
 {
 	if (SQL_ERROR == SQL->Query(inter->sql_handle, "UPDATE `%s` SET `status` = '%d' WHERE `id` = '%d'", mail_db, MAIL_READ, mail_id)) {
@@ -281,6 +288,16 @@ static bool inter_mail_DeleteAttach(int mail_id)
 	return true;
 }
 
+/**
+ * Gets attachment of provided mail and deletes it.
+ *
+ * @param char_id      Character that requested the mail
+ * @param mail_id      Target mail
+ * @param mail_message Mail message (to be filled, should be zeroed prior to call) OUT
+ *
+ * @return true Attachment found and loaded
+ * @return false Failed to find attachment / message already read
+ **/
 static bool inter_mail_get_attachment(int char_id, int mail_id, struct mail_message *msg)
 {
 	nullpo_retr(false, msg);
@@ -303,15 +320,27 @@ static bool inter_mail_get_attachment(int char_id, int mail_id, struct mail_mess
 	return true;
 }
 
+/**
+ * Deletes mail
+ * @return BOOL Success
+ **/
 static bool inter_mail_delete(int char_id, int mail_id)
 {
-	if (SQL_ERROR == SQL->Query(inter->sql_handle, "DELETE FROM `%s` WHERE `id` = '%d'", mail_db, mail_id)) {
+	if(SQL_ERROR == SQL->Query(inter->sql_handle,
+		"DELETE FROM `%s` WHERE `id` = '%d' AND `dest_id` = '%d'",
+		mail_db, mail_id, char_id)
+	) {
 		Sql_ShowDebug(inter->sql_handle);
 		return false;
 	}
 	return true;
 }
 
+/**
+ * Removes message from current owner and then sends to 'char_id'
+ *
+ * @param new_mail (out)Message's ID if successful (or 0 in failure)
+ **/
 static bool inter_mail_return_message(int char_id, int mail_id, int *new_mail)
 {
 	struct mail_message msg;
@@ -402,25 +431,6 @@ static void inter_mail_sendmail(int send_id, const char* send_name, int dest_id,
 	mapif->mail_new(&msg);
 }
 
-/*==========================================
- * Packets From Map Server
- *------------------------------------------*/
-static int inter_mail_parse_frommap(int fd)
-{
-	switch(RFIFOW(fd,0))
-	{
-		case 0x3048: mapif->parse_mail_requestinbox(fd); break;
-		case 0x3049: mapif->parse_mail_read(fd); break;
-		case 0x304a: mapif->parse_mail_getattach(fd); break;
-		case 0x304b: mapif->parse_mail_delete(fd); break;
-		case 0x304c: mapif->parse_mail_return(fd); break;
-		case 0x304d: mapif->parse_mail_send(fd); break;
-		default:
-			return 0;
-	}
-	return 1;
-}
-
 static int inter_mail_sql_init(void)
 {
 	return 1;
@@ -438,7 +448,6 @@ void inter_mail_defaults(void)
 	inter_mail->savemessage = inter_mail_savemessage;
 	inter_mail->DeleteAttach = inter_mail_DeleteAttach;
 	inter_mail->sendmail = inter_mail_sendmail;
-	inter_mail->parse_frommap = inter_mail_parse_frommap;
 	inter_mail->sql_init = inter_mail_sql_init;
 	inter_mail->sql_final = inter_mail_sql_final;
 	inter_mail->fromsql = inter_mail_fromsql;

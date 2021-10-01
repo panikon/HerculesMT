@@ -35,7 +35,6 @@ struct inter_mercenary_interface {
 	bool (*owner_delete) (int char_id);
 	int (*sql_init) (void);
 	void (*sql_final) (void);
-	int (*parse_frommap) (int fd);
 
 	bool (*create) (struct s_mercenary *merc);
 	bool (*save) (const struct s_mercenary *merc);

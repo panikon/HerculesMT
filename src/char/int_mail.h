@@ -33,8 +33,7 @@ struct mail_message;
 struct inter_mail_interface {
 	int (*sql_init) (void);
 	void (*sql_final) (void);
-	int (*parse_frommap) (int fd);
-	int (*fromsql) (int char_id, struct mail_data* md);
+	void (*fromsql) (int char_id, struct mail_data *md);
 	int (*savemessage) (struct mail_message* msg);
 	bool (*loadmessage) (int mail_id, struct mail_message* msg);
 	bool (*DeleteAttach) (int mail_id);

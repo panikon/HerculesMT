@@ -89,6 +89,7 @@ struct mapif_interface {
 	void (*auth_ok) (struct socket_data *session, int account_id, struct char_auth_node *node, struct mmo_charstatus *cd);
 	void (*auth_failed) (struct socket_data *session, int account_id, int char_id, int login_id1, char sex, uint32 ip);
 	void (*login_map_server_ack) (struct socket_data *session, uint8 flag);
+	int (*parse_item_data) (struct s_receive_action_data *act, int pos, struct item *out);
 
 	void (*send_users_count) (int users);
 	void (*pLoadAchievements) (int fd);
@@ -160,25 +161,28 @@ struct mapif_interface {
 	void (*parse_homunculus_save)   (struct s_receive_action_data *act, struct mmo_map_server *server);
 	void (*parse_homunculus_rename) (struct s_receive_action_data *act, struct mmo_map_server *server);
 
-	void (*mail_sendinbox) (int fd, int char_id, unsigned char flag, struct mail_data *md);
-	void (*parse_mail_requestinbox) (int fd);
-	void (*parse_mail_read) (int fd);
-	void (*mail_sendattach) (int fd, int char_id, struct mail_message *msg);
-	void (*parse_mail_getattach) (int fd);
-	void (*mail_delete) (int fd, int char_id, int mail_id, bool failed);
-	void (*parse_mail_delete) (int fd);
+	void (*mail_sendinbox) (struct socket_data *session, int char_id, unsigned char flag, const struct mail_data *md);
+	void (*parse_mail_requestinbox) (struct s_receive_action_data *act);
+	void (*parse_mail_read) (struct s_receive_action_data *act);
+	void (*mail_sendattach) (struct socket_data *session, int char_id, const struct mail_message *msg);
+	void (*parse_mail_getattach) (struct s_receive_action_data *act);
+	void (*mail_delete) (struct socket_data *session, int char_id, int mail_id, bool failed);
+	void (*parse_mail_delete) (struct s_receive_action_data *act);
 	void (*mail_new) (struct mail_message *msg);
-	void (*mail_return) (int fd, int char_id, int mail_id, int new_mail);
-	void (*parse_mail_return) (int fd);
-	void (*mail_send) (int fd, struct mail_message* msg);
-	void (*parse_mail_send) (int fd);
-	void (*mercenary_send) (int fd, struct s_mercenary *merc, unsigned char flag);
-	void (*parse_mercenary_create) (int fd, const struct s_mercenary *merc);
-	void (*parse_mercenary_load) (int fd, int merc_id, int char_id);
-	void (*mercenary_deleted) (int fd, unsigned char flag);
-	void (*parse_mercenary_delete) (int fd, int merc_id);
-	void (*mercenary_saved) (int fd, unsigned char flag);
-	void (*parse_mercenary_save) (int fd, const struct s_mercenary *merc);
+	void (*mail_return) (struct socket_data *session, int char_id, int mail_id, int new_mail);
+	void (*parse_mail_return) (struct s_receive_action_data *act);
+	void (*mail_send) (struct socket_data *session, const struct mail_message* msg);
+	void (*parse_mail_send) (struct s_receive_action_data *act);
+
+	int (*parse_mercenary_data) (struct s_receive_action_data *act, int pos, struct s_mercenary *out);
+	void (*mercenary_send) (struct socket_data *session, struct s_mercenary *merc, unsigned char flag);
+	void (*parse_mercenary_create) (struct s_receive_action_data *act);
+	void (*parse_mercenary_load) (struct s_receive_action_data *act);
+	void (*mercenary_deleted) (struct socket_data *session, int char_id, int merc_id, bool success);
+	void (*parse_mercenary_delete) (struct s_receive_action_data *act);
+	void (*mercenary_saved) (struct socket_data *session, int char_id, int merc_id, bool success);
+	void (*parse_mercenary_save) (struct s_receive_action_data *act);
+
 	int (*party_created) (int fd, int account_id, int char_id, struct party *p);
 	void (*party_noinfo) (int fd, int party_id, int char_id);
 	void (*party_info) (int fd, struct party* p, int char_id);
