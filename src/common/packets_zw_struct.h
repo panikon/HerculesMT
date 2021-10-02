@@ -62,16 +62,17 @@ enum inter_packet_zw_id {
     0x3005, // mapif->parse_RegistryRequest(act); break;
     0x3006, // mapif->parse_NameChangeRequest(act); break;
     0x3007, // mapif->parse_accinfo(act); break;
-	// inter_party_parse_frommap
-	0x3020, // mapif->parse_CreateParty(fd, R
-	0x3021, // mapif->parse_PartyInfo(fd, RFI
-	0x3022, // mapif->parse_PartyAddMember(fd
-	0x3023, // mapif->parse_PartyChangeOption
-	0x3024, // mapif->parse_PartyLeave(fd, RF
-	0x3025, // mapif->parse_PartyChangeMap(fd
-	0x3026, // mapif->parse_BreakParty(fd, RF
-	0x3029, // mapif->parse_PartyLeaderChange
 #endif
+	// inter_party_parse_frommap
+	HEADER_ZW_PARTY_CREATE     = 0x3020, // mapif->parse_CreateParty(fd, R
+	HEADER_ZW_PARTY_INFO       = 0x3021, // mapif->parse_PartyInfo(fd, RFI
+	HEADER_ZW_PARTY_MEMBER_ADD = 0x3022, // mapif->parse_PartyAddMember(fd
+	HEADER_ZW_PARTY_SETTING    = 0x3023, // mapif->parse_PartyChangeOption
+	HEADER_ZW_PARTY_WITHDRAW   = 0x3024, // mapif->parse_PartyLeave(fd, RF
+	HEADER_ZW_MEMBER_UPDATE    = 0x3025, // mapif->parse_PartyChangeMap(fd
+	HEADER_ZW_PARTY_BREAK      = 0x3026, // mapif->parse_BreakParty(fd, RF
+	HEADER_ZW_PARTY_LEADER     = 0x3029, // mapif->parse_PartyLeaderChange
+
 	// inter_guild_parse_frommap
 	HEADER_ZW_GUILD_CREATE              = 0x3030, // mapif->parse_CreateGuild(fd, RFIFO
 	HEADER_ZW_GUILD_INFO                = 0x3031, // mapif->parse_GuildInfo(fd,RFIFOL(f
@@ -1057,6 +1058,117 @@ struct PACKET_ZW_MERCENARY_DELETE {
 struct PACKET_ZW_MERCENARY_SAVE {
 	int16 packet_id;
 	struct s_mercenary_packet_data data;
+} __attribute__((packed));
+
+// @copydoc party
+struct party_packet_data {
+	int32 party_id;
+	uint8 name[NAME_LENGTH];
+	uint8 count; //Count of online characters.
+	// The client treats exp flag as L
+	uint32 exp;
+	// item is the result of item OR item2 when creating a party
+	uint32 item;
+	// party_member is not included because some packets don't need it.
+	//struct party_member member[MAX_PARTY];
+} __attribute__((packed));
+
+// @copydoc party_member
+struct party_member_packet_data {
+	int32 account_id;
+	int32 char_id;
+	uint8 name[NAME_LENGTH];
+	int32 class;
+	int32 lv;
+	int16 map;
+	uint8 leader;
+	uint8 online;
+} __attribute__((packed));
+
+/**
+ * Party creation request
+ * @param item  Along with item2 will be used to compose party::item
+ * @param item2 Along with item will be used to compose party::item
+ * @see clif_parse_CreateParty2
+ **/
+struct PACKET_ZW_PARTY_CREATE {
+	int16 packet_id;
+	uint8 name[NAME_LENGTH];
+	uint8 item;
+	uint8 item2;
+	struct party_member_packet_data leader;
+} __attribute__((packed));
+
+/**
+ * Party information request
+ **/
+struct PACKET_ZW_PARTY_INFO {
+	int16 packet_id;
+	int32 party_id;
+	int32 char_id;
+} __attribute__((packed));
+
+/**
+ * Member add request
+ * @see mapif_parse_PartyAddMember
+ **/
+struct PACKET_ZW_PARTY_MEMBER_ADD {
+	int16 packet_id;
+	int32 party_id;
+	struct party_member_packet_data member;
+} __attribute__((packed));
+
+/**
+ * Party setting change
+ * @see mapif_parse_PartyChangeOption
+ **/
+struct PACKET_ZW_PARTY_SETTING {
+	int16 packet_id;
+	int32 party_id;
+	int32 account_id;
+	int32 exp;
+	int32 item;
+} __attribute__((packed));
+
+/**
+ * Party withdraw request
+ * @see mapif_parse_PartyLeave
+ **/
+struct PACKET_ZW_PARTY_WITHDRAW {
+	int16 packet_id;
+	int32 party_id;
+	int32 account_id;
+	int32 char_id;
+} __attribute__((packed));
+
+/**
+ * Request to update member data
+ * @see mapif_parse_PartyChangeMap
+ **/
+struct PACKET_ZW_MEMBER_UPDATE {
+	int16 packet_id;
+	int32 party_id;
+	struct party_member_packet_data member;
+} __attribute__((packed));
+
+/**
+ * Party dissolution request
+ * @see mapif_parse_BreakParty
+ **/
+struct PACKET_ZW_PARTY_BREAK {
+	int16 packet_id;
+	int32 party_id;
+} __attribute__((packed));
+
+/**
+ * Update party leader
+ * @see mapif_parse_PartyLeaderChange
+ **/
+struct PACKET_ZW_PARTY_LEADER {
+	int16 packet_id;
+	int32 party_id;
+	int32 account_id;
+	int32 char_id;
 } __attribute__((packed));
 
 #if !defined(sun) && (!defined(__NETBSD__) || __NetBSD_Version__ >= 600000000) // NetBSD 5 and Solaris don't like pragma pack but accept the packed attribute

@@ -495,7 +495,7 @@ static int intif_create_party(struct party_member *member, const char *name, int
 
 	WFIFOHEAD(inter_fd,64);
 	WFIFOW(inter_fd,0) = 0x3020;
-	WFIFOW(inter_fd,2) = 30+sizeof(struct party_member);
+	//WFIFOW(inter_fd,2) = 30+sizeof(struct party_member);
 	memcpy(WFIFOP(inter_fd,4),name, NAME_LENGTH);
 	WFIFOB(inter_fd,28)= item;
 	WFIFOB(inter_fd,29)= item2;
@@ -1217,7 +1217,7 @@ static void intif_parse_PartyInfo(int fd)
 	if (RFIFOW(fd,2) != 8+sizeof(struct party))
 		ShowError("intif: party info: data size mismatch (char_id=%u party_id=%u packet_len=%d expected_len=%"PRIuS")\n",
 		          RFIFOL(fd,4), RFIFOL(fd,8), RFIFOW(fd,2), 8+sizeof(struct party));
-	party->recv_info(RFIFOP(fd,8), RFIFOL(fd,4));
+	party->recv_info(RFIFOP(fd,8), RFIFOL(fd,4)); // TODO: Rewrite
 }
 
 // ACK adding party member
@@ -1231,7 +1231,7 @@ static void intif_parse_PartyMemberAdded(int fd)
 // ACK changing party option
 static void intif_parse_PartyOptionChanged(int fd)
 {
-	party->optionchanged(RFIFOL(fd,2),RFIFOL(fd,6),RFIFOW(fd,10),RFIFOW(fd,12),RFIFOB(fd,14));
+	party->optionchanged(RFIFOL(fd,2),RFIFOL(fd,6),RFIFOL(fd,10),RFIFOL(fd,14),RFIFOB(fd,18));
 }
 
 // ACK member leaving party
@@ -1251,7 +1251,7 @@ static void intif_parse_PartyBroken(int fd)
 // ACK party on new map
 static void intif_parse_PartyMove(int fd)
 {
-	party->recv_movemap(RFIFOL(fd,2),RFIFOL(fd,6),RFIFOL(fd,10),RFIFOW(fd,14),RFIFOB(fd,16),RFIFOW(fd,17));
+	party->recv_movemap(RFIFOL(fd,2),RFIFOL(fd,6),RFIFOL(fd,10),RFIFOW(fd,14),RFIFOB(fd,16),RFIFOW(fd,17));//TODO
 }
 
 // ACK guild creation

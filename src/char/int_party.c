@@ -518,14 +518,14 @@ static bool inter_party_add_member(int party_id, const struct party_member *memb
 	memcpy(&p->party.member[i], member, sizeof(struct party_member));
 	p->party.member[i].leader = 0;
 	inter_party->calc_state(p); /// Count online/offline members and check family state and even share range.
-	mapif->party_info(-1, &p->party, 0);
+	mapif->party_info(NULL, p->party.party_id, 0, &p->party);
 	inter_party->tosql(&p->party, PS_ADDMEMBER, i);
 
 	return true;
 }
 
 //Party setting change request
-static bool inter_party_change_option(int party_id, int account_id, int exp, int item, int map_fd)
+static bool inter_party_change_option(int party_id, int account_id, int exp, int item, struct socket_data *session)
 {
 	struct party_data *p;
 	int flag = 0;
@@ -540,7 +540,7 @@ static bool inter_party_change_option(int party_id, int account_id, int exp, int
 		p->party.exp=0;
 	}
 	p->party.item = item&0x3; //Filter out invalid values.
-	mapif->party_optionchanged(map_fd, &p->party, account_id, flag);
+	mapif->party_optionchanged(session, &p->party, account_id, flag);
 	inter_party->tosql(&p->party, PS_BASIC, 0);
 	return true;
 }
@@ -583,7 +583,7 @@ static bool inter_party_leave(int party_id, int account_id, int char_id)
 	inter_party->calc_state(p); /// Count online/offline members and check family state and even share range.
 
 	if (inter_party->check_empty(p) == 0)
-		mapif->party_info(-1, &p->party, 0);
+		mapif->party_info(NULL, p->party.party_id, 0, &p->party);
 
 	return true;
 }
@@ -667,31 +667,6 @@ static bool inter_party_change_leader(int party_id, int account_id, int char_id)
 		}
 	}
 	return true;
-}
-
-// Communication from the map server
-//-Analysis that only one packet
-// Data packet length is set to inter.c that you
-// Do NOT go and check the packet length, RFIFOSKIP is done by the caller
-// Return :
-//  0 : error
-//  1 : ok
-static int inter_party_parse_frommap(int fd)
-{
-	RFIFOHEAD(fd);
-	switch(RFIFOW(fd,0)) {
-	case 0x3020: mapif->parse_CreateParty(fd, RFIFOP(fd,4), RFIFOB(fd,28), RFIFOB(fd,29), RFIFOP(fd,30)); break;
-	case 0x3021: mapif->parse_PartyInfo(fd, RFIFOL(fd,2), RFIFOL(fd,6)); break;
-	case 0x3022: mapif->parse_PartyAddMember(fd, RFIFOL(fd,4), RFIFOP(fd,8)); break;
-	case 0x3023: mapif->parse_PartyChangeOption(fd, RFIFOL(fd,2), RFIFOL(fd,6), RFIFOW(fd,10), RFIFOW(fd,12)); break;
-	case 0x3024: mapif->parse_PartyLeave(fd, RFIFOL(fd,2), RFIFOL(fd,6), RFIFOL(fd,10)); break;
-	case 0x3025: mapif->parse_PartyChangeMap(fd, RFIFOL(fd,2), RFIFOL(fd,6), RFIFOL(fd,10), RFIFOW(fd,14), RFIFOB(fd,16), RFIFOW(fd,17)); break;
-	case 0x3026: mapif->parse_BreakParty(fd, RFIFOL(fd,2)); break;
-	case 0x3029: mapif->parse_PartyLeaderChange(fd, RFIFOL(fd,2), RFIFOL(fd,6), RFIFOL(fd,10)); break;
-	default:
-		return 0;
-	}
-	return 1;
 }
 
 /**
@@ -813,7 +788,6 @@ void inter_party_defaults(void)
 	inter_party->search_partyname = inter_party_search_partyname;
 	inter_party->check_exp_share = inter_party_check_exp_share;
 	inter_party->check_empty = inter_party_check_empty;
-	inter_party->parse_frommap = inter_party_parse_frommap;
 	inter_party->leave = inter_party_leave;
 	inter_party->CharOnline = inter_party_CharOnline;
 	inter_party->CharOffline = inter_party_CharOffline;

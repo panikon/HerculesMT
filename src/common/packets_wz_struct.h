@@ -192,14 +192,14 @@ DEFINE_PACKET_ID(WZ_CHARNAME_REQUEST_ACK, 0x2b09);
  * @param type enum zh_char_ask_name_type
  * @param result 0-login-server request done, 1-player not found, 2-gm level too low, 3-login-server offline
  **/
-struct PACKET_ZW_UPDATE_ACCOUNT_ACK {
+struct PACKET_WZ_UPDATE_ACCOUNT_ACK {
 	int16 packet_id;
 	int32 account_id;
 	uint8 name[24];
 	int16 type;
 	int32 result;
 } __attribute__((packed));
-DEFINE_PACKET_ID(ZW_UPDATE_ACCOUNT_ACK, 0x2b0f);
+DEFINE_PACKET_ID(WZ_UPDATE_ACCOUNT_ACK, 0x2b0f);
 
 /**
  * WZ_PONG
@@ -211,7 +211,7 @@ DEFINE_PACKET_ID(ZW_PONG, 0x2b24);
 
 
 /**
- * Answer to WZ_AUTH
+ * Answer to ZW_AUTH
  * @see struct mmo_charstatus
  **/
 struct mmo_charstatus_packet {
@@ -291,7 +291,7 @@ struct mmo_charstatus_packet {
 
 	int32 title_id;
 } __attribute__((packed));
-struct PACKET_ZW_AUTH_OK {
+struct PACKET_WZ_AUTH_OK {
 	int16 packet_id;
 	int16 packet_len;
 	int32 account_id;
@@ -302,12 +302,12 @@ struct PACKET_ZW_AUTH_OK {
 	uint8 changing_mapservers;
 	struct mmo_charstatus_packet data;
 } __attribute__((packed));
-DEFINE_PACKET_ID(ZW_AUTH_OK, 0x2afd);
+DEFINE_PACKET_ID(WZ_AUTH_OK, 0x2afd);
 
 /**
- * Answer of WZ_AUTH
+ * Answer of ZW_AUTH
  **/
-struct PACKET_ZW_AUTH_FAILED {
+struct PACKET_WZ_AUTH_FAILED {
 	int16 packet_id;
 	int32 account_id;
 	int32 character_id;
@@ -315,16 +315,95 @@ struct PACKET_ZW_AUTH_FAILED {
 	uint8 sex;
 	int32 ipl;
 } __attribute__((packed));
-DEFINE_PACKET_ID(ZW_AUTH_FAILED,0x2b27);
+DEFINE_PACKET_ID(WZ_AUTH_FAILED,0x2b27);
 
 /**
- * Answer of WZ_MAP_AUTH
+ * Answer of ZW_MAP_AUTH
  **/
 struct PACKET_WZ_MAP_AUTH_ACK {
 	int16 packet_id;
 	uint8 flag;
 } __attribute__((packed));
 DEFINE_PACKET_ID(WZ_MAP_AUTH_ACK,0x2af9);
+
+/**
+ * Party information request ack
+ *  <len>.W <char_id>.L <party_id>.L {<party_packet_data>
+ *   <party_member_packet_data>[MAX_PARTY]}(only on success)
+ * @see mapif_party_info
+ **/
+struct PACKET_WZ_PARTY_INFO_ACK {
+	int16 packet_id;
+	int16 packet_len;
+	int32 char_id;
+	int32 party_id;
+	// party data
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_PARTY_INFO_ACK, 0x3821);
+
+/**
+ * Member add request ack
+ * @see mapif_party_memberadded
+ * @param flag 0-success, 1-failure
+ **/
+struct PACKET_WZ_PARTY_MEMBER_ADD_ACK {
+	int16 packet_id;
+	int32 party_id;
+	int32 account_id;
+	int32 char_id;
+	uint8 flag;
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_PARTY_MEMBER_ADD_ACK, 0x3822);
+
+/**
+ * Party setting change ack
+ * @see mapif_party_optionchanged
+ * @param flag &0x01: Exp change denied
+ * @param flag &0x10: Item change denied
+ **/
+struct PACKET_WZ_PARTY_SETTING_ACK {
+	int16 packet_id;
+	int32 party_id;
+	int32 account_id;
+	int32 exp;
+	int32 item;
+	uint8 flag;
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_PARTY_SETTING_ACK, 0x3823);
+
+/**
+ * Party withdraw ack
+ * @see mapif_party_withdraw
+ **/
+struct PACKET_WZ_PARTY_WITHDRAW_ACK {
+	int16 packet_id;
+	int32 party_id;
+	int32 account_id;
+	int32 char_id;
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_PARTY_WITHDRAW_ACK, 0x3824);
+
+/**
+ * Notification of member data update
+ **/
+struct PACKET_WZ_MEMBER_UPDATE_ACK {
+	int16 packet_id;
+	int32 party_id;
+	struct party_member_packet_data data;
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_MEMBER_UPDATE_ACK, 0x3825);
+
+/**
+ * Dissolution party notification
+ * @param flag 0 No member to be notified
+ * @param flag 1 Request from a member
+ **/
+struct PACKET_WZ_PARTY_BREAK_ACK {
+	int16 packet_id;
+	int32 party_id;
+	uint8 flag;
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_PARTY_BREAK_ACK, 0x3826);
 
 #if !defined(sun) && (!defined(__NETBSD__) || __NetBSD_Version__ >= 600000000) // NetBSD 5 and Solaris don't like pragma pack but accept the packed attribute
 #pragma pack(pop)

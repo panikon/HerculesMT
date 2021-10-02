@@ -564,8 +564,8 @@ static void mapif_change_account_ack(struct socket_data *session, int acc,
 	const char *name, enum zh_char_ask_name_type type, int result
 ) {
 	nullpo_retv(name);
-	WFIFOHEAD(session, sizeof(struct PACKET_ZW_UPDATE_ACCOUNT_ACK), true);
-	WFIFOW(session, 0) = HEADER_ZW_UPDATE_ACCOUNT_ACK;
+	WFIFOHEAD(session, sizeof(struct PACKET_WZ_UPDATE_ACCOUNT_ACK), true);
+	WFIFOW(session, 0) = HEADER_WZ_UPDATE_ACCOUNT_ACK;
 	WFIFOL(session, 2) = acc;
 	safestrncpy(WFIFOP(session,6), name, NAME_LENGTH);
 	WFIFOW(session,30) = type;
@@ -622,8 +622,8 @@ static void mapif_auth_ok(struct socket_data *session, int account_id, struct ch
  **/
 static void char_auth_failed(struct socket_data *session, int account_id, int char_id, int login_id1, char sex, uint32 ip)
 {
-	WFIFOHEAD(session,sizeof(struct PACKET_ZW_AUTH_FAILED),true);
-	WFIFOW(session,0) = HEADER_ZW_AUTH_FAILED;
+	WFIFOHEAD(session,sizeof(struct PACKET_WZ_AUTH_FAILED),true);
+	WFIFOW(session,0) = HEADER_WZ_AUTH_FAILED;
 	WFIFOL(session,2) = account_id;
 	WFIFOL(session,6) = char_id;
 	WFIFOL(session,10) = login_id1;
@@ -2169,211 +2169,333 @@ static void mapif_parse_mercenary_save(struct s_receive_action_data *act)
  * MAPIF : PARTY
  *------------------------------------------*/
 
-// Create a party whether or not
-static int mapif_party_created(int fd, int account_id, int char_id, struct party *p)
+/**
+ * WZ_PARTY_CREATE_ACK 0x3820 <account_id>.L <char_id>.L <failure>.B <party_id>.L <party>.*
+ * Answer to create party request
+ *
+ * @param account_id Party master acc id
+ * @param char_id    Party master char id
+ * @param party      Party data (if NULL the creation failed)
+ **/
+static void mapif_party_created(struct socket_data *session, int account_id, int char_id, const struct party *p)
 {
-	WFIFOHEAD(fd, 39);
-	WFIFOW(fd, 0) = 0x3820;
-	WFIFOL(fd, 2) = account_id;
-	WFIFOL(fd, 6) = char_id;
+	WFIFOHEAD(session, 39, true);
+	WFIFOW(session, 0) = 0x3820;
+	WFIFOL(session, 2) = account_id;
+	WFIFOL(session, 6) = char_id;
 	if (p != NULL) {
-		WFIFOB(fd, 10) = 0;
-		WFIFOL(fd, 11) = p->party_id;
-		memcpy(WFIFOP(fd, 15), p->name, NAME_LENGTH);
+		WFIFOB(session, 10) = 0;
+		WFIFOL(session, 11) = p->party_id;
+		memcpy(WFIFOP(session, 15), p->name, NAME_LENGTH);
 		ShowInfo("int_party: Party created (%d - %s)\n", p->party_id, p->name);
 	} else {
-		WFIFOB(fd, 10) = 1;
-		WFIFOL(fd, 11) = 0;
-		memset(WFIFOP(fd, 15), 0, NAME_LENGTH);
+		WFIFOB(session, 10) = 1;
+		WFIFOL(session, 11) = 0;
+		memset(WFIFOP(session, 15), 0, NAME_LENGTH);
 	}
-	WFIFOSET(fd, 39);
-
-	return 0;
+	WFIFOSET(session, 39);
 }
 
-//Party information not found
-static void mapif_party_noinfo(int fd, int party_id, int char_id)
+/**
+ * WZ_PARTY_INFO_ACK 0x3821
+ *  <len>.W <char_id>.L <party_id>.L {<party_packet_data>
+ *   <party_member_packet_data>[MAX_PARTY]}(only on success)
+ * Sends party information to all map-servers (when found), if not found
+ * replies only to requester.
+ *
+ * @param session  Requester (when NULL sends answer to all servers available)
+ * @param party_id Requested party id
+ * @param char_id  Character that requested the information, 0: only update server
+ * @param p        Party data, NULL when no party was found
+ **/
+static void mapif_party_info(struct socket_data *session, int party_id, int char_id, const struct party *p)
 {
-	WFIFOHEAD(fd, 12);
-	WFIFOW(fd, 0) = 0x3821;
-	WFIFOW(fd, 2) = 12;
-	WFIFOL(fd, 4) = char_id;
-	WFIFOL(fd, 8) = party_id;
-	WFIFOSET(fd, 12);
-	ShowWarning("int_party: info not found (party_id=%d char_id=%d)\n", party_id, char_id);
-}
-
-//Digest party information
-static void mapif_party_info(int fd, struct party* p, int char_id)
-{
-	unsigned char buf[8 + sizeof(struct party)];
-	nullpo_retv(p);
-	WBUFW(buf, 0) = 0x3821;
-	WBUFW(buf, 2) = 8 + sizeof(struct party);
+	if(!p) { // No information
+		if(!session)
+			return; // No server to answer
+		WFIFOHEAD(session, sizeof(struct PACKET_WZ_PARTY_INFO_ACK), true);
+		WFIFOW(session, 0) = HEADER_WZ_PARTY_INFO_ACK;
+		WFIFOW(session, 2) = sizeof(struct PACKET_WZ_PARTY_INFO_ACK);
+		WFIFOL(session, 4) = char_id;
+		WFIFOL(session, 8) = party_id;
+		WFIFOSET(session, sizeof(struct PACKET_WZ_PARTY_INFO_ACK));
+		ShowWarning("int_party: info not found (party_id=%d char_id=%d)\n",
+			party_id, char_id);
+		return;
+	}
+	uint8 buf[sizeof(struct PACKET_WZ_PARTY_INFO_ACK) +
+	          sizeof(struct party_packet_data) +
+		      (sizeof(struct party_member_packet_data)*MAX_PARTY)
+		      // party_id is already included in party_packet_data	
+		      - SIZEOF_MEMBER(struct PACKET_WZ_PARTY_INFO_ACK, party_id)];
+	WBUFW(buf, 0) = HEADER_WZ_PARTY_INFO_ACK;
+	WBUFW(buf, 2) = sizeof(buf);
 	WBUFL(buf, 4) = char_id;
-	memcpy(WBUFP(buf, 8), p, sizeof(struct party));
+	WBUFL(buf, 8) = party_id;
+	memcpy(WBUFP(buf, 12), p->name, NAME_LENGTH);
+	WBUFB(buf, 32) = p->count;
+	WBUFL(buf, 33) = p->exp;
+	WBUFL(buf, 37) = p->item;
+	size_t pos = 41;
+	/**
+	 * TODO: Maybe add a field of the count of members in a party so we don't
+	 * have to send MAX_PARTY party_member_packet_data at every request [Panikon]
+	 **/
+	for(int i = 0; i < MAX_PARTY; i++) {
+		pos += sizeof((WBUFL(buf, pos) = p->member[i].account_id));
+		pos += sizeof((WBUFL(buf, pos) = p->member[i].char_id));
+		memcpy(WBUFP(buf, pos), p->member[i].name, NAME_LENGTH);
+		pos += NAME_LENGTH;
+		pos += sizeof((WBUFL(buf, pos) = p->member[i].class));
+		pos += sizeof((WBUFL(buf, pos) = p->member[i].lv));
+		pos += sizeof((WBUFW(buf, pos) = p->member[i].map));
+		pos += sizeof((WBUFB(buf, pos) = p->member[i].leader));
+		pos += sizeof((WBUFB(buf, pos) = p->member[i].online));
+	}
 
-	if (fd < 0)
+	if(!session)
 		mapif->sendall(buf, WBUFW(buf, 2));
-	else
-		mapif->send(fd, buf, WBUFW(buf, 2));
+	else {
+		WFIFOHEAD(session, WBUFW(buf, 2), true);
+		memcpy(WFIFOP(session, 0), buf, WBUFW(buf, 2));
+		WFIFOSET(session, WBUFW(buf, 2));
+	}
 }
 
-//Whether or not additional party members
-static int mapif_party_memberadded(int fd, int party_id, int account_id, int char_id, int flag)
+/**
+ * WZ_PARTY_MEMBER_ADD_ACK
+ * Member add request answer
+ *
+ * @param flag 0-success, 1-failure
+ **/
+static void mapif_party_memberadded(struct socket_data *session, int party_id, int account_id, int char_id, int flag)
 {
-	WFIFOHEAD(fd, 15);
-	WFIFOW(fd, 0) = 0x3822;
-	WFIFOL(fd, 2) = party_id;
-	WFIFOL(fd, 6) = account_id;
-	WFIFOL(fd, 10) = char_id;
-	WFIFOB(fd, 14) = flag;
-	WFIFOSET(fd, 15);
-
-	return 0;
+	WFIFOHEAD(session, sizeof(struct PACKET_WZ_PARTY_MEMBER_ADD_ACK), true);
+	WFIFOW(session, 0) = HEADER_WZ_PARTY_MEMBER_ADD_ACK;
+	WFIFOL(session, 2) = party_id;
+	WFIFOL(session, 6) = account_id;
+	WFIFOL(session, 10) = char_id;
+	WFIFOB(session, 14) = flag;
+	WFIFOSET(session, sizeof(struct PACKET_WZ_PARTY_MEMBER_ADD_ACK));
 }
 
-// Party setting change notification
-static int mapif_party_optionchanged(int fd, struct party *p, int account_id, int flag)
+/**
+ * WZ_PARTY_SETTING_ACK
+ * Party setting change notification
+ * @param flag @see PACKET_WZ_PARTY_SETTINGS_ACK::flag
+ * @param flag When set to 0 sends answer to all map-servers
+ **/
+static void mapif_party_optionchanged(struct socket_data *session, const struct party *p, int account_id, int flag)
 {
-	unsigned char buf[16];
-	nullpo_ret(p);
-	WBUFW(buf, 0) = 0x3823;
+	unsigned char buf[sizeof(struct PACKET_WZ_PARTY_SETTING_ACK)];
+	WBUFW(buf, 0) = HEADER_WZ_PARTY_SETTING_ACK;
 	WBUFL(buf, 2) = p->party_id;
 	WBUFL(buf, 6) = account_id;
-	WBUFW(buf, 10) = p->exp;
-	WBUFW(buf, 12) = p->item;
+	WBUFL(buf, 10) = p->exp;
+	WBUFL(buf, 12) = p->item;
 	WBUFB(buf, 14) = flag;
 	if (flag == 0)
-		mapif->sendall(buf, 15);
-	else
-		mapif->send(fd, buf, 15);
-	return 0;
+		mapif->sendall(buf, sizeof(buf));
+	else {
+		WFIFOHEAD(session, WBUFW(buf, 2), true);
+		memcpy(WFIFOP(session, 0), buf, WBUFW(buf, 2));
+		WFIFOSET(session, WBUFW(buf, 2));
+	}
 }
 
-//Withdrawal notification party
-static int mapif_party_withdraw(int party_id, int account_id, int char_id)
+/**
+ * WZ_PARTY_WITHDRAW_ACK
+ * Withdrawal notification party
+ **/
+static void mapif_party_withdraw(int party_id, int account_id, int char_id)
 {
-	unsigned char buf[16];
+	unsigned char buf[sizeof(struct PACKET_WZ_PARTY_WITHDRAW_ACK)];
 
-	WBUFW(buf, 0) = 0x3824;
+	WBUFW(buf, 0) = HEADER_WZ_PARTY_WITHDRAW_ACK;
 	WBUFL(buf, 2) = party_id;
 	WBUFL(buf, 6) = account_id;
 	WBUFL(buf, 10) = char_id;
-	mapif->sendall(buf, 14);
-	return 0;
+	mapif->sendall(buf, sizeof(buf));
 }
 
-//Party map update notification
-static int mapif_party_membermoved(struct party *p, int idx)
+/**
+ * WZ_MEMBER_UPDATE_ACK
+ * Notification of member data update
+ **/
+static void mapif_party_membermoved(const struct party *p, int idx)
 {
-	unsigned char buf[20];
+	unsigned char buf[sizeof(struct PACKET_WZ_MEMBER_UPDATE_ACK)];
 
-	nullpo_ret(p);
-	Assert_ret(idx >= 0 && idx < MAX_PARTY);
-	WBUFW(buf, 0) = 0x3825;
+	Assert_retv(idx >= 0 && idx < MAX_PARTY);
+	WBUFW(buf, 0) = HEADER_WZ_MEMBER_UPDATE_ACK;
 	WBUFL(buf, 2) = p->party_id;
 	WBUFL(buf, 6) = p->member[idx].account_id;
 	WBUFL(buf, 10) = p->member[idx].char_id;
-	WBUFW(buf, 14) = p->member[idx].map;
-	WBUFB(buf, 16) = p->member[idx].online;
-	WBUFW(buf, 17) = p->member[idx].lv;
-	mapif->sendall(buf, 19);
-	return 0;
+	memcpy(WBUFP(buf, 14), p->member[idx].name, NAME_LENGTH);
+	WBUFL(buf, 38) = p->member[idx].class;
+	WBUFL(buf, 42) = p->member[idx].lv;
+	WBUFW(buf, 46) = p->member[idx].map;
+	WBUFB(buf, 48) = p->member[idx].leader;
+	WBUFB(buf, 49) = p->member[idx].online;
+	mapif->sendall(buf, sizeof(buf));
 }
 
-//Dissolution party notification
-static int mapif_party_broken(int party_id, int flag)
+/**
+ * WZ_PARTY_BREAK_ACK
+ * Dissolution party notification
+ **/
+static void mapif_party_broken(int party_id, int flag)
 {
-	unsigned char buf[16];
-	WBUFW(buf, 0) = 0x3826;
+	unsigned char buf[sizeof(struct PACKET_WZ_PARTY_BREAK_ACK)];
+	WBUFW(buf, 0) = HEADER_WZ_PARTY_BREAK_ACK;
 	WBUFL(buf, 2) = party_id;
 	WBUFB(buf, 6) = flag;
-	mapif->sendall(buf, 7);
+	mapif->sendall(buf, sizeof(buf));
 	//printf("int_party: broken %d\n",party_id);
-	return 0;
 }
 
-// Create Party
-static int mapif_parse_CreateParty(int fd, const char *name, int item, int item2, const struct party_member *leader)
+/**
+ * Parses party member data from given packet
+ *
+ * @param pos Current buffer position
+ * @param out Object to be filled
+ * @return Updated buffer position
+ **/
+static int mapif_parse_party_member(struct s_receive_action_data *act, int pos, struct party_member *out)
+{
+	pos += sizeof((out->account_id = RFIFOL(act, pos)));
+	pos += sizeof((out->char_id    = RFIFOL(act, pos)));
+	memcpy(out->name, RFIFOP(act, pos),
+		SIZEOF_MEMBER(struct party_member_packet_data, name));
+	pos += SIZEOF_MEMBER(struct party_member_packet_data, name);
+	pos += sizeof((out->class      = RFIFOL(act, pos)));
+	pos += sizeof((out->lv         = RFIFOL(act, pos)));
+	pos += sizeof((out->map        = RFIFOW(act, pos)));
+	pos += sizeof((out->leader     = RFIFOB(act, pos)));
+	pos += sizeof((out->online     = RFIFOB(act, pos)));
+}
+
+/**
+ * Create Party
+ *  RFIFOP(fd,4), RFIFOB(fd,28), RFIFOB(fd,29), RFIFOP(fd,30)
+ *  const char *name, int item, int item2, const struct party_member *leader
+ **/
+static void mapif_parse_CreateParty(struct s_receive_action_data *act)
 {
 	struct party_data *p;
+	struct party_member leader = {0};
 
-	nullpo_ret(name);
-	nullpo_ret(leader);
+	mapif->parse_party_member(act,
+		offsetof(struct PACKET_ZW_PARTY_CREATE, leader),
+		&leader);
 
-	p = inter_party->create(name, item, item2, leader);
+	p = inter_party->create(RFIFOP(act, 2),
+		RFIFOB(act, 26), RFIFOB(act, 27),
+		&leader);
 
-	if (p == NULL) {
-		mapif->party_created(fd, leader->account_id, leader->char_id, NULL);
-		return 0;
+	if(p == NULL) {
+		mapif->party_created(act->session,
+			leader.account_id,
+			leader.char_id, NULL);
+		return;
 	}
 
-	mapif->party_info(fd, &p->party, 0);
-	mapif->party_created(fd, leader->account_id, leader->char_id, &p->party);
-
-	return 0;
+	mapif->party_info(act->session, p->party.party_id, 0, &p->party);
+	mapif->party_created(act->session, leader.account_id, leader.char_id, &p->party);
 }
 
-// Party information request
-static void mapif_parse_PartyInfo(int fd, int party_id, int char_id)
+/**
+ * WZ_PARTY_INFO
+ * Party information request
+ **/
+static void mapif_parse_PartyInfo(struct s_receive_action_data *act)
 {
 	struct party_data *p;
+	int party_id = RFIFOL(act, 2);
+	int char_id  = RFIFOL(act, 6);
 	p = inter_party->fromsql(party_id);
-
-	if (p != NULL)
-		mapif->party_info(fd, &p->party, char_id);
-	else
-		mapif->party_noinfo(fd, party_id, char_id);
+	mapif->party_info(act->session, party_id, char_id, &p->party);
 }
 
-// Add a player to party request
-static int mapif_parse_PartyAddMember(int fd, int party_id, const struct party_member *member)
+/**
+ * ZW_PARTY_MEMBER_ADD
+ * Add a player to party request
+ **/
+static void mapif_parse_PartyAddMember(struct s_receive_action_data *act)
 {
-	nullpo_ret(member);
-
-	if (!inter_party->add_member(party_id, member)) {
-		mapif->party_memberadded(fd, party_id, member->account_id, member->char_id, 1);
-		return 0;
-	}
-	mapif->party_memberadded(fd, party_id, member->account_id, member->char_id, 0);
-
-	return 0;
+	struct party_member member = {0};
+	int party_id = RFIFOL(act, 2);
+	mapif->parse_party_member(act,
+		offsetof(struct PACKET_ZW_PARTY_MEMBER_ADD, member), &member);
+	bool failed = !inter_party->add_member(party_id, &member);
+	mapif->party_memberadded(act->session, party_id, member.account_id,
+		member.char_id, failed);
 }
 
-//Party setting change request
-static int mapif_parse_PartyChangeOption(int fd, int party_id, int account_id, int exp, int item)
+/**
+ * ZW_PARTY_SETTING
+ * Party setting change request
+ **/
+static void mapif_parse_PartyChangeOption(struct s_receive_action_data *act)
 {
-	inter_party->change_option(party_id, account_id, exp, item, fd);
-	return 0;
+	int32 party_id   = RFIFOL(act, 2);
+	int32 account_id = RFIFOL(act,  6);
+	int32 exp        = RFIFOL(act, 10);
+	int32 item       = RFIFOL(act, 14);
+
+	inter_party->change_option(party_id, account_id, exp, item, act->session);
 }
 
-//Request leave party
-static int mapif_parse_PartyLeave(int fd, int party_id, int account_id, int char_id)
+/**
+ * ZW_PARTY_WITHDRAW
+ * Leave party request
+ **/
+static void mapif_parse_PartyLeave(struct s_receive_action_data *act)
 {
+	int32 party_id   = RFIFOL(act,  6);
+	int32 account_id = RFIFOL(act, 10);
+	int32 char_id    = RFIFOL(act, 14);
 	inter_party->leave(party_id, account_id, char_id);
-	return 0;
 }
 
-// When member goes to other map or levels up.
-static int mapif_parse_PartyChangeMap(int fd, int party_id, int account_id, int char_id, unsigned short map, int online, unsigned int lv)
+/**
+ * ZW_MEMBER_UPDATE
+ * Request to update member data
+ **/
+static void mapif_parse_PartyChangeMap(struct s_receive_action_data *act)
 {
-	inter_party->change_map(party_id, account_id, char_id, map, online, lv);
-	return 0;
+	int party_id = RFIFOL(act, 2);
+	struct party_member member = {0};
+	mapif->parse_party_member(act,
+		offsetof(struct PACKET_ZW_MEMBER_UPDATE, member), &member);
+
+	inter_party->change_map(party_id, member.account_id,
+		member.char_id,
+		member.map,
+		member.online,
+		member.lv);
 }
 
-//Request party dissolution
-static int mapif_parse_BreakParty(int fd, int party_id)
+/**
+ * ZW_PARTY_BREAK
+ * Request party dissolution
+ **/
+static void mapif_parse_BreakParty(struct s_receive_action_data *act)
 {
-	inter_party->disband(party_id);
-	return 0;
+	inter_party->disband(RFIFOL(act, 2));
 }
 
-static int mapif_parse_PartyLeaderChange(int fd, int party_id, int account_id, int char_id)
+/**
+ * ZW_PARTY_LEADER
+ * Update party leader
+ **/
+static void mapif_parse_PartyLeaderChange(struct s_receive_action_data *act)
 {
-	if (!inter_party->change_leader(party_id, account_id, char_id))
-		return 0;
-	return 1;
+	int32 party_id   = RFIFOL(act,  6);
+	int32 account_id = RFIFOL(act, 10);
+	int32 char_id    = RFIFOL(act, 14);
+	inter_party->change_leader(party_id, account_id, char_id);
+	// TODO/FIXME: Should we send the new leader data to all map servers? [Panikon]
 }
 
 /*==========================================
@@ -3597,13 +3719,13 @@ void mapif_defaults(void)
 	mapif->parse_mercenary_save = mapif_parse_mercenary_save;
 	mapif->parse_mercenary_data = mapif_parse_mercenary_data;
 	mapif->party_created = mapif_party_created;
-	mapif->party_noinfo = mapif_party_noinfo;
 	mapif->party_info = mapif_party_info;
 	mapif->party_memberadded = mapif_party_memberadded;
 	mapif->party_optionchanged = mapif_party_optionchanged;
 	mapif->party_withdraw = mapif_party_withdraw;
 	mapif->party_membermoved = mapif_party_membermoved;
 	mapif->party_broken = mapif_party_broken;
+	mapif->parse_party_member = mapif_parse_party_member;
 	mapif->parse_CreateParty = mapif_parse_CreateParty;
 	mapif->parse_PartyInfo = mapif_parse_PartyInfo;
 	mapif->parse_PartyAddMember = mapif_parse_PartyAddMember;
