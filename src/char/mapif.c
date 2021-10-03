@@ -2502,152 +2502,176 @@ static void mapif_parse_PartyLeaderChange(struct s_receive_action_data *act)
  * MAPIF : PET
  *------------------------------------------*/
 
-static int mapif_pet_created(int fd, int account_id, struct s_pet *p)
+/**
+ * WZ_PET_CREATE_ACK
+ * Pet creation notification
+ *
+ * @param p Pet data, when NULL failed to create
+ **/
+static void mapif_pet_created(struct socket_data *session, int account_id, const struct s_pet *p)
 {
-	WFIFOHEAD(fd, 14);
-	WFIFOW(fd, 0) = 0x3880;
-	WFIFOL(fd, 2) = account_id;
+	WFIFOHEAD(session, sizeof(struct PACKET_WZ_PET_CREATE_ACK), true);
+	WFIFOW(session, 0) = HEADER_WZ_PET_CREATE_ACK;
+	WFIFOL(session, 2) = account_id;
 	if (p != NULL){
-		WFIFOL(fd, 6) = p->class_;
-		WFIFOL(fd, 10) = p->pet_id;
+		WFIFOL(session, 6) = p->class_;
+		WFIFOL(session, 10) = p->pet_id;
 		ShowInfo("int_pet: created pet %d - %s\n", p->pet_id, p->name);
 	} else {
-		WFIFOL(fd, 6) = 0;
-		WFIFOL(fd, 10) = 0;
+		WFIFOL(session, 6) = 0;
+		WFIFOL(session, 10) = 0;
 	}
-	WFIFOSET(fd, 14);
-
-	return 0;
+	WFIFOSET(session, sizeof(struct PACKET_WZ_PET_CREATE_ACK));
 }
 
-static int mapif_pet_info(int fd, int account_id, struct s_pet *p)
+/**
+ * WZ_PET_INFO_ACK
+ * Pet information request ack
+ *
+ * @param p Pet data, when NULL failed to find
+ **/
+static void mapif_pet_info(struct socket_data *session, int account_id, const struct s_pet *p)
 {
-	nullpo_ret(p);
-	WFIFOHEAD(fd, sizeof(struct s_pet) + 9);
-	WFIFOW(fd, 0) = 0x3881;
-	WFIFOW(fd, 2) = sizeof(struct s_pet) + 9;
-	WFIFOL(fd, 4) = account_id;
-	WFIFOB(fd, 8) = 0;
-	memcpy(WFIFOP(fd, 9), p, sizeof(struct s_pet));
-	WFIFOSET(fd, WFIFOW(fd, 2));
-
-	return 0;
-}
-
-static int mapif_pet_noinfo(int fd, int account_id)
-{
-	WFIFOHEAD(fd, sizeof(struct s_pet) + 9);
-	WFIFOW(fd, 0) = 0x3881;
-	WFIFOW(fd, 2) = sizeof(struct s_pet) + 9;
-	WFIFOL(fd, 4) = account_id;
-	WFIFOB(fd, 8) = 1;
-	memset(WFIFOP(fd, 9), 0, sizeof(struct s_pet));
-	WFIFOSET(fd, WFIFOW(fd, 2));
-
-	return 0;
-}
-
-static int mapif_save_pet_ack(int fd, int account_id, int flag)
-{
-	WFIFOHEAD(fd, 7);
-	WFIFOW(fd, 0) = 0x3882;
-	WFIFOL(fd, 2) = account_id;
-	WFIFOB(fd, 6) = flag;
-	WFIFOSET(fd, 7);
-
-	return 0;
-}
-
-static int mapif_delete_pet_ack(int fd, int flag)
-{
-	WFIFOHEAD(fd, 3);
-	WFIFOW(fd, 0) = 0x3883;
-	WFIFOB(fd, 2) = flag;
-	WFIFOSET(fd, 3);
-
-	return 0;
-}
-
-static int mapif_save_pet(int fd, int account_id, const struct s_pet *data)
-{
-	//here process pet save request.
-	int len;
-	nullpo_ret(data);
-	RFIFOHEAD(fd);
-	len = RFIFOW(fd, 2);
-	if (sizeof(struct s_pet) != len-8) {
-		ShowError("inter pet: data size mismatch: %d != %"PRIuS"\n", len-8, sizeof(struct s_pet));
-		return 0;
+	size_t len = sizeof(struct PACKET_WZ_PET_INFO_ACK)
+		// account_id is already included in the packet
+		+ (p)?(sizeof(struct s_pet_packet_data)-SIZEOF_MEMBER(struct s_pet_packet_data, account_id))
+			: 0;
+	WFIFOHEAD(session, len, true);
+	WFIFOW(session, 0) = 0x3881;
+	WFIFOW(session, 2) = (uint16)len;
+	WFIFOL(session, 4) = account_id;
+	if(p) {
+		size_t pos = 8;
+		pos += sizeof((WFIFOL(session, pos) = p->account_id));
+		pos += sizeof((WFIFOL(session, pos) = p->char_id));
+		pos += sizeof((WFIFOL(session, pos) = p->pet_id));
+		pos += sizeof((WFIFOL(session, pos) = p->class_));
+		pos += sizeof((WFIFOW(session, pos) = p->level));
+		pos += sizeof((WFIFOL(session, pos) = p->egg_id));
+		pos += sizeof((WFIFOL(session, pos) = p->equip));
+		pos += sizeof((WFIFOW(session, pos) = p->intimate));
+		pos += sizeof((WFIFOW(session, pos) = p->hungry));
+		memcpy(WFIFOP(session, pos), p->name, NAME_LENGTH);
+		pos += NAME_LENGTH;
+		pos += sizeof((WFIFOB(session, pos) = p->rename_flag));
+		pos += sizeof((WFIFOB(session, pos) = p->incubate));
+		pos += sizeof((WFIFOL(session, pos) = p->autofeed));
 	}
-
-	inter_pet->tosql(data);
-	mapif->save_pet_ack(fd, account_id, 0);
-
-	return 0;
+	WFIFOSET(session, WFIFOW(session, 2));
 }
 
-static int mapif_delete_pet(int fd, int pet_id)
+/**
+ * WZ_PET_SAVE_ACK
+ * Save pet reply
+ **/
+static void mapif_save_pet_ack(struct socket_data *session, int account_id, int flag)
 {
-	mapif->delete_pet_ack(fd, inter_pet->delete_(pet_id));
-
-	return 0;
+	WFIFOHEAD(session, sizeof(struct PACKET_WZ_PET_SAVE_ACK), true);
+	WFIFOW(session, 0) = HEADER_WZ_PET_SAVE_ACK;
+	WFIFOL(session, 2) = account_id;
+	WFIFOB(session, 6) = flag;
+	WFIFOSET(session, sizeof(struct PACKET_WZ_PET_SAVE_ACK));
 }
 
-static int mapif_parse_CreatePet(int fd)
+/**
+ * WZ_PET_DELETE_ACK
+ * Delete pet reply
+ **/
+static void mapif_delete_pet_ack(struct socket_data *session, int account_id, int flag)
+{
+	WFIFOHEAD(session, sizeof(struct PACKET_WZ_PET_DELETE_ACK), true);
+	WFIFOW(session, 0) = HEADER_WZ_PET_DELETE_ACK;
+	WFIFOL(session, 2) = account_id;
+	WFIFOB(session, 6) = flag;
+	WFIFOSET(session, sizeof(struct PACKET_WZ_PET_DELETE_ACK));
+}
+
+/**
+ * Parses pet data from packet
+ *
+ * @param pos Current buffer postion
+ * @param out Object to be filled
+ * @return Updated buffer position
+ **/
+static int mapif_parse_pet_data(struct s_receive_action_data *act, int pos, struct s_pet *out)
+{
+	pos += sizeof((out->char_id     = RFIFOL(act, pos)));
+	pos += sizeof((out->pet_id      = RFIFOL(act, pos)));
+	pos += sizeof((out->class_      = RFIFOL(act, pos)));
+	pos += sizeof((out->level       = RFIFOW(act, pos)));
+	pos += sizeof((out->egg_id      = RFIFOL(act, pos)));
+	pos += sizeof((out->equip       = RFIFOL(act, pos)));
+	pos += sizeof((out->intimate    = RFIFOW(act, pos)));
+	pos += sizeof((out->hungry      = RFIFOW(act, pos)));
+	memcpy(out->name, RFIFOP(act, pos), NAME_LENGTH);
+	out->name[NAME_LENGTH-1] = '\0';
+	pos += NAME_LENGTH;
+	pos += sizeof((out->rename_flag = RFIFOB(act, pos)));
+	pos += sizeof((out->incubate    = RFIFOB(act, pos)));
+	pos += sizeof((out->autofeed    = RFIFOL(act, pos)));
+
+	cap_value(out->intimate, PET_INTIMACY_NONE, PET_INTIMACY_MAX);
+	cap_value(out->hungry, PET_HUNGER_STARVING, PET_HUNGER_STUFFED);
+	return pos;
+}
+
+/**
+ * ZW_PET_SAVE
+ * Pet save request
+ **/
+static void mapif_parse_save_pet(struct s_receive_action_data *act)
+{
+	struct s_pet p = {0};
+	mapif->parse_pet_data(act, 2, &p);
+
+	bool failed = !inter_pet->tosql(&p);
+	mapif->save_pet_ack(act->session, p.account_id, failed);
+}
+
+/**
+ * ZW_PET_DELETE
+ * Pet deletion request
+ **/
+static void mapif_parse_delete_pet(struct s_receive_action_data *act)
+{
+	int32 account_id = RFIFOL(act, 2);
+	int32 pet_id     = RFIFOL(act, 6);
+	mapif->delete_pet_ack(act->session, account_id, !inter_pet->delete_(pet_id));
+}
+
+/**
+ * ZW_PET_CREATE
+ * Pet creation request
+ **/
+static int mapif_parse_CreatePet(struct s_receive_action_data *act)
 {
 	int account_id;
-	struct s_pet *pet;
+	struct s_pet pet = {0};
+	mapif->parse_pet_data(act, 2, &pet);
+	account_id = pet.account_id;
+	pet.pet_id = 0; // Signal new pet
+	pet.account_id = (pet.incubate == 1) ? 0 : pet.account_id;
+	pet.char_id    = (pet.incubate == 1) ? 0 : pet.char_id;
 
-	RFIFOHEAD(fd);
-	account_id = RFIFOL(fd, 2);
-	pet = inter_pet->create(account_id,
-		RFIFOL(fd, 6),
-		RFIFOL(fd, 10),
-		RFIFOL(fd, 14),
-		RFIFOL(fd, 18),
-		RFIFOL(fd, 22),
-		RFIFOW(fd, 26),
-		RFIFOW(fd, 28),
-		RFIFOB(fd, 30),
-		RFIFOB(fd, 31),
-		RFIFOP(fd, 32));
+	pet.pet_id = inter_pet->tosql(&pet);
 
-	if (pet != NULL)
-		mapif->pet_created(fd, account_id, pet);
-	else
-		mapif->pet_created(fd, account_id, NULL);
-
-	return 0;
+	mapif->pet_created(act->session, account_id, (pet.pet_id)?&pet:NULL);
 }
 
-static int mapif_parse_LoadPet(int fd)
+/**
+ * ZW_PET_INFO
+ * Pet information request
+ **/
+static int mapif_parse_LoadPet(struct s_receive_action_data *act)
 {
 	int account_id;
-	struct s_pet *pet;
+	struct s_pet pet = {0};
 
-	RFIFOHEAD(fd);
-	account_id = RFIFOL(fd, 2);
-	pet = inter_pet->load(account_id, RFIFOL(fd, 6), RFIFOL(fd, 10));
-
-	if (pet != NULL)
-		mapif->pet_info(fd, account_id, pet);
+	account_id = RFIFOL(act, 2);
+	if(inter_pet->load(account_id, RFIFOL(act, 6), RFIFOL(act, 10), &pet))
+		mapif->pet_info(act->session, account_id, &pet);
 	else
-		mapif->pet_noinfo(fd, account_id);
-	return 0;
-}
-
-static int mapif_parse_SavePet(int fd)
-{
-	RFIFOHEAD(fd);
-	mapif->save_pet(fd, RFIFOL(fd, 4), RFIFOP(fd, 8));
-	return 0;
-}
-
-static int mapif_parse_DeletePet(int fd)
-{
-	RFIFOHEAD(fd);
-	mapif->delete_pet(fd, RFIFOL(fd, 2));
-	return 0;
+		mapif->pet_info(act->session, account_id, NULL);
 }
 
 /*==========================================
@@ -3736,15 +3760,13 @@ void mapif_defaults(void)
 	mapif->parse_PartyLeaderChange = mapif_parse_PartyLeaderChange;
 	mapif->pet_created = mapif_pet_created;
 	mapif->pet_info = mapif_pet_info;
-	mapif->pet_noinfo = mapif_pet_noinfo;
 	mapif->save_pet_ack = mapif_save_pet_ack;
 	mapif->delete_pet_ack = mapif_delete_pet_ack;
-	mapif->save_pet = mapif_save_pet;
-	mapif->delete_pet = mapif_delete_pet;
+	mapif->parse_SavePet = mapif_parse_save_pet;
+	mapif->parse_DeletePet = mapif_parse_delete_pet;
+	mapif->parse_pet_data = mapif_parse_pet_data;
 	mapif->parse_CreatePet = mapif_parse_CreatePet;
 	mapif->parse_LoadPet = mapif_parse_LoadPet;
-	mapif->parse_SavePet = mapif_parse_SavePet;
-	mapif->parse_DeletePet = mapif_parse_DeletePet;
 	mapif->quest_save_ack = mapif_quest_save_ack;
 	mapif->parse_quest_save = mapif_parse_quest_save;
 	mapif->send_quests = mapif_send_quests;

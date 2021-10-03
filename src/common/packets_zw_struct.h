@@ -97,12 +97,13 @@ enum inter_packet_zw_id {
 	0x3018, // mapif->parse_LoadGuildStorage(fd); 
 	0x3019, // mapif->parse_SaveGuildStorage(fd); 
 	0x3056, // mapif->parse_ItemBoundRetrieve(fd);
-	// inter_pet_parse_frommap
-	0x3080, // mapif->parse_CreatePet
-    0x3081, // mapif->parse_LoadPet(f
-    0x3082, // mapif->parse_SavePet(f
-    0x3083, // mapif->parse_DeletePet
 #endif
+	// inter_pet_parse_frommap
+	HEADER_ZW_PET_CREATE = 0x3080, // mapif->parse_CreatePet
+	HEADER_ZW_PET_LOAD   = 0x3081, // mapif->parse_LoadPet(f
+	HEADER_ZW_PET_SAVE   = 0x3082, // mapif->parse_SavePet(f
+	HEADER_ZW_PET_DELETE = 0x3083, // mapif->parse_DeletePet
+
 	// inter_homunculus_parse_frommap
 	HEADER_ZW_HOMUNCULUS_CREATE = 0x3090, // mapif->parse_homunculus_create
 	HEADER_ZW_HOMUNCULUS_LOAD   = 0x3091, // mapif->parse_homunculus_load  
@@ -1169,6 +1170,62 @@ struct PACKET_ZW_PARTY_LEADER {
 	int32 party_id;
 	int32 account_id;
 	int32 char_id;
+} __attribute__((packed));
+
+// @copydoc s_pet
+struct s_pet_packet_data {
+	int32 account_id;
+	int32 char_id;
+	int32 pet_id;
+	int32 class_;
+	int16 level;
+	int32 egg_id;
+	int32 equip;
+	int16 intimate;
+	int16 hungry;
+	uint8 name[NAME_LENGTH];
+	uint8 rename_flag;
+	uint8 incubate;
+	int32 autofeed;
+} __attribute__((packed));
+
+/**
+ * Save pet request
+ * @see mapif_parse_save_pet
+ **/
+struct PACKET_ZW_PET_SAVE {
+	int16 packet_len;
+	struct s_pet_packet_data pet;
+} __attribute__((packed));
+
+/**
+ * Delete pet request
+ * @see mapif_parse_delete_pet
+ **/
+struct PACKET_ZW_PET_DELETE {
+	int16 packet_len;
+	int32 account_id;
+	int32 pet_id;
+} __attribute__((packed));
+
+/**
+ * Create pet request
+ * @see mapif_parse_CreatePet
+ **/
+struct PACKET_ZW_PET_CREATE {
+	int16 packet_len;
+	struct s_pet_packet_data pet;
+} __attribute__((packed));
+
+/**
+ * Pet information request
+ * @see mapif_parse_LoadPet
+ **/
+struct PACKET_ZW_PET_LOAD {
+	int16 packet_len;
+	int32 account_id;
+	int32 char_id;
+	int32 pet_id;
 } __attribute__((packed));
 
 #if !defined(sun) && (!defined(__NETBSD__) || __NetBSD_Version__ >= 600000000) // NetBSD 5 and Solaris don't like pragma pack but accept the packed attribute

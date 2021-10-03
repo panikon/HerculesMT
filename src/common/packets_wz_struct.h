@@ -405,6 +405,59 @@ struct PACKET_WZ_PARTY_BREAK_ACK {
 } __attribute__((packed));
 DEFINE_PACKET_ID(WZ_PARTY_BREAK_ACK, 0x3826);
 
+/**
+ * Pet creation notification
+ *
+ * @param class Pet class, when 0 failed to create
+ * @see mapif_pet_created
+ **/
+struct PACKET_WZ_PET_CREATE_ACK {
+	int16 packet_id;
+	int32 account_id;
+	int32 class;
+	int32 pet_id;
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_PET_CREATE_ACK, 0x3880);
+
+/**
+ * Party information request ack
+ *  <len>.W <packet_len>.L <account_id>.L {<s_pet_packet_data>}(only on success)
+ * @see mapif_pet_info
+ **/
+struct PACKET_WZ_PET_INFO_ACK {
+	int16 packet_id;
+	int16 packet_len;
+	int32 account_id;
+	int32 party_id;
+	// pet data
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_PET_INFO_ACK, 0x3881);
+
+/**
+ * Save reply
+ * @param flag 0 Successful
+ * @param flag 1 Failed
+ **/
+struct PACKET_WZ_PET_SAVE_ACK {
+	int16 packet_id;
+	int32 account_id;
+	uint8 flag;
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_PET_SAVE_ACK, 0x3882);
+
+/**
+ * Delete reply
+ * @param flag 0 Successful
+ * @param flag 1 Failed
+ **/
+struct PACKET_WZ_PET_DELETE_ACK {
+	int16 packet_id;
+	int32 account_id;
+	uint8 flag;
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_PET_DELETE_ACK, 0x3883);
+
+
 #if !defined(sun) && (!defined(__NETBSD__) || __NetBSD_Version__ >= 600000000) // NetBSD 5 and Solaris don't like pragma pack but accept the packed attribute
 #pragma pack(pop)
 #endif // not NetBSD < 6 / Solaris

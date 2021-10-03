@@ -200,17 +200,16 @@ struct mapif_interface {
 	void (*parse_BreakParty)        (struct s_receive_action_data *act);
 	void (*parse_PartyLeaderChange) (struct s_receive_action_data *act);
 
-	int (*pet_created) (int fd, int account_id, struct s_pet *p);
-	int (*pet_info) (int fd, int account_id, struct s_pet *p);
-	int (*pet_noinfo) (int fd, int account_id);
-	int (*save_pet_ack) (int fd, int account_id, int flag);
-	int (*delete_pet_ack) (int fd, int flag);
-	int (*save_pet) (int fd, int account_id, const struct s_pet *data);
-	int (*delete_pet) (int fd, int pet_id);
-	int (*parse_CreatePet) (int fd);
-	int (*parse_LoadPet) (int fd);
-	int (*parse_SavePet) (int fd);
-	int (*parse_DeletePet) (int fd);
+	void (*pet_created) (struct socket_data *session, int account_id, const struct s_pet *p);
+	void (*pet_info) (struct socket_data *session, int account_id, const struct s_pet *p);
+	void (*save_pet_ack) (struct socket_data *session, int account_id, int flag);
+	void (*delete_pet_ack) (struct socket_data *session, int account_id, int flag);
+	void (*parse_pet_data) (struct s_receive_action_data *act, int pos, struct s_pet *out);
+	void (*parse_CreatePet) (struct s_receive_action_data *act);
+	void (*parse_LoadPet)   (struct s_receive_action_data *act);
+	void (*parse_SavePet)   (struct s_receive_action_data *act);
+	void (*parse_DeletePet) (struct s_receive_action_data *act);
+
 	void (*quest_save_ack) (int fd, int char_id, bool success);
 	int (*parse_quest_save) (int fd);
 	void (*send_quests) (int fd, int char_id, struct quest *tmp_questlog, int num_quests);
