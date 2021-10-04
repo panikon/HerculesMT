@@ -458,6 +458,7 @@ enum quest_state {
 };
 
 /// Questlog entry
+/// @see quest_packet_data
 struct quest {
 	int quest_id;                    ///< Quest ID
 	unsigned int time;               ///< Expiration time
@@ -470,12 +471,14 @@ enum attribute_flag {
 	ATTR_BROKEN = 1,
 };
 
+// @see item_packet_data::option
 struct item_option {
 	int16 index;
 	int16 value;
 	uint8 param;
 };
 
+// @see item_packet_data
 struct item {
 	int id;
 	int nameid;
@@ -491,19 +494,6 @@ struct item {
 	uint64 unique_id;
 	struct item_option option[MAX_ITEM_OPTIONS];
 };
-
-/**
- * Prevents @ref MAX_STORAGE from causing oversized 0x3011 inter-server packets.
- *
- * @attention If the size of packet 0x3011 changes, this assertion check needs to be adjusted, too.
- *
- * @see intif_send_account_storage() @n
- *      mapif_parse_AccountStorageSave()
- *
- * @anchor MAX_STORAGE_ASSERT
- *
- **/
-STATIC_ASSERT(MAX_STORAGE * sizeof(struct item) + 8 <= 0xFFFF, "The maximum amount of item slots per account storage is limited by the inter-server communication layout. Use a smaller value!");
 
 //Equip position constants
 enum equip_pos {
@@ -609,6 +599,7 @@ enum e_option {
 	OPTION_COSTUME   = OPTION_WEDDING | OPTION_XMAS | OPTION_SUMMER | OPTION_HANBOK | OPTION_OKTOBERFEST | OPTION_SUMMER2,
 };
 
+// @see s_homunculus_packet_data::hskill
 struct s_skill {
 	unsigned short id;
 	unsigned char lv;
@@ -657,19 +648,7 @@ struct guild_storage {
 	} items;      ///< Items
 };
 
-/**
- * Prevents @ref MAX_GUILD_STORAGE from causing oversized 0x3019 inter-server packets.
- *
- * @attention If the size of packet 0x3019 changes, this assertion check needs to be adjusted, too.
- *
- * @see intif_send_guild_storage() @n
- *      mapif_parse_SaveGuildStorage()
- *
- * @anchor MAX_GUILD_STORAGE_ASSERT
- *
- **/
-STATIC_ASSERT(20 + sizeof(struct item) * MAX_GUILD_STORAGE <= 0xFFFF, "The maximum amount of item slots per guild storage is limited by the inter-server communication layout. Use a smaller value!");
-
+// @see s_pet_packet_data
 struct s_pet {
 	int account_id;
 	int char_id;
@@ -686,6 +665,7 @@ struct s_pet {
 	int autofeed;
 };
 
+// @see s_homunculus_packet_data
 struct s_homunculus { //[orn]
 	char name[NAME_LENGTH];
 	int hom_id;
@@ -699,7 +679,7 @@ struct s_homunculus { //[orn]
 	short skillpts;
 	short level;
 	uint64 exp;
-	short rename_flag;
+	short rename_flag; // 1: Already renamed -> TODO: Change this to a bool
 	short vaporize; //albator
 	int str;
 	int agi;
@@ -728,6 +708,7 @@ struct s_mercenary {
 	unsigned int life_time;
 };
 
+// @see s_elemental_packet_data
 struct s_elemental {
 	int elemental_id;
 	int char_id;
@@ -762,6 +743,7 @@ struct achievement { // Achievements [Smokexyz/Hercules]
 
 VECTOR_STRUCT_DECL(char_achievements, struct achievement);
 
+// TODO/FIXME: Reduce the total size of this struct, currently it uses about 24936 bytes
 struct mmo_charstatus {
 	int char_id;
 	int account_id;
@@ -820,6 +802,7 @@ struct mmo_charstatus {
 	bool show_equip;
 	bool allow_party;
 	bool allow_call;
+	// Count of remaining rename operations available
 	unsigned short rename;
 	unsigned short slotchange;
 
@@ -847,6 +830,7 @@ typedef enum mail_status {
 	MAIL_READ,
 } mail_status;
 
+// @see mail_message_packet_data
 struct mail_message {
 	int id;
 	int send_id;
@@ -870,6 +854,7 @@ struct mail_data {
 	struct mail_message msg[MAIL_MAX_INBOX];
 };
 
+// @see struct PACKET_ZW_AUCTION_REGISTER::data
 struct auction_data {
 	unsigned int auction_id;
 	int seller_id;
@@ -888,6 +873,7 @@ struct auction_data {
 	int auction_end_timer;
 };
 
+// @see party_member_packet_data
 struct party_member {
 	int account_id;
 	int char_id;
@@ -899,6 +885,7 @@ struct party_member {
 	         online : 1;
 };
 
+// @see party_packet_data
 struct party {
 	int party_id;
 	char name[NAME_LENGTH];
@@ -909,6 +896,7 @@ struct party {
 };
 
 struct map_session_data;
+// @see s_guild_member_packet_data
 struct guild_member {
 	int account_id, char_id;
 	short hair,hair_color,gender;
@@ -1077,11 +1065,13 @@ enum fame_list_type {
 	RANKTYPE_PK         = 3, //Not supported yet
 };
 
+// @see rodex_message_packet_data::items
 struct rodex_item {
 	struct item item;
 	int idx;
 };
 
+// @see rodex_message_packet_data
 struct rodex_message {
 	int64 id;
 	int sender_id;
@@ -1111,6 +1101,18 @@ enum rodex_opentype {
 	RODEX_OPENTYPE_ACCOUNT = 1,
 	RODEX_OPENTYPE_RETURN = 2,
 	RODEX_OPENTYPE_UNSET = 3,
+};
+
+/**
+ * Update mail flag
+ * Used in PACKET_ZW_RODEX_UPDATE
+ **/
+enum rodex_updatemail_flag {
+	RODEX_UPDATEMAIL_RECEIVER_READ = 0,
+	RODEX_UPDATEMAIL_GET_ZENY = 1,
+	RODEX_UPDATEMAIL_GET_ITEM = 2,
+	RODEX_UPDATEMAIL_DELETE = 3,
+	RODEX_UPDATEMAIL_SENDER_READ = 4,
 };
 
 enum MAIL_TYPE {
@@ -1260,11 +1262,12 @@ enum ammo_type {
 };
 
 enum e_char_server_type {
-	CST_NORMAL      = 0,
-	CST_MAINTENANCE = 1,
-	CST_OVER18      = 2,
-	CST_PAYING      = 3,
-	CST_F2P         = 4,
+	CST_NORMAL          = 0,
+	CST_MAINTENANCE     = 1,
+	CST_OVER18          = 2,
+	CST_PAYING          = 3,
+	CST_F2P             = 4,
+	CST_NORMAL_NO_COUNT = 5,  //< Normal without user count
 	CST_MAX,
 };
 

@@ -576,8 +576,83 @@ struct PACKET_WZ_RODEX_ITEM {
 } __attribute__((packed));
 DEFINE_PACKET_ID(WZ_RODEX_ITEM, 0x389a);
 
+/**
+ * Guild storage information
+ *
+ * 0x3818 <len>.W <account id>.L <guild id != 0>.L <flag>.B <capacity>.L {<item>.P}*<capacity>
+ * 0x3818 <len>.W <account id>.L <guild id == 0>.L
+ * @param account_id Requester account id
+ * @param guild_id   Guild id (when 0 the lookup failed)
+ * @param flag       Additional options, passed through to the map server (1 = open storage)
+ * @see mapif_load_guild_storage
+ **/
+struct PACKET_WZ_GUILD_STORAGE_ACK {
+	int16 packet_id;
+	int16 packet_len;
+	int32 account_id;
+	int32 guild_id;
+	struct {
+		uint8 flag;
+		int32 capacity;
+		struct item_packet_data *item_list;
+	} __attribute__((packed)) storage_data;
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_GUILD_STORAGE_ACK, 0x3818);
+
+/**
+ * Guild storage save result
+ *
+ * @see mapif_save_guild_storage_ack
+ **/
+struct PACKET_WZ_GUILD_STORAGE_SAVE_ACK {
+	int16 packet_id;
+	int32 account_id;
+	int32 guild_id;
+	uint8 fail;
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_GUILD_STORAGE_SAVE_ACK, 0x3819);
+
+/**
+ * Account storage data
+ *
+ * @see mapif_account_storage_load
+ **/
+struct PACKET_WZ_PLAYER_STORAGE_ACK {
+	int16 packet_id;
+	int16 packet_len;
+	int32 account_id;
+	struct item_packet_data *item_list;
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_PLAYER_STORAGE_ACK, 0x3805);
+
+/**
+ * Account storage save answer
+ *
+ * @param save flag (true for success and false for failure)
+ * @see mapif_account_storage_load
+ **/
+struct PACKET_WZ_PLAYER_STORAGE_SAVE_ACK {
+	int16 packet_id;
+	int32 account_id;
+	uint8 flag;
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_PLAYER_STORAGE_SAVE_ACK, 0x3808);
+
 #if !defined(sun) && (!defined(__NETBSD__) || __NetBSD_Version__ >= 600000000) // NetBSD 5 and Solaris don't like pragma pack but accept the packed attribute
 #pragma pack(pop)
 #endif // not NetBSD < 6 / Solaris
+
+/**
+ * Prevents @ref MAX_STORAGE from causing oversized 0x3011 inter-server packets.
+ *
+ * @attention If the size of packet 0x3011 changes, this assertion check needs to be adjusted, too.
+ *
+ * @see intif_send_account_storage() @n
+ *      mapif_parse_AccountStorageSave()
+ *
+ * @anchor MAX_STORAGE_ASSERT
+ *
+ **/
+STATIC_ASSERT(MAX_STORAGE * sizeof(struct item_packet_data) + (sizeof(struct PACKET_WZ_PLAYER_STORAGE_ACK) - sizeof(intptr)) <= 0xFFFF, "The maximum amount of item slots per account storage is limited by the inter-server communication layout. Use a smaller value!");
 
 #endif /* COMMON_PACKETS_WZ_STRUCT_H */

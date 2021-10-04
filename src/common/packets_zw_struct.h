@@ -1353,8 +1353,67 @@ struct PACKET_ZW_RODEX_CHECK {
 	uint8 target_name[NAME_LENGTH];
 } __attribute__((packed));
 
+/**
+ * Player storage data request
+ *
+ * @see mapif_parse_AccountStorageLoad
+ **/
+struct PACKET_ZW_PLAYER_STORAGE {
+	int16 packet_id;
+	int32 account_id;
+} __attribute__((packed));
+
+/**
+ * Player storage save request
+ *
+ * @see mapif_parse_AccountStorageSave
+ **/
+struct PACKET_ZW_PLAYER_STORAGE_SAVE {
+	int16 packet_id;
+	int16 packet_len;
+	int32 account_id;
+	struct item_packet_data *item_list;
+} __attribute__((packed));
+
+/**
+ * Guild storage save request
+ *
+ * @see mapif_parse_LoadGuildStorage
+ **/
+struct PACKET_WZ_GUILD_STORAGE_SAVE {
+	int16 packet_id;
+	int32 account_id;
+	int32 guild_id;
+} __attribute__((packed));
+
+/**
+ * Guild storage save request
+ *
+ * @see mapif_parse_SaveGuildStorage
+ **/
+struct PACKET_ZW_GUILD_STORAGE_SAVE {
+	int16 packet_id;
+	int16 packet_len;
+	int32 account_id;
+	int32 guild_id;
+	struct item_packet_data *item_list;
+} __attribute__((packed));
+
 #if !defined(sun) && (!defined(__NETBSD__) || __NetBSD_Version__ >= 600000000) // NetBSD 5 and Solaris don't like pragma pack but accept the packed attribute
 #pragma pack(pop)
 #endif // not NetBSD < 6 / Solaris
+
+/**
+ * Prevents @ref MAX_GUILD_STORAGE from causing oversized 0x3019 inter-server packets.
+ *
+ * @attention If the size of packet 0x3019 changes, this assertion check needs to be adjusted, too.
+ *
+ * @see intif_send_guild_storage() @n
+ *      mapif_parse_SaveGuildStorage()
+ *
+ * @anchor MAX_GUILD_STORAGE_ASSERT
+ *
+ **/
+STATIC_ASSERT(MAX_GUILD_STORAGE * sizeof(struct item_packet_data) + (sizeof(struct PACKET_ZW_GUILD_STORAGE_SAVE) - sizeof(intptr)) <= 0xFFFF, "The maximum amount of item slots per guild storage is limited by the inter-server communication layout. Use a smaller value!");
 
 #endif // COMMON_PACKETS_WA_STRUCT_H

@@ -228,14 +228,15 @@ struct mapif_interface {
 	void (*rodex_getzenyack)  (struct socket_data *session, int char_id, int64 mail_id, uint8 opentype, int64 zeny);
 	void (*rodex_getitemsack) (struct socket_data *session, int char_id, int64 mail_id, uint8 opentype, int count, const struct rodex_item *items);
 
-	int (*load_guild_storage) (int fd, int account_id, int guild_id, char flag);
-	int (*save_guild_storage_ack) (struct s_receive_action_data *act, int account_id, int guild_id, int fail);
+	int (*load_guild_storage) (struct socket_data *session, int account_id, int guild_id, char flag);
+	int (*save_guild_storage_ack) (struct socket_data *session, int account_id, int guild_id, int fail);
 	int (*parse_LoadGuildStorage) (struct s_receive_action_data *act);
 	int (*parse_SaveGuildStorage) (struct s_receive_action_data *act);
-	int (*account_storage_load) (struct s_receive_action_data *act, int account_id);
+	int (*account_storage_load) (struct socket_data *session, int account_id);
 	int (*pAccountStorageLoad) (struct s_receive_action_data *act);
 	int (*pAccountStorageSave) (struct s_receive_action_data *act);
-	void (*sAccountStorageSaveAck) (struct s_receive_action_data *act, int account_id, bool save);
+	void (*sAccountStorageSaveAck) (struct socket_data *session, int account_id, bool save);
+
 	int (*itembound_ack) (struct s_receive_action_data *act, int aid, int guild_id);
 	void (*parse_ItemBoundRetrieve) (struct s_receive_action_data *act);
 	void (*parse_accinfo) (struct s_receive_action_data *act);

@@ -3131,249 +3131,185 @@ static void mapif_rodex_getitemsack(struct socket_data *session, int char_id,
  * Sends loaded guild storage to a map-server.
  *
  * Packets sent:
- * 0x3818 <len>.W <account id>.L <guild id != 0>.L <flag>.B <capacity>.L <amount>.L {<item>.P}*<capacity>
+ * 0x3818 <len>.W <account id>.L <guild id != 0>.L <flag>.B <capacity>.L {<item>.P}*<capacity>
  * 0x3818 <len>.W <account id>.L <guild id == 0>.L
  *
- * @param fd         The map-server's fd.
+ * @param session    The map-server's session.
  * @param account_id The requesting character's account id.
  * @param guild_id   The requesting guild's ID.
  * @param flag       Additional options, passed through to the map server (1 = open storage)
- * @return Error code
- * @retval 0 in case of success.
- */
-static int mapif_load_guild_storage(int fd, int account_id, int guild_id, char flag)
+ **/
+static void mapif_load_guild_storage(struct socket_data *session, int account_id, int guild_id, char flag)
 {
-	if (SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT `guild_id` FROM `%s` WHERE `guild_id`='%d'", guild_db, guild_id)) {
-		Sql_ShowDebug(inter->sql_handle);
-	} else if (SQL->NumRows(inter->sql_handle) > 0) {
-		// guild exists
-		struct guild_storage *gs = aCalloc(1, sizeof(*gs));
+	size_t size;
+	struct guild_storage gs = {0};
 
-		if (inter_storage->guild_storage_fromsql(guild_id, gs) == 0) {
-			int size = 21 + sizeof gs->items.data[0] * gs->items.capacity;
-			WFIFOHEAD(fd, size);
-			WFIFOW(fd, 0) = 0x3818;
-			WFIFOW(fd, 2) = size;
-			WFIFOL(fd, 4) = account_id;
-			WFIFOL(fd, 8) = guild_id;
-			WFIFOB(fd, 12) = flag;
-			WFIFOL(fd, 13) = gs->items.capacity;
-			WFIFOL(fd, 17) = gs->items.amount;
-			if (gs->items.data != NULL) {
-				memcpy(WFIFOP(fd, 21), gs->items.data, sizeof gs->items.data[0] * gs->items.capacity);
-				aFree(gs->items.data);
-			}
-			WFIFOSET(fd, size);
-			aFree(gs);
-			return 0;
+	// guild_storage_fromsql already checks if the guild exists
+	if(inter_storage->guild_storage_fromsql(guild_id, &gs) == 0) {
+		size = sizeof(struct PACKET_WZ_GUILD_STORAGE_ACK) - sizeof(intptr);
+		size += sizeof(struct item_packet_data) * gs.items.capacity;
+		WFIFOHEAD(session, size, true);
+		WFIFOW(session,  0) = HEADER_WZ_GUILD_STORAGE_ACK;
+		WFIFOW(session,  2) = (uint16)size;
+		WFIFOL(session,  4) = account_id;
+		WFIFOL(session,  8) = guild_id;
+		WFIFOB(session, 12) = flag;
+		WFIFOL(session, 13) = gs.items.capacity; // Capacity is the same as amount
+		if(gs.items.data != NULL) {
+			int pos = offsetof(struct PACKET_WZ_GUILD_STORAGE_ACK,
+				storage_data.item_list);
+			for(int i = 0; i < gs.items.capacity; i++)
+				pos += mapif->send_item_data(session, pos, &gs.items.data[i]);
+			aFree(gs.items.data);
 		}
-		aFree(gs);
+		WFIFOSET(session, size);
+		return;
 	}
 	// guild does not exist or there was an error
-	SQL->FreeResult(inter->sql_handle);
-	WFIFOHEAD(fd, 12);
-	WFIFOW(fd, 0) = 0x3818;
-	WFIFOW(fd, 2) = 12;
-	WFIFOL(fd, 4) = account_id;
-	WFIFOL(fd, 8) = 0;
-	WFIFOSET(fd, 12);
-	return 0;
-}
-
-static int mapif_save_guild_storage_ack(int fd, int account_id, int guild_id, int fail)
-{
-	WFIFOHEAD(fd, 11);
-	WFIFOW(fd, 0) = 0x3819;
-	WFIFOL(fd, 2) = account_id;
-	WFIFOL(fd, 6) = guild_id;
-	WFIFOB(fd, 10) = fail;
-	WFIFOSET(fd, 11);
-	return 0;
+	size = sizeof(struct PACKET_WZ_GUILD_STORAGE_ACK)
+		- SIZEOF_MEMBER(struct PACKET_WZ_GUILD_STORAGE_ACK, storage_data);
+	WFIFOHEAD(session, size, true);
+	WFIFOW(session, 0) = HEADER_WZ_GUILD_STORAGE_ACK;
+	WFIFOW(session, 2) = (uint16)size;
+	WFIFOL(session, 4) = account_id;
+	WFIFOL(session, 8) = 0;
+	WFIFOSET(session, size);
 }
 
 /**
+ * WZ_GUILD_STORAGE_SAVE_ACK
+ * Guild storage save result
+ **/
+static void mapif_save_guild_storage_ack(struct socket_data *session, int account_id, int guild_id, int fail)
+{
+	WFIFOHEAD(session, sizeof(struct PACKET_WZ_GUILD_STORAGE_SAVE_ACK), true);
+	WFIFOW(session, 0) = HEADER_WZ_GUILD_STORAGE_SAVE_ACK;
+	WFIFOL(session, 2) = account_id;
+	WFIFOL(session, 6) = guild_id;
+	WFIFOB(session, 10) = fail;
+	WFIFOSET(session, sizeof(struct PACKET_WZ_GUILD_STORAGE_SAVE_ACK));
+}
+
+/**
+ * WZ_PLAYER_STORAGE_ACK
  * Loads the account storage and send to the map server.
- * @packet 0x3805     [out] <account_id>.L <struct item[]>.P
- * @param  fd         [in]  file/socket descriptor.
- * @param  account_id [in]  account id of the session.
- * @return 1 on success, 0 on failure.
  */
-static int mapif_account_storage_load(int fd, int account_id)
+static void mapif_account_storage_load(struct socket_data *session, int account_id)
 {
 	struct storage_data stor = { 0 };
-	int count = 0, i = 0, len = 0;
-
-	Assert_ret(account_id > 0);
 
 	VECTOR_INIT(stor.item);
-	count = inter_storage->fromsql(account_id, &stor);
+	int count = inter_storage->fromsql(account_id, &stor);
 
-	len = 8 + count * sizeof(struct item);
+	size_t len = sizeof(struct PACKET_WZ_PLAYER_STORAGE_ACK) - sizeof(intptr);
+	len += count * sizeof(struct item_packet_data);
 
-	WFIFOHEAD(fd, len);
-	WFIFOW(fd, 0) = 0x3805;
-	WFIFOW(fd, 2) = (uint16) len;
-	WFIFOL(fd, 4) = account_id;
-	for (i = 0; i < count; i++)
-		memcpy(WFIFOP(fd, 8 + i * sizeof(struct item)), &VECTOR_INDEX(stor.item, i), sizeof(struct item));
-	WFIFOSET(fd, len);
+	WFIFOHEAD(session, len, true);
+	WFIFOW(session, 0) = HEADER_WZ_PLAYER_STORAGE_ACK;
+	WFIFOW(session, 2) = (uint16) len;
+	WFIFOL(session, 4) = account_id;
+	size_t pos = offsetof(struct PACKET_WZ_PLAYER_STORAGE_ACK, item_list);
+	for(int i = 0; i < count; i++)
+		pos += mapif->send_item_data(session, pos, &VECTOR_INDEX(stor.item, i));
+	WFIFOSET(session, len);
 
 	VECTOR_CLEAR(stor.item);
-
-	return 1;
 }
 
 /**
+ * ZW_PLAYER_STORAGE
  * Parses account storage load request from map server.
- * @packet 0x3010 [in] <account_id>.L
- * @param  fd     [in] file/socket descriptor
- * @return 1 on success, 0 on failure.
- */
-static int mapif_parse_AccountStorageLoad(int fd)
+ **/
+static void mapif_parse_AccountStorageLoad(struct s_receive_action_data *act)
 {
-	int account_id = RFIFOL(fd, 2);
-
-	Assert_ret(fd > 0);
-	Assert_ret(account_id > 0);
-
-	mapif->account_storage_load(fd, account_id);
-
-	return 1;
+	mapif->account_storage_load(act->session, RFIFOL(act, 2));
 }
 
 /**
+ * ZW_PLAYER_STORAGE_SAVE
  * Parses an account storage save request from the map server.
- *
- * @code{.unparsed}
- *	@packet 0x3011 [in] <packet_len>.W <account_id>.L <struct item[]>.P
- * @endcode
- *
- * @attention If the size of packet 0x3011 changes,
- *            @ref MAX_STORAGE_ASSERT "the related static assertion check"
- *            in mmo.h needs to be adjusted, too.
- *
- * @see intif_send_account_storage()
- *
- * @param[in] fd The file/socket descriptor.
- * @retval 1 Success.
- * @retval 0 Failure.
- *
  **/
-static int mapif_parse_AccountStorageSave(int fd)
+static void mapif_parse_AccountStorageSave(struct s_receive_action_data *act)
 {
-	int payload_size = RFIFOW(fd, 2) - 8, account_id = RFIFOL(fd, 4);
-	int i = 0, count = 0;
+	int payload_size = RFIFOW(act, 2) - (sizeof(struct PACKET_ZW_PLAYER_STORAGE_SAVE)+sizeof(intptr));
+	int account_id   = RFIFOL(act, 4);
+
+	int count = payload_size / sizeof(struct item_packet_data);
+	if(payload_size <= 0 || count <= 0) {
+		mapif->sAccountStorageSaveAck(act->session, account_id, true);
+		return;
+	}
+
 	struct storage_data p_stor = { 0 };
 
-	Assert_ret(fd > 0);
-	Assert_ret(account_id > 0);
-
-	count = payload_size/sizeof(struct item);
-
 	VECTOR_INIT(p_stor.item);
-
-	if (count > 0) {
-		VECTOR_ENSURE(p_stor.item, count, 1);
-
-		for (i = 0; i < count; i++) {
-			const struct item *it = RFIFOP(fd, 8 + i * sizeof(struct item));
-
-			VECTOR_PUSH(p_stor.item, *it);
-		}
-
-		p_stor.aggregate = count;
-	}
+	VECTOR_ENSURE(p_stor.item, count, 1);
+	size_t pos = offsetof(struct PACKET_ZW_PLAYER_STORAGE_SAVE, item_list);
+	for(int i = 0; i < count; i++)
+		pos += mapif->parse_item_data(act, pos, &VECTOR_INDEX(p_stor.item, i));
+	p_stor.aggregate = count;
 
 	inter_storage->tosql(account_id, &p_stor);
 
 	VECTOR_CLEAR(p_stor.item);
 
-	mapif->sAccountStorageSaveAck(fd, account_id, true);
-
-	return 1;
+	mapif->sAccountStorageSaveAck(act->session, account_id, true);
 }
 
 /**
- * Sends an acknowledgement for the save
- * status of the account storage.
- * @packet 0x3808     [out] <account_id>.L <save_flag>.B
- * @param  fd         [in]  File/Socket Descriptor.
- * @param  account_id [in]  Account ID of the storage in question.
- * @param  flag       [in]  Save flag, true for success and false for failure.
+ * WZ_PLAYER_STORAGE_SAVE_ACK
+ * Sends an acknowledgement for the save status of the account storage.
  */
-static void mapif_send_AccountStorageSaveAck(int fd, int account_id, bool flag)
+static void mapif_send_AccountStorageSaveAck(struct socket_data *session, int account_id, bool flag)
 {
-	WFIFOHEAD(fd, 7);
-	WFIFOW(fd, 0) = 0x3808;
-	WFIFOL(fd, 2) = account_id;
-	WFIFOB(fd, 6) = flag ? 1 : 0;
-	WFIFOSET(fd, 7);
+	WFIFOHEAD(session, sizeof(struct PACKET_WZ_PLAYER_STORAGE_SAVE_ACK), true);
+	WFIFOW(session, 0) = HEADER_WZ_PLAYER_STORAGE_SAVE_ACK;
+	WFIFOL(session, 2) = account_id;
+	WFIFOB(session, 6) = flag ? 1 : 0;
+	WFIFOSET(session, sizeof(struct PACKET_WZ_PLAYER_STORAGE_SAVE_ACK));
 }
 
-static int mapif_parse_LoadGuildStorage(int fd)
+/**
+ * WZ_GUILD_STORAGE_SAVE
+ * Save guild storage request
+ **/
+static int mapif_parse_LoadGuildStorage(struct s_receive_action_data *act)
 {
-	RFIFOHEAD(fd);
-
-	mapif->load_guild_storage(fd, RFIFOL(fd, 2), RFIFOL(fd, 6), 1);
-
-	return 0;
+	mapif->load_guild_storage(act->session, RFIFOL(act, 2), RFIFOL(act, 6), 1);
 }
 
 /**
  * Parses a guild storage save request from the map server.
  *
- * @code{.unparsed}
- *	@packet 0x3019 [in] <packet_len>.W <account_id>.L <guild_id>.L {<struct item>.P}*<capacity>
- * @endcode
- *
- * @attention If the size of packet 0x3019 changes,
- *            @ref MAX_GUILD_STORAGE_ASSERT "the related static assertion check"
- *            in mmo.h needs to be adjusted, too.
- *
  * @see intif_send_guild_storage()
- *
- * @param[in] fd The file/socket descriptor.
- * @return Always 0.
- *
  **/
-static int mapif_parse_SaveGuildStorage(int fd)
+static void mapif_parse_SaveGuildStorage(struct s_receive_action_data *act)
 {
-	RFIFOHEAD(fd);
-	int len = RFIFOW(fd, 2);
-	int account_id = RFIFOL(fd, 4);
-	int guild_id = RFIFOL(fd, 8);
-	int storage_capacity = RFIFOL(fd, 12);
-	int storage_amount = RFIFOL(fd, 16);
-
-	int expected = 20 + sizeof(struct item) * storage_capacity;
-	if (expected != len) {
-		ShowError("mapif_parse_SaveGuildStorage: data size mismatch: %d != %d\n", len, expected);
-
-		mapif->save_guild_storage_ack(fd, account_id, guild_id, 1);
-		return 1;
-	}
+	int len              = RFIFOW(act, 2);
+	int account_id       = RFIFOL(act, 4);
+	int guild_id         = RFIFOL(act, 8);
 
 	struct guild_storage gstor = { 0 };
 
-	if (storage_capacity > 0) {
-		gstor.items.data = aCalloc(storage_capacity, sizeof gstor.items.data[0]);
-		memcpy(&gstor.items.data, RFIFOP(fd, 20), sizeof gstor.items.data[0] * storage_capacity);
+	int amount = (len - sizeof(intptr))/sizeof(struct item_packet_data);
+	if(!amount) {
+		// Nothing to save
+		mapif->save_guild_storage_ack(act->session, account_id, guild_id, 0);
+		return;
 	}
-	gstor.items.amount = storage_amount;
-	gstor.items.capacity = storage_capacity;
+	size_t pos = offsetof(struct PACKET_ZW_GUILD_STORAGE_SAVE, item_list);
+	gstor.items.data = aCalloc(amount, sizeof gstor.items.data[0]);
+	for(int i = 0; i < amount; i++)
+		pos += mapif->parse_item_data(act, pos, gstor.items.data);
+
+	gstor.items.amount   = amount;
+	gstor.items.capacity = amount;
 	gstor.guild_id = guild_id;
 
-	if (!inter_storage->guild_storage_tosql(guild_id, &gstor)) {
-		if (gstor.items.data != NULL)
-			aFree(gstor.items.data);
-		mapif->save_guild_storage_ack(fd, account_id, guild_id, 1);
-		return 1;
-	}
-
-	if (gstor.items.data != NULL)
-		aFree(gstor.items.data);
-	mapif->save_guild_storage_ack(fd, RFIFOL(fd, 4), guild_id, 0);
-	return 0;
+	bool result = inter_storage->guild_storage_tosql(guild_id, &gstor);
+	aFree(gstor.items.data);
+		
+	mapif->save_guild_storage_ack(act->session, account_id, guild_id, !result);
 }
 
 /*==========================================

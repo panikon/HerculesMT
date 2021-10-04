@@ -39,7 +39,6 @@ struct inter_storage_interface {
 	void (*sql_final) (void);
 	int (*delete_) (int account_id);
 	int (*guild_storage_delete) (int guild_id);
-	int (*parse_frommap) (int fd);
 	bool (*retrieve_bound_items) (int char_id, int account_id, int guild_id);
 };
 

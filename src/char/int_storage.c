@@ -274,8 +274,8 @@ static bool inter_storage_guild_storage_tosql(int guild_id, const struct guild_s
 /**
  * Loads `guild_storage` data to memory
  *
- * @param[in]  guild_id ID of the owner guild.
- * @param[out] gstor    Empty, allocated buffer to contain the loaded data.
+ * @param guild_id ID of the owner guild.
+ * @param gstor    Empty, allocated buffer to contain the loaded data (0 initialized).
  * @return Error code
  * @retval 0 in case of success
  *
@@ -288,9 +288,6 @@ static int inter_storage_guild_storage_fromsql(int guild_id, struct guild_storag
 	char *data;
 	int i, j;
 
-	nullpo_retr(1, gstor);
-
-	memset(gstor, 0, sizeof(struct guild_storage)); //clean up memory
 	gstor->guild_id = guild_id;
 
 	if (SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT `guild_id` FROM `%s` WHERE `guild_id`='%d'", guild_db, guild_id)) {
@@ -566,23 +563,6 @@ static bool inter_storage_retrieve_bound_items(int char_id, int account_id, int 
 	return true;
 }
 
-static int inter_storage_parse_frommap(int fd)
-{
-	RFIFOHEAD(fd);
-	switch(RFIFOW(fd,0)){
-		case 0x3010: mapif->pAccountStorageLoad(fd); break;
-		case 0x3011: mapif->pAccountStorageSave(fd); break;
-		case 0x3018: mapif->parse_LoadGuildStorage(fd); break;
-		case 0x3019: mapif->parse_SaveGuildStorage(fd); break;
-#ifdef GP_BOUND_ITEMS
-		case 0x3056: mapif->parse_ItemBoundRetrieve(fd); break;
-#endif
-		default:
-			return 0;
-	}
-	return 1;
-}
-
 void inter_storage_defaults(void)
 {
 	inter_storage = &inter_storage_s;
@@ -595,6 +575,5 @@ void inter_storage_defaults(void)
 	inter_storage->sql_final = inter_storage_sql_final;
 	inter_storage->delete_ = inter_storage_delete;
 	inter_storage->guild_storage_delete = inter_storage_guild_storage_delete;
-	inter_storage->parse_frommap = inter_storage_parse_frommap;
 	inter_storage->retrieve_bound_items = inter_storage_retrieve_bound_items;
 }
