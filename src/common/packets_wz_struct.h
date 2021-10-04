@@ -457,6 +457,124 @@ struct PACKET_WZ_PET_DELETE_ACK {
 } __attribute__((packed));
 DEFINE_PACKET_ID(WZ_PET_DELETE_ACK, 0x3883);
 
+/**
+ * Save reply
+ * @see mapif_quest_save_ack
+ **/
+struct PACKET_WZ_QUEST_SAVE_ACK {
+	int16 packet_id;
+	int32 char_id;
+	uint8 success;
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_QUEST_SAVE_ACK, 0x3861);
+
+/**
+ * Quest information
+ * @see mapif_send_quests
+ **/
+struct PACKET_WZ_QUEST_LOAD_ACK {
+	int16 packet_id;
+	int16 packet_len;
+	int32 char_id;
+	struct quest_packet_data *quest_list;
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_QUEST_LOAD_ACK, 0x3860);
+
+/**
+ * Inbox information
+ *
+ * @param opentype @see rodex_opentype
+ * @param flag     0 Open/Refresh
+ * @param flag     1 Next page
+ * @see mapif_rodex_sendinbox
+ **/
+struct PACKET_WZ_RODEX_INBOX_REQUEST_ACK {
+	int16 packet_id;
+	int16 packet_len;
+	int32 char_id;
+	uint8 opentype;
+	uint8 flag;
+	uint8 is_last;
+	uint8 is_first;
+	int32 limit;
+	int64 first_mail_id;
+	struct rodex_message_packet_data *data;
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_RODEX_INBOX_REQUEST_ACK, 0x3895);
+
+/**
+ * New mail flag
+ *
+ * @see mapif_rodex_sendhasnew
+ **/
+struct PACKET_WZ_RODEX_HASNEW_ACK {
+	int16 packet_id;
+	int32 char_id;
+	uint8 has_new;
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_RODEX_HASNEW_ACK, 0x3896);
+
+/**
+ * Send mail ack
+ *
+ * @param result BOOL Success
+ * @see mapif_rodex_send
+ **/
+struct PACKET_WZ_RODEX_SEND_ACK {
+	int16 packet_id;
+	int32 sender_char_id;
+	int32 receiver_char_id;
+	int32 receiver_account_id;
+	uint8 result;
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_RODEX_SEND_ACK, 0x3897);
+
+/**
+ * Player data request
+ *
+ * When L parameters are set to 0 the data was not found.
+ * @see mapif_parse_rodex_checkname
+ **/
+struct PACKET_WZ_RODEX_CHECK_ACK {
+	int16 packet_id;
+	int32 requester_char_id;
+	int32 target_char_id;
+	int32 target_class;
+	int32 target_level;
+	uint8 target_name[NAME_LENGTH];
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_RODEX_CHECK_ACK, 0x3898);
+
+/**
+ * Zeny request
+ *
+ * @param opentype @see rodex_opentype
+ * @see mapif_rodex_getzenyack
+ **/
+struct PACKET_WZ_RODEX_ZENY {
+	int16 packet_id;
+	int32 char_id;
+	int64 zeny;
+	int64 mail_id;
+	uint8 opentype;
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_RODEX_ZENY, 0x3899);
+
+/**
+ * Item request
+ *
+ * @param opentype @see rodex_opentype
+ * @see mapif_rodex_getzenyack
+ **/
+struct PACKET_WZ_RODEX_ITEM {
+	int16 packet_id;
+	int16 packet_len;
+	int32 char_id;
+	int64 mail_id;
+	uint8 opentype;
+	struct rodex_item_packet_data *items;
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_RODEX_ITEM, 0x389a);
 
 #if !defined(sun) && (!defined(__NETBSD__) || __NetBSD_Version__ >= 600000000) // NetBSD 5 and Solaris don't like pragma pack but accept the packed attribute
 #pragma pack(pop)

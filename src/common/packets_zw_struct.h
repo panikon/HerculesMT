@@ -141,12 +141,14 @@ enum inter_packet_zw_id {
 	// inter_quest_parse_frommap
 	0x3060, // mapif->parse_quest_load
 	0x3061, // mapif->parse_quest_save
+#endif
 	// inter_rodex_parse_frommap
-	0x3095, // mapif->parse_rodex_requestinbox
-    0x3096, // mapif->parse_rodex_checkhasnew(
-    0x3097, // mapif->parse_rodex_updatemail(f
-    0x3098, // mapif->parse_rodex_send(fd); br
-    0x3099, // mapif->parse_rodex_checkname(fd
+	HEADER_ZW_RODEX_INBOX_REQUEST = 0x3095, // mapif->parse_rodex_requestinbox
+	HEADER_ZW_RODEX_HASNEW        = 0x3096, // mapif->parse_rodex_checkhasnew(
+	HEADER_ZW_RODEX_UPDATE        = 0x3097, // mapif->parse_rodex_updatemail(f
+	HEADER_ZW_RODEX_SEND          = 0x3098, // mapif->parse_rodex_send(fd); br
+	HEADER_ZW_RODEX_CHECK         = 0x3099, // mapif->parse_rodex_checkname(fd
+#if 0
 	// inter_clan_parse_frommap
 	0x3044, // mapif->parse_ClanMemberCount
     0x3045, // mapif->parse_ClanMemberKick(
@@ -1226,6 +1228,129 @@ struct PACKET_ZW_PET_LOAD {
 	int32 account_id;
 	int32 char_id;
 	int32 pet_id;
+} __attribute__((packed));
+
+// @copydoc quest
+struct quest_packet_data {
+	int32 quest_id;
+	uint32 time;
+	int32 count[MAX_QUEST_OBJECTIVES];
+	uint8 state;
+} __attribute__((packed));
+
+/**
+ * Save all character quests
+ * @see mapif_parse_quest_save
+ **/
+struct PACKET_ZW_QUEST_SAVE {
+	int16 packet_id;
+	int16 packet_len;
+	int32 char_id;
+	struct quest_packet_data *quest_list;
+} __attribute__((packed));
+
+/**
+ * Load quest request
+ * @see mapif_parse_quest_load
+ **/
+struct PACKET_ZW_QUEST_LOAD {
+	int16 packet_id;
+	int32 char_id;
+} __attribute__((packed));
+
+// @copydoc rodex_item
+struct rodex_item_packet_data {
+	struct item_packet_data item;
+	int32 idx;
+} __attribute__((packed));
+
+// @copydoc rodex_message
+struct rodex_message_packet_data {
+	int64 id;
+	int32 sender_id;
+	uint8 sender_name[NAME_LENGTH];
+	int32 receiver_id;
+	int32 receiver_accountid;
+	uint8 receiver_name[NAME_LENGTH];
+	uint8 title[RODEX_TITLE_LENGTH];
+	uint8 body[RODEX_BODY_LENGTH];
+	struct rodex_item_packet_data items[RODEX_MAX_ITEM];
+	int64 zeny;
+	uint8 type;
+	int8 opentype;
+	uint8 is_read;
+	uint8 sender_read;
+	uint8 is_deleted;
+	int32 send_date;
+	int32 expire_date;
+	int32 weight;
+	int32 items_count;
+} __attribute__((packed));
+
+/**
+ * Load inbox request
+ *
+ * @param opentype @see rodex_opentype
+ * @param flag     0 Open/Refresh
+ * @param flag     1 Next page
+ * @param mail_id  First mail id
+ * @see mapif_parse_rodex_requestinbox
+ **/
+struct PACKET_ZW_RODEX_INBOX_REQUEST {
+	int16 packet_id;
+	int32 char_id;
+	int32 account_id;
+	uint8 flag;
+	uint8 opentype;
+	int64 mail_id;
+} __attribute__((packed));
+
+/**
+ * Has new mails request
+ *
+ * @see mapif_parse_rodex_checkhasnew
+ **/
+struct PACKET_ZW_RODEX_HASNEW {
+	int16 packet_id;
+	int32 char_id;
+	int32 account_id;
+} __attribute__((packed));
+
+/**
+ * Update mail data
+ *
+ * @param opentype @see rodex_opentype
+ * @param flag     @see rodex_updatemail_flag
+ * @see mapif_parse_rodex_updatemail
+ **/
+struct PACKET_ZW_RODEX_UPDATE {
+	int16 packet_id;
+	int32 account_id;
+	int32 char_id;
+	int64 mail_id;
+	uint8 opentype;
+	uint8 flag;
+} __attribute__((packed));
+
+/**
+ * Send mail
+ *
+ * @see mapif_parse_rodex_send
+ **/
+struct PACKET_ZW_RODEX_SEND {
+	int16 packet_id;
+	struct rodex_message_packet_data data;
+} __attribute__((packed));
+
+/**
+ * Player data request
+ *
+ * @see mapif_parse_rodex_checkname
+ **/
+struct PACKET_ZW_RODEX_CHECK {
+	int16 packet_id;
+	int32 requester_char_id;
+	uint8 target_name[NAME_LENGTH];
 } __attribute__((packed));
 
 #if !defined(sun) && (!defined(__NETBSD__) || __NetBSD_Version__ >= 600000000) // NetBSD 5 and Solaris don't like pragma pack but accept the packed attribute

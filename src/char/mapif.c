@@ -673,6 +673,39 @@ static int mapif_parse_item_data(struct s_receive_action_data *act, int pos, str
 	pos += SIZEOF_MEMBER(struct item_packet_data, option);
 }
 
+/**
+ * Writes provided item data to write buffer
+ *
+ * @param session Owner of the write buffer
+ * @param pos     Position to be written
+ * @param in      Item data
+ * @return Updated buffer position
+ *
+ * @remarks WFIFOHEAD must already have been called
+ **/
+static int mapif_send_item_data(struct socket_data *session, int pos, const struct item *in)
+{
+	pos += sizeof((WFIFOL(session, pos) = in->id));
+	pos += sizeof((WFIFOL(session, pos) = in->nameid));
+	pos += sizeof((WFIFOW(session, pos) = in->amount));
+	pos += sizeof((WFIFOL(session, pos) = in->equip));
+	pos += sizeof((WFIFOB(session, pos) = in->identify));
+	pos += sizeof((WFIFOB(session, pos) = in->refine));
+	pos += sizeof((WFIFOB(session, pos) = in->attribute));
+	memcpy(WFIFOP(session, pos), in->card,
+		SIZEOF_MEMBER(struct item_packet_data, card));
+	pos += SIZEOF_MEMBER(struct item_packet_data, card);
+	pos += sizeof((WFIFOL(session, pos) = in->expire_time));
+	pos += sizeof((WFIFOB(session, pos) = in->favorite));
+	pos += sizeof((WFIFOB(session, pos) = in->bound));
+	pos += sizeof((WFIFOQ(session, pos) = in->unique_id));
+	for(int i = 0; i < MAX_ITEM_OPTIONS; i++) {
+		pos += sizeof((WFIFOW(session, pos) = in->option[i].index));
+		pos += sizeof((WFIFOW(session, pos) = in->option[i].value));
+		pos += sizeof((WFIFOB(session, pos) = in->option[i].param));
+	}
+}
+
 /*======================================
  * MAPIF : AUCTION
  *--------------------------------------*/
@@ -2678,53 +2711,85 @@ static int mapif_parse_LoadPet(struct s_receive_action_data *act)
  * MAPIF : QUEST
  *------------------------------------------*/
 
-static void mapif_quest_save_ack(int fd, int char_id, bool success)
+/**
+ * WZ_QUEST_SAVE_ACK
+ * Save reply
+ **/
+static void mapif_quest_save_ack(struct socket_data *session, int char_id, bool success)
 {
-	WFIFOHEAD(fd, 7);
-	WFIFOW(fd, 0) = 0x3861;
-	WFIFOL(fd, 2) = char_id;
-	WFIFOB(fd, 6) = success ? 1 : 0;
-	WFIFOSET(fd, 7);
+	WFIFOHEAD(session, sizeof(struct PACKET_WZ_QUEST_SAVE_ACK), true);
+	WFIFOW(session, 0) = HEADER_WZ_QUEST_SAVE_ACK;
+	WFIFOL(session, 2) = char_id;
+	WFIFOB(session, 6) = success ? 1 : 0;
+	WFIFOSET(session, sizeof(struct PACKET_WZ_QUEST_SAVE_ACK));
 }
 
 /**
+ * ZW_QUEST_SAVE
  * Handles the save request from mapserver for a character's questlog.
  *
  * Received quests are saved, and an ack is sent back to the map server.
- *
- * @see inter_parse_frommap
  */
-static int mapif_parse_quest_save(int fd)
+static void mapif_parse_quest_save(struct s_receive_action_data *act)
 {
-	int num = (RFIFOW(fd, 2) - 8) / sizeof(struct quest);
-	int char_id = RFIFOL(fd, 4);
-	const struct quest *qd = NULL;
-	bool success;
+	int quest_len = RFIFOW(act, 2) - sizeof(struct PACKET_ZW_QUEST_SAVE) - sizeof(intptr);
+	int char_id = RFIFOL(act, 4);
+	Assert(quest_len >= 0 && "Invalid ZW_QUEST_SAVE length");
+	int quest_count = quest_len / sizeof(struct quest_packet_data);
 
-	if (num > 0)
-		qd = RFIFOP(fd,8);
-
-	success = inter_quest->save(char_id, qd, num);
-
+	bool success = true;
+	if(quest_len > 0) {
+		CREATE_BUFFER(quest_list, struct quest, quest_len);
+		size_t pos = offsetof(struct PACKET_ZW_QUEST_SAVE, quest_list);
+		Assert(pos + (sizeof(struct quest_packet_data)*quest_count) < RFIFOW(act, 2)
+			&& "Invalid quest count, overflow"); // Sanity check
+		for(int i = 0; i < quest_count; i++) {
+			pos += sizeof((quest_list[i].quest_id = RFIFOL(act, pos)));
+			pos += sizeof((quest_list[i].time = RFIFOL(act, pos)));
+			memcpy(quest_list[i].count, RFIFOP(act, pos),
+				SIZEOF_MEMBER(struct quest_packet_data, count));
+			pos += SIZEOF_MEMBER(struct quest_packet_data, count);
+			pos += sizeof((quest_list[i].state = RFIFOB(act, pos)));
+		}
+		success = inter_quest->save(char_id, quest_list, quest_count);
+		DELETE_BUFFER(quest_list);
+	}
 	// Send ack
-	mapif->quest_save_ack(fd, char_id, success);
-
-	return 0;
+	mapif->quest_save_ack(act->session, char_id, success);
 }
 
-static void mapif_send_quests(int fd, int char_id, struct quest *tmp_questlog, int num_quests)
+/**
+ * WZ_QUEST_LOAD_ACK
+ * Sends all loaded quests to the map-server
+ **/
+static void mapif_send_quests(struct socket_data *session, int char_id, struct quest *quest, int num_quests)
 {
-	WFIFOHEAD(fd,num_quests*sizeof(struct quest) + 8);
-	WFIFOW(fd, 0) = 0x3860;
-	WFIFOW(fd, 2) = num_quests*sizeof(struct quest) + 8;
-	WFIFOL(fd, 4) = char_id;
+	size_t len = sizeof(struct PACKET_WZ_QUEST_LOAD_ACK)-sizeof(intptr)
+		+ (sizeof(struct quest_packet_data)*num_quests);
+	WFIFOHEAD(session, len, true);
+	WFIFOW(session, 0) = HEADER_WZ_QUEST_LOAD_ACK;
+	WFIFOW(session, 2) = (uint16)len;
+	WFIFOL(session, 4) = char_id;
 
-	if (num_quests > 0) {
-		nullpo_retv(tmp_questlog);
-		memcpy(WFIFOP(fd, 8), tmp_questlog, sizeof(struct quest) * num_quests);
+	if(num_quests > 0) {
+		if(!quest) {
+			WFIFOW(session, 2) = sizeof(struct PACKET_WZ_QUEST_LOAD_ACK)-sizeof(intptr);
+			WFIFOSET(session, WFIFOW(session, 2));
+			ShowError("mapif_send_quests: Trying to send %d quests without any data\n",
+				num_quests);
+			return;
+		}
+		size_t pos = offsetof(struct PACKET_WZ_QUEST_LOAD_ACK, quest_list);
+		for(int i = 0; i < num_quests; i++) {
+			pos += sizeof((WFIFOL(session, pos) = quest[i].quest_id));
+			pos += sizeof((WFIFOL(session, pos) = quest[i].time));
+			memcpy(WFIFOP(session, pos), quest[i].count,
+				SIZEOF_MEMBER(struct quest_packet_data, count));
+			pos += SIZEOF_MEMBER(struct quest_packet_data, count);
+			pos += sizeof((WFIFOB(session, pos) = quest[i].state));
+		}
 	}
-
-	WFIFOSET(fd, num_quests * sizeof(struct quest) + 8);
+	WFIFOSET(session, len);
 }
 
 /**
@@ -2733,54 +2798,59 @@ static void mapif_send_quests(int fd, int char_id, struct quest *tmp_questlog, i
  * Note: Completed quests (state == Q_COMPLETE) are guaranteed to be sent last
  * and the map server relies on this behavior (once the first Q_COMPLETE quest,
  * all of them are considered to be Q_COMPLETE)
- *
- * @see inter_parse_frommap
  */
-static int mapif_parse_quest_load(int fd)
+static int mapif_parse_quest_load(struct s_receive_action_data *act)
 {
-	int char_id = RFIFOL(fd,2);
+	int char_id = RFIFOL(act, 2);
 	struct quest *tmp_questlog = NULL;
 	int num_quests;
 
 	tmp_questlog = inter_quest->fromsql(char_id, &num_quests);
-	mapif->send_quests(fd, char_id, tmp_questlog, num_quests);
+	mapif->send_quests(act->session, char_id, tmp_questlog, num_quests);
 
 	if (tmp_questlog != NULL)
 		aFree(tmp_questlog);
-
-	return 0;
 }
 
 /*==========================================
  * MAPIF : RoDEX
  *------------------------------------------*/
 
-/*==========================================
+/**
+ * ZW_RODEX_INBOX_REQUEST
  * Inbox Request
- *------------------------------------------*/
-static void mapif_parse_rodex_requestinbox(int fd)
+ **/
+static void mapif_parse_rodex_requestinbox(struct s_receive_action_data *act)
 {
 	int count;
-	int char_id = RFIFOL(fd,2);
-	int account_id = RFIFOL(fd, 6);
-	int8 flag = RFIFOB(fd, 10);
-	int8 opentype = RFIFOB(fd, 11);
-	int64 mail_id = RFIFOQ(fd, 12);
+	int char_id    = RFIFOL(act,  2);
+	int account_id = RFIFOL(act,  6);
+	int8 flag      = RFIFOB(act, 10);
+	int8 opentype  = RFIFOB(act, 11);
+	int64 mail_id  = RFIFOQ(act, 12);
 	struct rodex_maillist mails = { 0 };
 
 	VECTOR_INIT(mails);
-	if (flag == 0)
+	if (flag == 0) // Open / Refresh
 		count = inter_rodex->fromsql(char_id, account_id, opentype, 0, &mails);
-	else
+	else // Next page
 		count = inter_rodex->fromsql(char_id, account_id, opentype, mail_id, &mails);
-	mapif->rodex_sendinbox(fd, char_id, opentype, flag, count, mail_id, &mails);
+	mapif->rodex_sendinbox(act->session, char_id, opentype, flag, count, mail_id, &mails);
 	VECTOR_CLEAR(mails);
 }
 
-static void mapif_rodex_sendinbox(int fd, int char_id, int8 opentype, int8 flag, int count, int64 mail_id, struct rodex_maillist *mails)
-{
-	int per_packet = (UINT16_MAX - 24) / sizeof(struct rodex_message);
-	int sent = 0;
+/**
+ * WZ_RODEX_INBOX_REQUEST_ACK
+ * Sends inbox information
+ **/
+static void mapif_rodex_sendinbox(struct socket_data *session, int char_id,
+	int8 opentype, int8 flag, int count, int64 mail_id, const struct rodex_maillist *mails
+) {
+	// TODO: Implement per_packet check in other dynamic packets in inter-server comms [Panikon]
+	int packet_base_len = sizeof(struct PACKET_WZ_RODEX_INBOX_REQUEST_ACK) - sizeof(intptr);
+	int per_packet = (UINT16_MAX - packet_base_len) / sizeof(struct rodex_message_packet_data);
+
+	int sent = 0; // Mails already sent
 	bool is_first = true;
 	nullpo_retv(mails);
 	Assert_retv(char_id > 0);
@@ -2788,168 +2858,269 @@ static void mapif_rodex_sendinbox(int fd, int char_id, int8 opentype, int8 flag,
 	Assert_retv(mail_id >= 0);
 
 	do {
-		int i = 24, j, size, limit;
+		int limit; // Maximum number of mails per packet
+		int size;  // Current packet length
 		int to_send = count - sent;
 		bool is_last = true;
 
-		if (to_send <= per_packet) {
-			size = to_send * sizeof(struct rodex_message) + 24;
+		if(to_send <= per_packet) {
+			size = to_send * sizeof(struct rodex_message_packet_data) + packet_base_len;
 			limit = to_send;
 			is_last = true;
 		} else {
 			limit = min(to_send, per_packet);
-			if (limit != to_send) {
+			if(limit != to_send) {
 				is_last = false;
 			}
-			size = limit * sizeof(struct rodex_message) + 24;
+			size = limit * sizeof(struct rodex_message_packet_data) + packet_base_len;
 		}
 
-		WFIFOHEAD(fd, size);
-		WFIFOW(fd, 0) = 0x3895;
-		WFIFOW(fd, 2) = size;
-		WFIFOL(fd, 4) = char_id;
-		WFIFOB(fd, 8) = opentype;
-		WFIFOB(fd, 9) = flag;
-		WFIFOB(fd, 10) = is_last;
-		WFIFOB(fd, 11) = is_first;
-		WFIFOL(fd, 12) = limit;
-		WFIFOQ(fd, 16) = mail_id;
-		for (j = 0; j < limit; ++j, ++sent, i += sizeof(struct rodex_message)) {
-			memcpy(WFIFOP(fd, i), &VECTOR_INDEX(*mails, sent), sizeof(struct rodex_message));
+		WFIFOHEAD(session, size, true);
+		WFIFOW(session, 0) = HEADER_WZ_RODEX_INBOX_REQUEST_ACK;
+		WFIFOW(session, 2) = size;
+		WFIFOL(session, 4) = char_id;
+		WFIFOB(session, 8) = opentype;
+		WFIFOB(session, 9) = flag;
+		WFIFOB(session, 10) = is_last;
+		WFIFOB(session, 11) = is_first;
+		WFIFOL(session, 12) = limit;
+		WFIFOQ(session, 16) = mail_id;
+		// Mail data
+		size_t pos = offsetof(struct PACKET_WZ_RODEX_INBOX_REQUEST_ACK, data);
+		for(; sent < limit; sent++) {
+			struct rodex_message *mail = &VECTOR_INDEX(*mails, sent);
+			pos += sizeof((WFIFOQ(session, pos) = mail->id));
+			pos += sizeof((WFIFOL(session, pos) = mail->sender_id));
+			memcpy(WFIFOP(session, pos), mail->sender_name,
+				SIZEOF_MEMBER(struct rodex_message_packet_data, sender_name));
+			pos += SIZEOF_MEMBER(struct rodex_message_packet_data, sender_name);
+			pos += sizeof((WFIFOL(session, pos) = mail->receiver_id));
+			pos += sizeof((WFIFOL(session, pos) = mail->receiver_accountid));
+			memcpy(WFIFOP(session, pos), mail->receiver_name,
+				SIZEOF_MEMBER(struct rodex_message_packet_data, receiver_name));
+			pos += SIZEOF_MEMBER(struct rodex_message_packet_data, receiver_name);
+			memcpy(WFIFOP(session, pos), mail->title,
+				SIZEOF_MEMBER(struct rodex_message_packet_data, title));
+			pos += SIZEOF_MEMBER(struct rodex_message_packet_data, title);
+			memcpy(WFIFOP(session, pos), mail->body,
+				SIZEOF_MEMBER(struct rodex_message_packet_data, body));
+			pos += SIZEOF_MEMBER(struct rodex_message_packet_data, body);
+			for(int i = 0; i < RODEX_MAX_ITEM; i++) {
+				/**
+				 * TODO: Take into account items_count so we don't send RODEX_MAX_ITEM
+				 * every time, currently map-server expects all fields. [Panikon]
+				 **/
+				pos += mapif->send_item_data(session, pos, &mail->items[i].item);
+				pos += sizeof((WFIFOL(session, pos) = mail->items[i].idx));
+			}
+			pos += sizeof((WFIFOQ(session, pos) = mail->zeny));
+			pos += sizeof((WFIFOB(session, pos) = mail->type));
+			pos += sizeof((WFIFOB(session, pos) = mail->opentype));
+			pos += sizeof((WFIFOB(session, pos) = mail->is_read));
+			pos += sizeof((WFIFOB(session, pos) = mail->sender_read));
+			pos += sizeof((WFIFOB(session, pos) = mail->is_deleted));
+			pos += sizeof((WFIFOL(session, pos) = mail->send_date));
+			pos += sizeof((WFIFOL(session, pos) = mail->expire_date));
+			pos += sizeof((WFIFOL(session, pos) = mail->weight));
+			pos += sizeof((WFIFOL(session, pos) = mail->items_count));
 		}
-		WFIFOSET(fd, size);
+		WFIFOSET(session, size);
 
 		is_first = false;
 	} while (sent < count);
 }
 
-/*==========================================
+/**
+ * ZW_RODEX_HASNEW
  * Checks if there are new mails
- *------------------------------------------*/
-static void mapif_parse_rodex_checkhasnew(int fd)
+ **/
+static void mapif_parse_rodex_checkhasnew(struct s_receive_action_data *act)
 {
-	int char_id = RFIFOL(fd, 2);
-	int account_id = RFIFOL(fd, 6);
+	int char_id    = RFIFOL(act, 2);
+	int account_id = RFIFOL(act, 6);
 	bool has_new;
 
 	Assert_retv(account_id >= START_ACCOUNT_NUM && account_id <= END_ACCOUNT_NUM);
 	Assert_retv(char_id >= START_CHAR_NUM);
 
 	has_new = inter_rodex->hasnew(char_id, account_id);
-	mapif->rodex_sendhasnew(fd, char_id, has_new);
+	mapif->rodex_sendhasnew(act->session, char_id, has_new);
 }
 
-static void mapif_rodex_sendhasnew(int fd, int char_id, bool has_new)
+/**
+ * WZ_RODEX_HASNEW_ACK
+ * Sends new mail flag
+ **/
+static void mapif_rodex_sendhasnew(struct socket_data *session, int char_id, bool has_new)
 {
 	Assert_retv(char_id > 0);
 
-	WFIFOHEAD(fd, 7);
-	WFIFOW(fd, 0) = 0x3896;
-	WFIFOL(fd, 2) = char_id;
-	WFIFOB(fd, 6) = has_new;
-	WFIFOSET(fd, 7);
+	WFIFOHEAD(session, sizeof(struct PACKET_WZ_RODEX_HASNEW_ACK), true);
+	WFIFOW(session, 0) = HEADER_WZ_RODEX_HASNEW_ACK;
+	WFIFOL(session, 2) = char_id;
+	WFIFOB(session, 6) = has_new;
+	WFIFOSET(session, sizeof(struct PACKET_WZ_RODEX_HASNEW_ACK));
 }
 
-/*==========================================
+/**
+ * ZW_RODEX_UPDATE
  * Update/Delete mail
- *------------------------------------------*/
-static void mapif_parse_rodex_updatemail(int fd)
+ **/
+static void mapif_parse_rodex_updatemail(struct s_receive_action_data *act)
 {
-	int account_id = RFIFOL(fd, 2);
-	int char_id = RFIFOL(fd, 6);
-	int64 mail_id = RFIFOQ(fd, 10);
-	uint8 opentype = RFIFOB(fd, 18);
-	int8 flag = RFIFOB(fd, 19);
+	int account_id = RFIFOL(act, 2);
+	int char_id    = RFIFOL(act, 6);
+	int64 mail_id  = RFIFOQ(act, 10);
+	uint8 opentype = RFIFOB(act, 18);
+	int8 flag      = RFIFOB(act, 19);
 
-	inter_rodex->updatemail(fd, account_id, char_id, mail_id, opentype, flag);
+	inter_rodex->updatemail(act->session, account_id, char_id, mail_id, opentype, flag);
 }
 
-/*==========================================
+/**
+ * ZW_RODEX_SEND
  * Send Mail
- *------------------------------------------*/
-static void mapif_parse_rodex_send(int fd)
+ **/
+static void mapif_parse_rodex_send(struct s_receive_action_data *act)
 {
 	struct rodex_message msg = { 0 };
+	size_t pos = 2;
 
-	if (RFIFOW(fd,2) != 4 + sizeof(struct rodex_message))
-		return;
+	pos += sizeof((msg.id                          = RFIFOQ(act, pos)));
+	pos += sizeof((msg.sender_id                  = RFIFOL(act, pos)));
+	memcpy(msg.sender_name, RFIFOP(act, pos),
+		SIZEOF_MEMBER(struct rodex_message_packet_data, sender_name));
+	pos += SIZEOF_MEMBER(struct rodex_message_packet_data, sender_name);
+	pos += sizeof((msg.receiver_id                = RFIFOL(act, pos)));
+	pos += sizeof((msg.receiver_accountid         = RFIFOL(act, pos)));
+	memcpy(msg.receiver_name, RFIFOP(act, pos),
+		SIZEOF_MEMBER(struct rodex_message_packet_data, receiver_name));
+	pos += SIZEOF_MEMBER(struct rodex_message_packet_data, receiver_name);
+	memcpy(msg.title, RFIFOP(act, pos),
+		SIZEOF_MEMBER(struct rodex_message_packet_data, title));
+	pos += SIZEOF_MEMBER(struct rodex_message_packet_data, title);
+	memcpy(msg.body, RFIFOP(act, pos),
+		SIZEOF_MEMBER(struct rodex_message_packet_data, body));
+	for(int i = 0; i < RODEX_MAX_ITEM; i++) {
+		pos += mapif->parse_item_data(act, pos, &msg.items[i].item);
+		pos += sizeof((msg.items[i].idx = RFIFOL(act, pos)));
+	}
+	pos += sizeof((msg.zeny        = RFIFOQ(act, pos)));
+	pos += sizeof((msg.type        = RFIFOB(act, pos)));
+	pos += sizeof((msg.opentype    = RFIFOB(act, pos)));
+	pos += sizeof((msg.is_read     = RFIFOB(act, pos)));
+	pos += sizeof((msg.sender_read = RFIFOB(act, pos)));
+	pos += sizeof((msg.is_deleted  = RFIFOB(act, pos)));
+	pos += sizeof((msg.send_date   = RFIFOL(act, pos)));
+	pos += sizeof((msg.expire_date = RFIFOL(act, pos)));
+	pos += sizeof((msg.weight      = RFIFOL(act, pos)));
+	pos += sizeof((msg.items_count = RFIFOL(act, pos)));
 
-	memcpy(&msg, RFIFOP(fd,4), sizeof(struct rodex_message));
-	if (msg.receiver_id > 0 || msg.receiver_accountid > 0)
+	if(msg.receiver_id > 0 || msg.receiver_accountid > 0)
 		msg.id = inter_rodex->savemessage(&msg);
 
-	mapif->rodex_send(fd, msg.sender_id, msg.receiver_id, msg.receiver_accountid, msg.id > 0 ? true : false);
+	mapif->rodex_send(act->session, msg.sender_id, msg.receiver_id,
+		msg.receiver_accountid, msg.id > 0 ? true : false);
 }
 
-static void mapif_rodex_send(int fd, int sender_id, int receiver_id, int receiver_accountid, bool result)
-{
+/**
+ * WZ_RODEX_SEND_ACK
+ * Send mail ack
+ **/
+static void mapif_rodex_send(struct socket_data *session, int sender_id,
+	int receiver_id, int receiver_accountid, bool result
+) {
 	Assert_retv(sender_id >= 0);
 	Assert_retv(receiver_id + receiver_accountid > 0);
 
-	WFIFOHEAD(fd,15);
-	WFIFOW(fd,0) = 0x3897;
-	WFIFOL(fd,2) = sender_id;
-	WFIFOL(fd,6) = receiver_id;
-	WFIFOL(fd,10) = receiver_accountid;
-	WFIFOB(fd,14) = result;
-	WFIFOSET(fd,15);
+	WFIFOHEAD(session, sizeof(struct PACKET_WZ_RODEX_SEND_ACK), true);
+	WFIFOW(session,  0) = HEADER_WZ_RODEX_SEND_ACK;
+	WFIFOL(session,  2) = sender_id;
+	WFIFOL(session,  6) = receiver_id;
+	WFIFOL(session, 10) = receiver_accountid;
+	WFIFOB(session, 14) = result;
+	WFIFOSET(session, sizeof(struct PACKET_WZ_RODEX_SEND_ACK));
 }
 
-/*------------------------------------------
+/**
+ * ZW_RODEX_CHECK
  * Check Player
- *------------------------------------------*/
-static void mapif_parse_rodex_checkname(int fd)
+ * Tries to find player id / class / base level
+ **/
+static void mapif_parse_rodex_checkname(struct s_receive_action_data *act)
 {
-	int reqchar_id = RFIFOL(fd, 2);
 	char name[NAME_LENGTH];
 	int target_char_id, target_level;
 	int target_class;
 
-	safestrncpy(name, RFIFOP(fd, 6), NAME_LENGTH);
+	int reqchar_id = RFIFOL(act, 2);
+	safestrncpy(name, RFIFOP(act, 6), NAME_LENGTH);
 
-	if (inter_rodex->checkname(name, &target_char_id, &target_class, &target_level) == true)
-		mapif->rodex_checkname(fd, reqchar_id, target_char_id, target_class, target_level, name);
+	if(inter_rodex->checkname(name, &target_char_id, &target_class, &target_level) == true)
+		mapif->rodex_checkname(act->session, reqchar_id, target_char_id, target_class, target_level, name);
 	else
-		mapif->rodex_checkname(fd, reqchar_id, 0, 0, 0, name);
+		mapif->rodex_checkname(act->session, reqchar_id, 0, 0, 0, name);
 }
 
-static void mapif_rodex_checkname(int fd, int reqchar_id, int target_char_id, int target_class, int target_level, char *name)
-{
+/**
+ * WZ_RODEX_CHECK_ACK
+ * Sends requested player information
+ **/
+static void mapif_rodex_checkname(struct socket_data *session, int reqchar_id,
+	int target_char_id, int target_class, int target_level, const char *name
+) {
 	nullpo_retv(name);
 	Assert_retv(reqchar_id > 0);
 	Assert_retv(target_char_id >= 0);
 
-	WFIFOHEAD(fd, 18 + NAME_LENGTH);
-	WFIFOW(fd, 0) = 0x3898;
-	WFIFOL(fd, 2) = reqchar_id;
-	WFIFOL(fd, 6) = target_char_id;
-	WFIFOL(fd, 10) = target_class;
-	WFIFOL(fd, 14) = target_level;
-	safestrncpy(WFIFOP(fd, 18), name, NAME_LENGTH);
-	WFIFOSET(fd, 18 + NAME_LENGTH);
+	WFIFOHEAD(session, sizeof(struct PACKET_WZ_RODEX_CHECK_ACK), true);
+	WFIFOW(session, 0) = HEADER_WZ_RODEX_CHECK_ACK;
+	WFIFOL(session, 2) = reqchar_id;
+	WFIFOL(session, 6) = target_char_id;
+	WFIFOL(session, 10) = target_class;
+	WFIFOL(session, 14) = target_level;
+	safestrncpy(WFIFOP(session, 18), name, NAME_LENGTH);
+	WFIFOSET(session, sizeof(struct PACKET_WZ_RODEX_CHECK_ACK));
 }
 
-static void mapif_rodex_getzenyack(int fd, int char_id, int64 mail_id, uint8 opentype, int64 zeny)
-{
-	WFIFOHEAD(fd, 23);
-	WFIFOW(fd, 0) = 0x3899;
-	WFIFOL(fd, 2) = char_id;
-	WFIFOQ(fd, 6) = zeny;
-	WFIFOQ(fd, 14) = mail_id;
-	WFIFOB(fd, 22) = opentype;
-	WFIFOSET(fd, 23);
+/**
+ * WZ_RODEX_ZENY
+ * Zeny requested by `char_id`, answer to ZW_RODEX_UPDATE (RODEX_UPDATEMAIL_GET_ZENY)
+ **/
+static void mapif_rodex_getzenyack(struct socket_data *session, int char_id,
+	int64 mail_id, uint8 opentype, int64 zeny
+) {
+	WFIFOHEAD(session, sizeof(struct PACKET_WZ_RODEX_ZENY), true);
+	WFIFOW(session, 0) = HEADER_WZ_RODEX_ZENY;
+	WFIFOL(session, 2) = char_id;
+	WFIFOQ(session, 6) = zeny;
+	WFIFOQ(session, 14) = mail_id;
+	WFIFOB(session, 22) = opentype;
+	WFIFOSET(session, sizeof(struct PACKET_WZ_RODEX_ZENY));
 }
 
-static void mapif_rodex_getitemsack(int fd, int char_id, int64 mail_id, uint8 opentype, int count, const struct rodex_item *items)
-{
-	WFIFOHEAD(fd, 15 + sizeof(struct rodex_item) * RODEX_MAX_ITEM);
-	WFIFOW(fd, 0) = 0x389a;
-	WFIFOL(fd, 2) = char_id;
-	WFIFOQ(fd, 6) = mail_id;
-	WFIFOB(fd, 14) = opentype;
-	WFIFOB(fd, 15) = count;
-	memcpy(WFIFOP(fd, 16), items, sizeof(struct rodex_item) * RODEX_MAX_ITEM);
-	WFIFOSET(fd, 16 + sizeof(struct rodex_item) * RODEX_MAX_ITEM);
+/**
+ * WZ_RODEX_ITEM
+ * Items requested by `char_id`, answer to ZW_RODEX_UPDATE (RODEX_UPDATEMAIL_GET_ITEM)
+ **/
+static void mapif_rodex_getitemsack(struct socket_data *session, int char_id,
+	int64 mail_id, uint8 opentype, int count, const struct rodex_item *items
+) {
+	size_t len = sizeof(struct PACKET_WZ_RODEX_ITEM)-sizeof(intptr);
+	len += count * sizeof(struct rodex_item_packet_data);
+
+	WFIFOHEAD(session, len, true);
+	WFIFOW(session, 0) = HEADER_WZ_RODEX_ITEM;
+	WFIFOW(session, 2) = (uint16)len;
+	WFIFOL(session, 4) = char_id;
+	WFIFOQ(session, 9) = mail_id;
+	WFIFOB(session, 17) = opentype;
+	size_t pos = offsetof(struct PACKET_WZ_RODEX_ITEM, items);
+	for(int i = 0; i < count; i++) {
+		pos += mapif->send_item_data(session, pos, &items[i].item);
+		pos += sizeof((WFIFOL(session, pos) = items[i].idx));
+	}
+	WFIFOSET(session, len);
 }
 
 /*==========================================
@@ -3657,6 +3828,7 @@ void mapif_defaults(void)
 	mapif->send = mapif_send;
 
 	mapif->parse_item_data = mapif_parse_item_data;
+	mapif->send_item_data = mapif_send_item_data;
 	mapif->send_users_count = mapif_users_count;
 	mapif->pLoadAchievements = mapif_parse_load_achievements;
 	mapif->sAchievementsToMap = mapif_send_achievements_to_map;

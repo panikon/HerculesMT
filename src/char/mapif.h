@@ -90,6 +90,7 @@ struct mapif_interface {
 	void (*auth_failed) (struct socket_data *session, int account_id, int char_id, int login_id1, char sex, uint32 ip);
 	void (*login_map_server_ack) (struct socket_data *session, uint8 flag);
 	int (*parse_item_data) (struct s_receive_action_data *act, int pos, struct item *out);
+	int (*send_item_data) (struct socket_data *session, int pos, const struct item *in);
 
 	void (*send_users_count) (int users);
 	void (*pLoadAchievements) (int fd);
@@ -210,21 +211,23 @@ struct mapif_interface {
 	void (*parse_SavePet)   (struct s_receive_action_data *act);
 	void (*parse_DeletePet) (struct s_receive_action_data *act);
 
-	void (*quest_save_ack) (int fd, int char_id, bool success);
-	int (*parse_quest_save) (int fd);
-	void (*send_quests) (int fd, int char_id, struct quest *tmp_questlog, int num_quests);
-	int (*parse_quest_load) (int fd);
-	void (*parse_rodex_requestinbox) (int fd);
-	void (*rodex_sendinbox) (int fd, int char_id, int8 opentype, int8 flag, int count, int64 mail_id, struct rodex_maillist *mails);
-	void (*parse_rodex_checkhasnew) (int fd);
-	void (*rodex_sendhasnew) (int fd, int char_id, bool has_new);
-	void (*parse_rodex_updatemail) (int fd);
-	void (*parse_rodex_send) (int fd);
-	void (*rodex_send) (int fd, int sender_id, int receiver_id, int receiver_accountid, bool result);
-	void (*parse_rodex_checkname) (int fd);
-	void (*rodex_checkname) (int fd, int reqchar_id, int target_char_id, int target_class, int target_level, char *name);
-	void (*rodex_getzenyack) (int fd, int char_id, int64 mail_id, uint8 opentype, int64 zeny);
-	void (*rodex_getitemsack) (int fd, int char_id, int64 mail_id, uint8 opentype, int count, const struct rodex_item *items);
+	void (*quest_save_ack) (struct socket_data *session, int char_id, bool success);
+	void (*parse_quest_save) (struct s_receive_action_data *act);
+	void (*send_quests) (struct socket_data *session, int char_id, struct quest *quest, int num_quests);
+	void (*parse_quest_load) (struct s_receive_action_data *act);
+
+	void (*parse_rodex_requestinbox) (struct s_receive_action_data *act);
+	void (*rodex_sendinbox) (struct socket_data *session, int char_id, int8 opentype, int8 flag, int count, int64 mail_id, const struct rodex_maillist *mails);
+	void (*parse_rodex_checkhasnew) (struct s_receive_action_data *act);
+	void (*rodex_sendhasnew) (struct socket_data *session, int char_id, bool has_new);
+	void (*parse_rodex_updatemail) (struct s_receive_action_data *act);
+	void (*parse_rodex_send) (struct s_receive_action_data *act);
+	void (*rodex_send) (struct socket_data *session, int sender_id, int receiver_id, int receiver_accountid, bool result);
+	void (*parse_rodex_checkname) (struct s_receive_action_data *act);
+	void (*rodex_checkname)   (struct socket_data *session, int reqchar_id, int target_char_id, int target_class, int target_level, const char *name);
+	void (*rodex_getzenyack)  (struct socket_data *session, int char_id, int64 mail_id, uint8 opentype, int64 zeny);
+	void (*rodex_getitemsack) (struct socket_data *session, int char_id, int64 mail_id, uint8 opentype, int count, const struct rodex_item *items);
+
 	int (*load_guild_storage) (int fd, int account_id, int guild_id, char flag);
 	int (*save_guild_storage_ack) (struct s_receive_action_data *act, int account_id, int guild_id, int fail);
 	int (*parse_LoadGuildStorage) (struct s_receive_action_data *act);

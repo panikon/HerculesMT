@@ -2559,11 +2559,10 @@ static int intif_rodex_sendmail(struct rodex_message *msg)
 
 	nullpo_retr(0, msg);
 
-	WFIFOHEAD(inter_fd, 4 + sizeof(struct rodex_message));
+	WFIFOHEAD(inter_fd, 2 + sizeof(struct rodex_message));
 	WFIFOW(inter_fd, 0) = 0x3098;
-	WFIFOW(inter_fd, 2) = 4 + sizeof(struct rodex_message);
-	memcpy(WFIFOP(inter_fd, 4), msg, sizeof(struct rodex_message));
-	WFIFOSET(inter_fd, 4 + sizeof(struct rodex_message));
+	memcpy(WFIFOP(inter_fd, 2), msg, sizeof(struct rodex_message));
+	WFIFOSET(inter_fd, 2 + sizeof(struct rodex_message));
 
 	return 0;
 }

@@ -40,9 +40,17 @@
 static struct inter_rodex_interface inter_rodex_s;
 struct inter_rodex_interface *inter_rodex;
 
-// Loads new mails of this char_id/account_id
-static int inter_rodex_fromsql(int char_id, int account_id, int8 opentype, int64 mail_id, struct rodex_maillist *mails)
-{
+/**
+ * Loads new mails of this char_id/account_id
+ *
+ * @param mail_id  First mail_id of the list (can be 0)
+ * @param mails    VECTOR to be filled.
+ * @return Number of loaded e-mails (mails length)
+ * @retval -1 Error
+ **/
+static int inter_rodex_fromsql(int char_id, int account_id,
+	enum rodex_opentype opentype, int64 mail_id, struct rodex_maillist *mails
+) {
 	int count = 0;
 	struct rodex_message msg = { 0 };
 	struct SqlStmt *stmt;
@@ -106,6 +114,9 @@ static int inter_rodex_fromsql(int char_id, int account_id, int8 opentype, int64
 			return -1;
 		}
 		break;
+	default:
+		ShowError("inter_rodex_fromsql: Invalid opentype %d\n", opentype);
+		return -1;
 	}
 
 	if (SQL_ERROR == SQL->StmtExecute(stmt)
@@ -463,72 +474,60 @@ static int inter_rodex_getitems(int64 mail_id, struct rodex_item *items)
 /*==========================================
  * Update/Delete mail
  *------------------------------------------*/
-static bool inter_rodex_updatemail(int fd, int account_id, int char_id, int64 mail_id, uint8 opentype, int8 flag)
-{
-	Assert_retr(false, fd >= 0);
+/**
+ * Update/Delete mail
+ * @return BOOL Success
+ **/
+static bool inter_rodex_updatemail(struct socket_data *session, int account_id, int char_id,
+	int64 mail_id, uint8 opentype, enum rodex_updatemail_flag flag
+) {
 	Assert_retr(false, account_id > 0);
 	Assert_retr(false, char_id > 0);
 	Assert_retr(false, mail_id > 0);
 	Assert_retr(false, flag >= 0 && flag <= 4);
 
 	switch (flag) {
-	case 0: // Read
+	case RODEX_UPDATEMAIL_RECEIVER_READ:
 		if (SQL_ERROR == SQL->Query(inter->sql_handle, "UPDATE `%s` SET `is_read` = 1 WHERE `mail_id` = '%"PRId64"'", rodex_db, mail_id))
 			Sql_ShowDebug(inter->sql_handle);
 		break;
 
-	case 1: // Get Zeny
+	case RODEX_UPDATEMAIL_GET_ZENY:
 	{
 		const int64 zeny = inter_rodex->getzeny(mail_id);
 		if (SQL_ERROR == SQL->Query(inter->sql_handle, "UPDATE `%s` SET `zeny` = 0, `type` = `type` & (~2) WHERE `mail_id` = '%"PRId64"'", rodex_db, mail_id)) {
 			Sql_ShowDebug(inter->sql_handle);
 			break;
 		}
-		mapif->rodex_getzenyack(fd, char_id, mail_id, opentype, zeny);
+		mapif->rodex_getzenyack(session, char_id, mail_id, opentype, zeny);
 		break;
 	}
-	case 2: // Get Items
+	case RODEX_UPDATEMAIL_GET_ITEM:
 	{
 		struct rodex_item items[RODEX_MAX_ITEM];
 		const int count = inter_rodex->getitems(mail_id, &items[0]);
 		if (SQL_ERROR == SQL->Query(inter->sql_handle, "DELETE FROM `%s` WHERE `mail_id` = '%"PRId64"'", rodex_item_db, mail_id))
 			Sql_ShowDebug(inter->sql_handle);
-		mapif->rodex_getitemsack(fd, char_id, mail_id, opentype, count, &items[0]);
+		mapif->rodex_getitemsack(session, char_id, mail_id, opentype, count, &items[0]);
 		break;
 	}
-	case 3: // Delete Mail
+	case RODEX_UPDATEMAIL_DELETE:
 		if (SQL_ERROR == SQL->Query(inter->sql_handle, "DELETE FROM `%s` WHERE `mail_id` = '%"PRId64"'", rodex_db, mail_id))
 			Sql_ShowDebug(inter->sql_handle);
 		if (SQL_ERROR == SQL->Query(inter->sql_handle, "DELETE FROM `%s` WHERE `mail_id` = '%"PRId64"'", rodex_item_db, mail_id))
 			Sql_ShowDebug(inter->sql_handle);
 		break;
 
-	case 4: // Sender Read
+	case RODEX_UPDATEMAIL_SENDER_READ:
 		if (SQL_ERROR == SQL->Query(inter->sql_handle, "UPDATE `%s` SET `sender_read` = 1 WHERE `mail_id` = '%"PRId64"'", rodex_db, mail_id))
 			Sql_ShowDebug(inter->sql_handle);
 		break;
+
 	default:
+		ShowError("inter_rodex_update_mail: Unknown update flag %d\n", flag);
 		return false;
 	}
 	return true;
-}
-
-/*==========================================
- * Packets From Map Server
- *------------------------------------------*/
-static int inter_rodex_parse_frommap(int fd)
-{
-	switch(RFIFOW(fd,0))
-	{
-		case 0x3095: mapif->parse_rodex_requestinbox(fd); break;
-		case 0x3096: mapif->parse_rodex_checkhasnew(fd); break;
-		case 0x3097: mapif->parse_rodex_updatemail(fd); break;
-		case 0x3098: mapif->parse_rodex_send(fd); break;
-		case 0x3099: mapif->parse_rodex_checkname(fd); break;
-		default:
-			return 0;
-	}
-	return 1;
 }
 
 static int inter_rodex_sql_init(void)
@@ -546,7 +545,6 @@ void inter_rodex_defaults(void)
 	inter_rodex = &inter_rodex_s;
 
 	inter_rodex->savemessage = inter_rodex_savemessage;
-	inter_rodex->parse_frommap = inter_rodex_parse_frommap;
 	inter_rodex->sql_init = inter_rodex_sql_init;
 	inter_rodex->sql_final = inter_rodex_sql_final;
 	inter_rodex->fromsql = inter_rodex_fromsql;

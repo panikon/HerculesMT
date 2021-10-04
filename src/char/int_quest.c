@@ -238,27 +238,10 @@ static bool inter_quest_save(int char_id, const struct quest *new_qd, int new_n)
 	return success;
 }
 
-/**
- * Parses questlog related packets from the map server.
- *
- * @see inter_parse_frommap
- */
-static int inter_quest_parse_frommap(int fd)
-{
-	switch(RFIFOW(fd,0)) {
-		case 0x3060: mapif->parse_quest_load(fd); break;
-		case 0x3061: mapif->parse_quest_save(fd); break;
-		default:
-			return 0;
-	}
-	return 1;
-}
-
 void inter_quest_defaults(void)
 {
 	inter_quest = &inter_quest_s;
 
-	inter_quest->parse_frommap = inter_quest_parse_frommap;
 	inter_quest->fromsql = inter_quest_fromsql;
 	inter_quest->delete = inter_quest_delete;
 	inter_quest->add = inter_quest_add;
