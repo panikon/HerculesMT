@@ -39,10 +39,8 @@ struct inter_achievement_interface {
 	int (*tosql) (int char_id, struct char_achievements *cp, const struct char_achievements *p);
 	bool (*fromsql) (int char_id, struct char_achievements *a);
 	/* */
-	struct DBData(*ensure_char_achievements) (union DBKey key, va_list args);
-	int (*char_achievements_clear) (union DBKey key, struct DBData *data, va_list args);
-	/* */
-	int (*parse_frommap) (int fd);
+	struct DBData(*ensure_char_achievements) (const struct DBKey_s *key, va_list args);
+	int (*char_achievements_clear) (const struct DBKey_s *key, struct DBData *data, va_list args);
 };
 
 #ifdef HERCULES_CORE

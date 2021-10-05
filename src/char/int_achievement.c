@@ -166,29 +166,6 @@ static bool inter_achievement_fromsql(int char_id, struct char_achievements *cp)
 }
 
 /**
- * Handles checking of map server packets and calls appropriate functions.
- * @param fd   socket descriptor.
- * @return 0 on failure, 1 on succes.
- */
-static int inter_achievement_parse_frommap(int fd)
-{
-	RFIFOHEAD(fd);
-
-	switch (RFIFOW(fd,0)) {
-		case 0x3012:
-			mapif->pLoadAchievements(fd);
-			break;
-		case 0x3013:
-			mapif->pSaveAchievements(fd);
-			break;
-		default:
-			return 0;
-	}
-
-	return 1;
-}
-
-/**
  * Initialization function
  */
 static int inter_achievement_sql_init(void)
@@ -202,7 +179,7 @@ static int inter_achievement_sql_init(void)
 /**
  * This function ensures idb's entry.
  */
-static struct DBData inter_achievement_ensure_char_achievements(union DBKey key, va_list args)
+static struct DBData inter_achievement_ensure_char_achievements(const struct DBKey_s *key, va_list args)
 {
 	struct char_achievements *ca = NULL;
 
@@ -215,7 +192,7 @@ static struct DBData inter_achievement_ensure_char_achievements(union DBKey key,
 /**
  * Cleaning function called through db_destroy()
  */
-static int inter_achievement_char_achievements_clear(union DBKey key, struct DBData *data, va_list args)
+static int inter_achievement_char_achievements_clear(const struct DBKey_s *key, struct DBData *data, va_list args)
 {
 	struct char_achievements *ca = DB->data2ptr(data);
 
@@ -247,6 +224,5 @@ void inter_achievement_defaults(void)
 	inter_achievement->tosql = inter_achievement_tosql;
 	inter_achievement->fromsql = inter_achievement_fromsql;
 	/* */
-	inter_achievement->parse_frommap = inter_achievement_parse_frommap;
 	inter_achievement->char_achievements_clear = inter_achievement_char_achievements_clear;
 }

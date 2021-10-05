@@ -56,13 +56,13 @@ enum inter_packet_zw_id {
 	HEADER_ZW_WAN_UPDATE                    = 0x2736, // chr->parse_frommap_update_ip(act, server);
 	HEADER_ZW_STATUS_CHANGE_UPDATE          = 0x2740, // chr->parse_frommap_scdata_update(fd);
 	HEADER_ZW_STATUS_CHANGE_DELETE          = 0x2741, // chr->parse_frommap_scdata_delete(act);
-#if 0
+
 	// inter_parse_frommap
-	0x3004, // mapif->parse_Registry(act); break;
-    0x3005, // mapif->parse_RegistryRequest(act); break;
-    0x3006, // mapif->parse_NameChangeRequest(act); break;
-    0x3007, // mapif->parse_accinfo(act); break;
-#endif
+	HEADER_ZW_ACCOUNT_REG2    = 0x3004, // mapif->parse_Registry(act); break;
+	HEADER_ZW_ACCOUNT_REG_REQ = 0x3005, // mapif->parse_RegistryRequest(act); break;
+	HEADER_ZW_NAME_CHANGE     = 0x3006, // mapif->parse_NameChangeRequest(act); break;
+	HEADER_ZW_ACCINFO_REQUEST = 0x3007, // mapif->parse_accinfo(act); break;
+
 	// inter_party_parse_frommap
 	HEADER_ZW_PARTY_CREATE     = 0x3020, // mapif->parse_CreateParty(fd, R
 	HEADER_ZW_PARTY_INFO       = 0x3021, // mapif->parse_PartyInfo(fd, RFI
@@ -90,14 +90,14 @@ enum inter_packet_zw_id {
 	HEADER_ZW_GUILD_EMBLEM              = 0x303F, // mapif->parse_GuildEmblem(fd, RFIFO
 	HEADER_ZW_GUILD_CASTLE_LOAD         = 0x3040, // mapif->parse_GuildCastleDataLoad(f
 	HEADER_ZW_GUILD_CASTLE_SAVE         = 0x3041, // mapif->parse_GuildCastleDataSave(f
-#if 0
+
 	// inter_storage_parse_frommap
-	0x3010, // mapif->pAccountStorageLoad(fd); bre
-	0x3011, // mapif->pAccountStorageSave(fd); bre
-	0x3018, // mapif->parse_LoadGuildStorage(fd); 
-	0x3019, // mapif->parse_SaveGuildStorage(fd); 
-	0x3056, // mapif->parse_ItemBoundRetrieve(fd);
-#endif
+	HEADER_ZW_PLAYER_STORAGE      = 0x3010, // mapif->pAccountStorageLoad(fd); bre
+	HEADER_ZW_PLAYER_STORAGE_SAVE = 0x3011, // mapif->pAccountStorageSave(fd); bre
+	HEADER_ZW_GUILD_STORAGE_LOAD  = 0x3018, // mapif->parse_LoadGuildStorage(fd); 
+	HEADER_ZW_GUILD_STORAGE_SAVE  = 0x3019, // mapif->parse_SaveGuildStorage(fd); 
+	HEADER_ZW_BOUND_RETRIEVE      = 0x3056, // mapif->parse_ItemBoundRetrieve(fd);
+
 	// inter_pet_parse_frommap
 	HEADER_ZW_PET_CREATE = 0x3080, // mapif->parse_CreatePet
 	HEADER_ZW_PET_LOAD   = 0x3081, // mapif->parse_LoadPet(f
@@ -136,25 +136,25 @@ enum inter_packet_zw_id {
 	HEADER_ZW_AUCTION_CANCEL       = 0x3052, // mapif->parse_auction_cancel(act)
 	HEADER_ZW_AUCTION_CLOSE        = 0x3053, // mapif->parse_auction_close(act);
 	HEADER_ZW_AUCTION_BID_ACK      = 0x3055, // mapif->parse_auction_bid(act); b
-#if 0
+
 	// inter_quest_parse_frommap
-	0x3060, // mapif->parse_quest_load
-	0x3061, // mapif->parse_quest_save
-#endif
+	HEADER_ZW_QUEST_LOAD = 0x3060, // mapif->parse_quest_load
+	HEADER_ZW_QUEST_SAVE = 0x3061, // mapif->parse_quest_save
+
 	// inter_rodex_parse_frommap
 	HEADER_ZW_RODEX_INBOX_REQUEST = 0x3095, // mapif->parse_rodex_requestinbox
 	HEADER_ZW_RODEX_HASNEW        = 0x3096, // mapif->parse_rodex_checkhasnew(
 	HEADER_ZW_RODEX_UPDATE        = 0x3097, // mapif->parse_rodex_updatemail(f
 	HEADER_ZW_RODEX_SEND          = 0x3098, // mapif->parse_rodex_send(fd); br
 	HEADER_ZW_RODEX_CHECK         = 0x3099, // mapif->parse_rodex_checkname(fd
-#if 0
+
 	// inter_clan_parse_frommap
-	0x3044, // mapif->parse_ClanMemberCount
-    0x3045, // mapif->parse_ClanMemberKick(
+	HEADER_ZW_CLAN_COUNT = 0x3044, // mapif->parse_ClanMemberCount
+	HEADER_ZW_CLAN_KICK  = 0x3045, // mapif->parse_ClanMemberKick(
+
 	// inter_achievement_parse_frommap
-	0x3012, // mapif->pLoadAchievements
-	0x3013, // mapif->pSaveAchievements
-#endif // 0
+	HEADER_ZW_ACHIEVEMENT_LOAD = 0x3012, // mapif->pLoadAchievements
+	HEADER_ZW_ACHIEVEMENT_SAVE = 0x3013, // mapif->pSaveAchievements
 };
 
 #if !defined(sun) && (!defined(__NETBSD__) || __NetBSD_Version__ >= 600000000) // NetBSD 5 and Solaris don't like pragma pack but accept the packed attribute
@@ -1375,11 +1375,11 @@ struct PACKET_ZW_PLAYER_STORAGE_SAVE {
 } __attribute__((packed));
 
 /**
- * Guild storage save request
+ * Guild storage load request
  *
  * @see mapif_parse_LoadGuildStorage
  **/
-struct PACKET_WZ_GUILD_STORAGE_SAVE {
+struct PACKET_WZ_GUILD_STORAGE_LOAD {
 	int16 packet_id;
 	int32 account_id;
 	int32 guild_id;
@@ -1492,6 +1492,58 @@ struct PACKET_ZW_NAME_CHANGE {
 	int32 target_id;
 	uint8 type;
 	uint8 name[NAME_LENGTH];
+} __attribute__((packed));
+
+/**
+ * Kick all inactive clan members
+ *
+ * @see mapif_parse_ClanMemberKick
+ **/
+struct PACKET_ZW_CLAN_KICK {
+	int16 packet_id;
+	int32 clan_id;
+	int32 kick_interval;
+} __attribute__((packed));
+
+/**
+ * Count active members of a clan
+ *
+ * @see mapif_parse_ClanMemberCount
+ **/
+struct PACKET_ZW_CLAN_COUNT {
+	int16 packet_id;
+	int32 clan_id;
+	int32 kick_interval;
+} __attribute__((packed));
+
+// @copydoc achievement
+struct achievement_packet_data {
+	int32 id;
+	int32 objective[MAX_ACHIEVEMENT_OBJECTIVES];
+	uint64 completed_at;
+	uint64 rewarded_at;
+} __attribute__((packed));
+
+/**
+ * Achievement load request
+ *
+ * @see mapif_parse_load_achievements
+ **/
+struct PACKET_ZW_ACHIEVEMENT_LOAD {
+	int16 packet_id;
+	int32 char_id;
+} __attribute__((packed));
+
+/**
+ * Achievement save request
+ *
+ * @see mapif_parse_save_achievements
+ **/
+struct PACKET_ZW_ACHIEVEMENT_SAVE {
+	int16 packet_id;
+	int16 packet_len;
+	int32 char_id;
+	struct achievement_packet_data *data;
 } __attribute__((packed));
 
 #if !defined(sun) && (!defined(__NETBSD__) || __NetBSD_Version__ >= 600000000) // NetBSD 5 and Solaris don't like pragma pack but accept the packed attribute

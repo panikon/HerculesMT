@@ -123,33 +123,10 @@ static int inter_clan_count_members(int clan_id, int kick_interval)
 	return count;
 }
 
-// Communication from the map server
-// - Can analyzed only one by one packet
-// Data packet length that you set to inter.c
-//- Shouldn't do checking and packet length, RFIFOSKIP is done by the caller
-// Must Return
-//  1 : ok
-//  0 : error
-static int inter_clan_parse_frommap(int fd)
-{
-	RFIFOHEAD(fd);
-
-	switch(RFIFOW(fd, 0)) {
-	case 0x3044: mapif->parse_ClanMemberCount(fd, RFIFOL(fd, 2), RFIFOL(fd, 6)); break;
-	case 0x3045: mapif->parse_ClanMemberKick(fd, RFIFOL(fd, 2), RFIFOL(fd, 6)); break;
-
-	default:
-		return 0;
-	}
-
-	return 1;
-}
-
 void inter_clan_defaults(void)
 {
 	inter_clan = &inter_clan_s;
 
 	inter_clan->kick_inactive_members = inter_clan_kick_inactive_members;
 	inter_clan->count_members = inter_clan_count_members;
-	inter_clan->parse_frommap = inter_clan_parse_frommap;
 }

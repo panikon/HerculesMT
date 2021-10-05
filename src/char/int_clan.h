@@ -28,7 +28,6 @@
 struct inter_clan_interface {
 	int (*kick_inactive_members) (int clan_id, int kick_interval);
 	int (*count_members) (int clan_id, int kick_interval);
-	int (*parse_frommap) (int fd);
 };
 
 #ifdef HERCULES_CORE

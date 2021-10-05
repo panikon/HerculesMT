@@ -978,8 +978,7 @@ static void mapif_parse_auction_bid(struct s_receive_action_data *act)
 	int char_id             = RFIFOL(act, 4);
 	unsigned int auction_id = RFIFOL(act, 8);
 	int bid                 = RFIFOL(act, 12);
-	struct auction_data *auction =
-		(struct auction_data *)idb_get(inter_auction->db, auction_id);
+	struct auction_data *auction = idb_get(inter_auction->db, auction_id);
 
 	if(auction == NULL || auction->price >= bid || auction->seller_id == char_id) {
 		mapif->auction_bid(act->session, char_id, bid, AUCTIONRESULT_BID_FAILED);
@@ -1543,7 +1542,7 @@ static void mapif_parse_GuildChangeMemberInfoShort(struct s_receive_action_data 
  **/
 static void mapif_parse_GuildMemberInfoChange(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
-	int field_length = RFIFOW(act,2) - sizeof(struct PACKET_ZW_GUILD_MEMBER_UPDATE_FIELD) - sizeof(intptr);
+	int field_length = RFIFOW(act,2) - (sizeof(struct PACKET_ZW_GUILD_MEMBER_UPDATE_FIELD) - sizeof(intptr));
 	Assert(field_length > 0 && "Malformed ZW_GUILD_MEMBER_UPDATE_FIELD");
 	inter_guild->update_member_info(RFIFOL(act, 4), RFIFOL(act, 8),
 		RFIFOL(act, 12), RFIFOW(act, 16), RFIFOP(act, 18), field_length);
@@ -1565,7 +1564,7 @@ static void mapif_parse_BreakGuild(struct s_receive_action_data *act, struct mmo
  **/
 static void mapif_parse_GuildBasicInfoChange(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
-	int field_length = RFIFOW(act,2) - sizeof(struct PACKET_ZW_GUILD_INFO_UPDATE) - sizeof(intptr);
+	int field_length = RFIFOW(act,2) - (sizeof(struct PACKET_ZW_GUILD_INFO_UPDATE) - sizeof(intptr));
 	Assert(field_length > 0 && "Malformed PACKET_ZW_GUILD_INFO_UPDATE");
 	inter_guild->update_basic_info(RFIFOL(act, 4), RFIFOW(act, 8),
 		RFIFOP(act, 10), field_length);
@@ -1625,7 +1624,7 @@ static void mapif_parse_GuildNotice(struct s_receive_action_data *act, struct mm
  **/
 static void mapif_parse_GuildEmblem(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
-	int emblem_len = RFIFOW(act, 2) - sizeof(struct PACKET_ZW_GUILD_EMBLEM)-sizeof(intptr);
+	int emblem_len = RFIFOW(act, 2) - (sizeof(struct PACKET_ZW_GUILD_EMBLEM)-sizeof(intptr));
 	Assert(emblem_len > 0 && "Malformed ZW_GUILD_EMBLEM");
 	inter_guild->update_emblem(RFIFOL(act, 4), RFIFOP(act, 8), emblem_len);
 }
@@ -1636,7 +1635,7 @@ static void mapif_parse_GuildEmblem(struct s_receive_action_data *act, struct mm
  **/
 static void mapif_parse_GuildCastleDataLoad(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
-	int castle_count = RFIFOW(act,2) - sizeof(struct PACKET_ZW_GUILD_CASTLE_LOAD) - sizeof(intptr);
+	int castle_count = RFIFOW(act,2) - (sizeof(struct PACKET_ZW_GUILD_CASTLE_LOAD) - sizeof(intptr));
 	castle_count = castle_count/sizeof(int32);
 	mapif->guild_castle_dataload(act->session, RFIFOP(act, 4), castle_count);
 }
@@ -1992,7 +1991,7 @@ static void mapif_parse_mail_return(struct s_receive_action_data *act)
  * WZ_MAIL_SEND_ACK 0x384d <len>.W <mail_message>.*
  * Answer to send request
  **/
-static void mapif_mail_send(struct socket_data *session, struct mail_message* msg)
+static void mapif_mail_send(struct socket_data *session, const struct mail_message* msg)
 {
 	int len = sizeof(struct mail_message) + 4;
 
@@ -2700,7 +2699,7 @@ static void mapif_quest_save_ack(struct socket_data *session, int char_id, bool 
  */
 static void mapif_parse_quest_save(struct s_receive_action_data *act)
 {
-	int quest_len = RFIFOW(act, 2) - sizeof(struct PACKET_ZW_QUEST_SAVE) - sizeof(intptr);
+	int quest_len = RFIFOW(act, 2) - (sizeof(struct PACKET_ZW_QUEST_SAVE) - sizeof(intptr));
 	int char_id = RFIFOL(act, 4);
 	Assert(quest_len >= 0 && "Invalid ZW_QUEST_SAVE length");
 	int quest_count = quest_len / sizeof(struct quest_packet_data);
@@ -2761,6 +2760,7 @@ static void mapif_send_quests(struct socket_data *session, int char_id, struct q
 }
 
 /**
+ * ZW_QUEST_LOAD
  * Sends questlog to the map server
  *
  * Note: Completed quests (state == Q_COMPLETE) are guaranteed to be sent last
@@ -2954,7 +2954,7 @@ static void mapif_parse_rodex_send(struct s_receive_action_data *act)
 	struct rodex_message msg = { 0 };
 	size_t pos = 2;
 
-	pos += sizeof((msg.id                          = RFIFOQ(act, pos)));
+	pos += sizeof((msg.id                         = RFIFOQ(act, pos)));
 	pos += sizeof((msg.sender_id                  = RFIFOL(act, pos)));
 	memcpy(msg.sender_name, RFIFOP(act, pos),
 		SIZEOF_MEMBER(struct rodex_message_packet_data, sender_name));
@@ -3199,7 +3199,7 @@ static void mapif_parse_AccountStorageLoad(struct s_receive_action_data *act)
  **/
 static void mapif_parse_AccountStorageSave(struct s_receive_action_data *act)
 {
-	int payload_size = RFIFOW(act, 2) - (sizeof(struct PACKET_ZW_PLAYER_STORAGE_SAVE)+sizeof(intptr));
+	int payload_size = RFIFOW(act, 2) - (sizeof(struct PACKET_ZW_PLAYER_STORAGE_SAVE)-sizeof(intptr));
 	int account_id   = RFIFOL(act, 4);
 
 	int count = payload_size / sizeof(struct item_packet_data);
@@ -3215,6 +3215,7 @@ static void mapif_parse_AccountStorageSave(struct s_receive_action_data *act)
 	size_t pos = offsetof(struct PACKET_ZW_PLAYER_STORAGE_SAVE, item_list);
 	for(int i = 0; i < count; i++)
 		pos += mapif->parse_item_data(act, pos, &VECTOR_INDEX(p_stor.item, i));
+	VECTOR_LENGTH(p_stor.item) = count;
 	p_stor.aggregate = count;
 
 	inter_storage->tosql(account_id, &p_stor);
@@ -3238,8 +3239,8 @@ static void mapif_send_AccountStorageSaveAck(struct socket_data *session, int ac
 }
 
 /**
- * WZ_GUILD_STORAGE_SAVE
- * Save guild storage request
+ * ZW_GUILD_STORAGE_LOAD
+ * Load guild storage request
  **/
 static int mapif_parse_LoadGuildStorage(struct s_receive_action_data *act)
 {
@@ -3247,6 +3248,7 @@ static int mapif_parse_LoadGuildStorage(struct s_receive_action_data *act)
 }
 
 /**
+ * ZW_GUILD_STORAGE_SAVE
  * Parses a guild storage save request from the map server.
  *
  * @see intif_send_guild_storage()
@@ -3259,7 +3261,8 @@ static void mapif_parse_SaveGuildStorage(struct s_receive_action_data *act)
 
 	struct guild_storage gstor = { 0 };
 
-	int amount = (len - sizeof(intptr))/sizeof(struct item_packet_data);
+	len -= sizeof(struct PACKET_ZW_GUILD_STORAGE_SAVE)-sizeof(intptr);
+	int amount = len/sizeof(struct item_packet_data);
 	if(!amount) {
 		// Nothing to save
 		mapif->save_guild_storage_ack(act->session, account_id, guild_id, 0);
@@ -3509,59 +3512,59 @@ static void mapif_parse_NameChangeRequest(struct s_receive_action_data *act)
  * MAPIF : CLAN
  *------------------------------------------*/
 
-// Clan System
-static int mapif_parse_ClanMemberKick(int fd, int clan_id, int kick_interval)
+/**
+ * WZ_CLAN_KICK_ACK
+ * Update clan member count
+ **/
+static void mapif_ClanMemberKick_ack(struct socket_data *session, int clan_id, int count)
 {
-	int count = 0;
-
-	if (inter_clan->kick_inactive_members(clan_id, kick_interval) == 1)
-		count = inter_clan->count_members(clan_id, kick_interval);
-
-	WFIFOHEAD(fd, 10);
-	WFIFOW(fd, 0) = 0x3858;
-	WFIFOL(fd, 2) = clan_id;
-	WFIFOL(fd, 6) = count;
-	WFIFOSET(fd, 10);
-	return 0;
+	WFIFOHEAD(session, sizeof(struct PACKET_WZ_CLAN_KICK_ACK), true);
+	WFIFOW(session, 0) = HEADER_WZ_CLAN_KICK_ACK;
+	WFIFOL(session, 2) = clan_id;
+	WFIFOL(session, 6) = count;
+	WFIFOSET(session, sizeof(struct PACKET_WZ_CLAN_KICK_ACK));
 }
 
-static int mapif_parse_ClanMemberCount(int fd, int clan_id, int kick_interval)
+/**
+ * ZW_CLAN_KICK
+ * Kick all inactive clan members
+ **/
+static void mapif_parse_ClanMemberKick(struct s_receive_action_data *act)
 {
-	WFIFOHEAD(fd, 10);
-	WFIFOW(fd, 0) = 0x3858;
-	WFIFOL(fd, 2) = clan_id;
-	WFIFOL(fd, 6) = inter_clan->count_members(clan_id, kick_interval);
-	WFIFOSET(fd, 10);
-	return 0;
+	int clan_id       = RFIFOL(act, 2);
+	int kick_interval = RFIFOL(act, 6);
+	int count = 0;
+
+	if(inter_clan->kick_inactive_members(clan_id, kick_interval) == 1)
+		count = inter_clan->count_members(clan_id, kick_interval);
+
+	mapif->ClanMemberKick_ack(act->session, clan_id, count);
+}
+
+/**
+ * ZW_CLAN_COUNT
+ * Count active members of a clan
+ **/
+static void mapif_parse_ClanMemberCount(struct s_receive_action_data *act)
+{
+	int clan_id       = RFIFOL(act, 2);
+	int kick_interval = RFIFOL(act, 6);
+	mapif->ClanMemberKick_ack(act->session,
+		clan_id, inter_clan->count_members(clan_id, kick_interval));
 }
 
 /*==========================================
  * MAPIF : ACHIEVEMENT
  *------------------------------------------*/
-// Achievement System
+
 /**
+ * ZW_ACHIEVEMENT_LOAD 
  * Parse achievement load request from the map server
- * @param[in] fd  socket descriptor.
- */
-static void mapif_parse_load_achievements(int fd)
+ **/
+static void mapif_parse_load_achievements(struct s_receive_action_data *act)
 {
-	int char_id = 0;
+	int char_id = RFIFOL(act, 2);
 
-	/* Read received information from map-server. */
-	RFIFOHEAD(fd);
-	char_id = RFIFOL(fd, 2);
-
-	/* Load and send achievements to map */
-	mapif->achievement_load(fd, char_id);
-}
-
-/**
- * Loads achievements and sends to the map server.
- * @param[in] fd       socket descriptor
- * @param[in] char_id  character Id.
- */
-static void mapif_achievement_load(int fd, int char_id)
-{
 	struct char_achievements *cp = NULL;
 
 	/* Ensure data exists */
@@ -3571,62 +3574,74 @@ static void mapif_achievement_load(int fd, int char_id)
 	inter_achievement->fromsql(char_id, cp);
 
 	/* Send Achievements to map server. */
-	mapif->sAchievementsToMap(fd, char_id, cp);
+	mapif->sAchievementsToMap(act->session, char_id, cp);
 }
 
 /**
  * Sends achievement data of a character to the map server.
  * @packet[out] 0x3810  <packet_id>.W <payload_size>.W <char_id>.L <char_achievements[]>.P
- * @param[in]  fd      socket descriptor.
  * @param[in]  char_id Character ID.
  * @param[in]  cp      Pointer to character's achievement data vector.
  */
-static void mapif_send_achievements_to_map(int fd, int char_id, const struct char_achievements *cp)
-{
-	int i = 0;
-	int data_size = 0;
+static void mapif_send_achievements_to_map(struct socket_data *session,
+	int char_id, const struct char_achievements *cp
+) {
+	int packet_len = 0;
 
-	nullpo_retv(cp);
+	packet_len = sizeof(struct achievement_packet_data) * VECTOR_LENGTH(*cp)
+		+ sizeof(struct PACKET_WZ_ACHIEVEMENT_LOAD_ACK) - sizeof(intptr);
 
-	data_size = sizeof(struct achievement) * VECTOR_LENGTH(*cp);
-
-STATIC_ASSERT((sizeof(struct achievement) * MAX_ACHIEVEMENT_DB + 8 <= UINT16_MAX),
-	"The achievements data can potentially be larger than the maximum packet size. This may cause errors at run-time.");
+STATIC_ASSERT((sizeof(struct achievement_packet_data) * MAX_ACHIEVEMENT_DB
+	+ sizeof(struct PACKET_WZ_ACHIEVEMENT_LOAD_ACK) - sizeof(intptr) <= UINT16_MAX),
+	"The achievements data can potentially be larger than the maximum packet size. "
+	"This may cause errors at run-time.");
 
 	/* Send to the map server. */
-	WFIFOHEAD(fd, (8 + data_size));
-	WFIFOW(fd, 0) = 0x3810;
-	WFIFOW(fd, 2) = (8 + data_size);
-	WFIFOL(fd, 4) = char_id;
-	for (i = 0; i < VECTOR_LENGTH(*cp); i++)
-		memcpy(WFIFOP(fd, 8 + i * sizeof(struct achievement)), &VECTOR_INDEX(*cp, i), sizeof(struct achievement));
-	WFIFOSET(fd, 8 + data_size);
+	WFIFOHEAD(session, packet_len, true);
+	WFIFOW(session, 0) = HEADER_WZ_ACHIEVEMENT_LOAD_ACK;
+	WFIFOW(session, 2) = packet_len;
+	WFIFOL(session, 4) = char_id;
+	size_t pos = offsetof(struct PACKET_WZ_ACHIEVEMENT_LOAD_ACK, data);
+	for(int i = 0; i < VECTOR_LENGTH(*cp); i++) {
+		struct achievement *a = &VECTOR_INDEX(*cp, i);
+		pos += sizeof((WFIFOL(session, pos) = a->id));
+		memcpy(WFIFOP(session, pos), a->objective,
+			SIZEOF_MEMBER(struct achievement_packet_data, objective));
+		pos += SIZEOF_MEMBER(struct achievement_packet_data, objective);
+		pos += sizeof((WFIFOQ(session, pos) = a->completed_at));
+		pos += sizeof((WFIFOQ(session, pos) = a->rewarded_at));
+	}
+	WFIFOSET(session, packet_len);
 }
 
 /**
+ * ZW_ACHIEVEMENT_SAVE
  * Handles achievement request and saves data from map server.
  * @packet[in] 0x3013 <packet_size>.W <char_id>.L <char_achievement>.P
- * @param[in]  fd     session socket descriptor.
- */
-static void mapif_parse_save_achievements(int fd)
+ **/
+static void mapif_parse_save_achievements(struct s_receive_action_data *act)
 {
-	int size = 0, char_id = 0, payload_count = 0, i = 0;
 	struct char_achievements p = { 0 };
 
-	RFIFOHEAD(fd);
-	size = RFIFOW(fd, 2);
-	char_id = RFIFOL(fd, 4);
+	int payload_len =
+		RFIFOW(act, 2) - (sizeof(struct PACKET_ZW_ACHIEVEMENT_SAVE) - sizeof(intptr));
+	int char_id     = RFIFOL(act, 4);
 
-	payload_count = (size - 8) / sizeof(struct achievement);
+	int payload_count = payload_len / sizeof(struct achievement_packet_data);
 
 	VECTOR_INIT(p);
 	VECTOR_ENSURE(p, payload_count, 1);
-
-	for (i = 0; i < payload_count; i++) {
-		struct achievement ach = { 0 };
-		memcpy(&ach, RFIFOP(fd, 8 + i * sizeof(struct achievement)), sizeof(struct achievement));
-		VECTOR_PUSH(p, ach);
+	size_t pos = offsetof(struct PACKET_ZW_ACHIEVEMENT_SAVE, data);
+	for(int i = 0; i < payload_count; i++) {
+		struct achievement *a = &VECTOR_INDEX(p, i);
+		pos += sizeof((a->id = RFIFOL(act, pos)));
+		memcpy(a->objective, RFIFOP(act, pos),
+			SIZEOF_MEMBER(struct achievement_packet_data, objective));
+		pos += SIZEOF_MEMBER(struct achievement_packet_data, objective);
+		pos += sizeof((a->completed_at = RFIFOQ(act, pos)));
+		pos += sizeof((a->rewarded_at  = RFIFOQ(act, pos)));
 	}
+	VECTOR_LENGTH(p) = payload_count;
 
 	mapif->achievement_save(char_id, &p);
 
@@ -3639,11 +3654,9 @@ static void mapif_parse_save_achievements(int fd)
  * @param[in]  char_id      character identifier.
  * @param[out] p            pointer to character achievements vector.
  */
-static void mapif_achievement_save(int char_id, struct char_achievements *p)
+static void mapif_achievement_save(int char_id, const struct char_achievements *p)
 {
 	struct char_achievements *cp = NULL;
-
-	nullpo_retv(p);
 	
 	/* Get loaded achievements. */
 	cp = idb_ensure(inter_achievement->char_achievements, char_id, inter_achievement->ensure_char_achievements);
@@ -3754,7 +3767,6 @@ void mapif_defaults(void)
 	mapif->pLoadAchievements = mapif_parse_load_achievements;
 	mapif->sAchievementsToMap = mapif_send_achievements_to_map;
 	mapif->pSaveAchievements = mapif_parse_save_achievements;
-	mapif->achievement_load = mapif_achievement_load;
 	mapif->achievement_save = mapif_achievement_save;
 	mapif->auction_message = mapif_auction_message;
 	mapif->auction_sendlist = mapif_auction_sendlist;
@@ -3891,6 +3903,7 @@ void mapif_defaults(void)
 	mapif->namechange_ack = mapif_namechange_ack;
 	mapif->parse_NameChangeRequest = mapif_parse_NameChangeRequest;
 	/* Clan System */
+	mapif->ClanMemberKick_ack = mapif_ClanMemberKick_ack;
 	mapif->parse_ClanMemberKick = mapif_parse_ClanMemberKick;
 	mapif->parse_ClanMemberCount = mapif_parse_ClanMemberCount;
 }

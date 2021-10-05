@@ -688,6 +688,32 @@ struct PACKET_WZ_NAME_CHANGE_ACK {
 } __attribute__((packed));
 DEFINE_PACKET_ID(WZ_NAME_CHANGE_ACK, 0x3806);
 
+/**
+ * Kick all inactive clan members
+ *
+ * @see mapif_ClanMemberKick_ack
+ **/
+ struct PACKET_WZ_CLAN_KICK_ACK {
+	int16 packet_id;
+	int32 clan_id;
+	int32 count;
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_CLAN_KICK_ACK, 0x3858);
+
+/**
+ * Kick all inactive clan members
+ *
+ * @see mapif_ClanMemberKick_ack
+ **/
+ struct PACKET_WZ_ACHIEVEMENT_LOAD_ACK {
+	int16 packet_id;
+	int16 packet_len;
+	int32 char_id;
+	struct achievement_packet_data *data;
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_ACHIEVEMENT_LOAD_ACK, 0x3810);
+
+
 #if !defined(sun) && (!defined(__NETBSD__) || __NetBSD_Version__ >= 600000000) // NetBSD 5 and Solaris don't like pragma pack but accept the packed attribute
 #pragma pack(pop)
 #endif // not NetBSD < 6 / Solaris

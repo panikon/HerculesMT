@@ -735,6 +735,7 @@ struct hotkey {
 #endif
 };
 
+// @see achievement_packet_data
 struct achievement { // Achievements [Smokexyz/Hercules]
 	int id;
 	int objective[MAX_ACHIEVEMENT_OBJECTIVES];
