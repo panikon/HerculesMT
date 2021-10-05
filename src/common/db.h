@@ -2374,6 +2374,10 @@ HPShared struct db_interface *DB;
 	do {                                         \
 		amFree((_im)._data_, (_im)._mt_);        \
 		amFree((_im)._free_index_, (_im)._mt_);  \
+		(_im)._data_ = NULL;                     \
+		(_im)._free_index_ = NULL;               \
+		(_im)._free_index_length_ = 0;           \
+		(_im)._count_ = 0;                       \
 	} while(false)
 
 /**

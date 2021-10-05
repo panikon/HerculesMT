@@ -68,7 +68,6 @@ struct inter_guild_interface {
 	int (*sex_changed) (int guild_id, int account_id, int char_id, short gender);
 	bool (*charname_changed) (int guild_id, int char_id, const char *name);
 
-	int (*broken) (int guild_id);
 	struct guild *(*create) (const char *name, const struct guild_member *master);
 	bool (*add_member) (int guild_id, const struct guild_member *member, struct mmo_map_server *server);
 	bool (*leave) (int guild_id, int account_id, int char_id, int flag, const char *mes, struct mmo_map_server *server);

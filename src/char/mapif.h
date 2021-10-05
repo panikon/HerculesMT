@@ -58,7 +58,7 @@ struct mapif_interface {
 	void (*final) (void);
 
 	struct mmo_map_server *(*server_find) (struct socket_data *session);
-	void (*server_destroy)(struct mmo_map_server *server);
+	void (*server_destroy)(struct mmo_map_server *server, bool remove);
 	void (*server_reset)  (struct mmo_map_server *server);
 	void (*on_disconnect) (struct mmo_map_server *server);
 	struct mmo_map_server *(*on_connect) (struct socket_data *session, uint32 ip_, uint16 port_);
@@ -119,21 +119,21 @@ struct mapif_interface {
 	void (*elemental_saved) (struct socket_data *session, unsigned char flag);
 	void (*parse_elemental_save) (struct s_receive_action_data *act, struct mmo_map_server *server);
 
-	int (*guild_created)     (struct socket_data *session, int account_id, struct guild *g);
+	void (*guild_created)    (struct socket_data *session, int account_id, struct guild *g);
 	void (*guild_info)       (struct mmo_map_server *server, struct guild *g, bool success);
-	int (*guild_memberadded) (struct socket_data *session, int guild_id, int account_id, int char_id, int flag);
-	int (*guild_withdraw) (int guild_id, int account_id, int char_id, int flag, const char *name, const char *mes);
-	int (*guild_memberinfoshort) (struct guild *g, int idx);
-	int (*guild_broken) (int guild_id, int flag);
-	int (*guild_basicinfochanged) (int guild_id, int type, const void *data, int len);
-	int (*guild_memberinfochanged) (int guild_id, int account_id, int char_id, int type, const void *data, int len);
-	int (*guild_skillupack) (int guild_id, uint16 skill_id, int account_id);
-	int (*guild_alliance) (int guild_id1, int guild_id2, int account_id1, int account_id2, int flag, const char *name1, const char *name2);
-	int (*guild_position) (struct guild *g, int idx);
-	int (*guild_notice) (struct guild *g);
-	int (*guild_emblem) (struct guild *g);
-	int (*guild_master_changed) (struct guild *g, int aid, int cid);
-	int (*guild_castle_dataload) (struct socket_data *session, const int *castle_ids, int num);
+	void (*guild_memberadded) (struct socket_data *session, int guild_id, int account_id, int char_id, int flag);
+	void (*guild_withdraw) (int guild_id, int account_id, int char_id, int flag, const char *name, const char *mes);
+	void (*guild_memberinfoshort) (struct guild *g, int idx);
+	void (*guild_broken) (int guild_id, int flag);
+	void (*guild_basicinfochanged) (int guild_id, int type, const void *data, int len);
+	void (*guild_memberinfochanged) (int guild_id, int account_id, int char_id, int type, const void *data, int len);
+	void (*guild_skillupack) (int guild_id, uint16 skill_id, int account_id);
+	void (*guild_alliance) (int guild_id1, int guild_id2, int account_id1, int account_id2, int flag, const char *name1, const char *name2);
+	void (*guild_position) (struct guild *g, int idx);
+	void (*guild_notice) (struct guild *g);
+	void (*guild_emblem) (struct guild *g);
+	void (*guild_master_changed) (struct guild *g, int aid, int cid);
+	void (*guild_castle_dataload) (struct socket_data *session, const int *castle_ids, int num);
 	void (*parse_CreateGuild)                (struct s_receive_action_data *act, struct mmo_map_server *server);
 	void (*parse_GuildInfo)                  (struct s_receive_action_data *act, struct mmo_map_server *server);
 	void (*parse_GuildAddMember)             (struct s_receive_action_data *act, struct mmo_map_server *server);
@@ -189,7 +189,7 @@ struct mapif_interface {
 	void (*party_withdraw) (int party_id,int account_id, int char_id);
 	void (*party_membermoved) (const struct party *p, int idx);
 	void (*party_broken) (int party_id, int flag);
-	void (*parse_party_member) (struct s_receive_action_data *act, int pos, struct party_member *out);
+	int (*parse_party_member) (struct s_receive_action_data *act, int pos, struct party_member *out);
 	void (*parse_CreateParty)       (struct s_receive_action_data *act);
 	void (*parse_PartyInfo)         (struct s_receive_action_data *act);
 	void (*parse_PartyAddMember)    (struct s_receive_action_data *act);
@@ -247,7 +247,7 @@ struct mapif_interface {
 	// Clan System
 	void (*ClanMemberKick_ack) (struct socket_data *session, int clan_id, int count);
 	void (*parse_ClanMemberKick) (struct s_receive_action_data *act);
-	void (*parse_ClanMemberCount) (struct s_receive_action_data *act, int clan_id, int kick_interval);
+	void (*parse_ClanMemberCount) (struct s_receive_action_data *act);
 };
 
 #ifdef HERCULES_CORE

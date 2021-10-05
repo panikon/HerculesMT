@@ -1663,11 +1663,6 @@ static bool inter_guild_change_leader(int guild_id, const char *name, int len)
 	return true;
 }
 
-static int inter_guild_broken(int guild_id)
-{
-	return mapif->guild_broken(guild_id, 0);
-}
-
 void inter_guild_defaults(void)
 {
 	inter_guild = &inter_guild_s;
@@ -1695,7 +1690,6 @@ void inter_guild_defaults(void)
 	inter_guild->calcinfo = inter_guild_calcinfo;
 	inter_guild->sex_changed = inter_guild_sex_changed;
 	inter_guild->charname_changed = inter_guild_charname_changed;
-	inter_guild->broken = inter_guild_broken;
 	inter_guild->create = inter_guild_create;
 	inter_guild->add_member = inter_guild_add_member;
 	inter_guild->leave = inter_guild_leave;

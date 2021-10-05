@@ -5225,6 +5225,24 @@ int do_final(void)
 
 	socket_io->flush_fifos();
 
+	rwlock->write_lock(chr->map_server_list_lock);
+	INDEX_MAP_ITER_DECL(iter);
+	INDEX_MAP_ITER(chr->map_server_list, iter);
+	int i;
+	while((i = INDEX_MAP_NEXT(chr->map_server_list, iter)) != -1) {
+		struct mmo_map_server *server;
+		server = INDEX_MAP_INDEX(chr->map_server_list, i);
+		if(!server)
+			continue;
+		mapif->server_destroy(server, false);
+		aFree(server);
+	}
+	INDEX_MAP_ITER_FREE(iter);
+	INDEX_MAP_DESTROY(chr->map_server_list);
+
+	rwlock->write_unlock(chr->map_server_list_lock);
+	rwlock->destroy(chr->map_server_list_lock);
+
 	chclif->final();
 	loginif->final();
 	mapif->final();
@@ -5241,10 +5259,6 @@ int do_final(void)
 
 	SQL->Free(inter->sql_handle);
 	mapindex->final();
-
-	// TODO
-	//for (i = 0; i < MAX_MAP_SERVERS; i++)
-	//	VECTOR_CLEAR(chr->server[i].maps);
 
 	VECTOR_CLEAR(start_items);
 
