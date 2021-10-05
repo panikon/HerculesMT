@@ -763,7 +763,7 @@ static void mapif_auction_sendlist(struct socket_data *session, int char_id, sho
  * 0x3050 ZW_AUCTION_REQUEST_LIST <char_id>.L <type>.W <price>.L <page>.W <search>[NAME_LENGTH].B
  * Map-server request of information of an auction list
  **/
-static void mapif_parse_auction_requestlist(struct s_receive_action_data *act)
+static void mapif_parse_auction_requestlist(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	char searchtext[NAME_LENGTH];
 
@@ -835,7 +835,7 @@ static void mapif_auction_register(struct socket_data *session,
  * 0x3051 ZW_AUCTION_REGISTER
  * Parses map-server request to register an auction
  **/
-static void mapif_parse_auction_register(struct s_receive_action_data *act)
+static void mapif_parse_auction_register(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	size_t pos = 2;
 	struct auction_data a = {0};
@@ -890,7 +890,7 @@ static void mapif_auction_cancel(struct socket_data *session, int char_id, enum 
  * 0x3052 ZW_AUCTION_CANCEL <char_id>.L <auction_id>.L
  * Parses cancelation request (CZ_AUCTION_ADD_CANCEL)
  **/
-static void mapif_parse_auction_cancel(struct s_receive_action_data *act)
+static void mapif_parse_auction_cancel(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int char_id    = RFIFOL(act, 2);
 	int auction_id = RFIFOL(act, 6);
@@ -935,7 +935,7 @@ static void mapif_auction_close(struct socket_data *session, int char_id, enum e
  * 0x3053 ZW_AUCTION_CLOSE <char_id>.L <result>.B
  * Parses close request (CZ_AUCTION_REQ_MY_SELL_STOP)
  **/
-static void mapif_parse_auction_close(struct s_receive_action_data *act)
+static void mapif_parse_auction_close(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int char_id    = RFIFOL(act, 2);
 	int auction_id = RFIFOL(act, 6);
@@ -983,7 +983,7 @@ static void mapif_auction_bid(struct socket_data *session, int char_id, int bid,
 /**
  * 0x3055 ZW_AUCTION_BID <char_id>.L <auction_id>.L <bid>.L <buyer_name>
  **/
-static void mapif_parse_auction_bid(struct s_receive_action_data *act)
+static void mapif_parse_auction_bid(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int char_id             = RFIFOL(act, 4);
 	unsigned int auction_id = RFIFOL(act, 8);
@@ -1526,7 +1526,7 @@ static void mapif_parse_GuildLeave(struct s_receive_action_data *act, struct mmo
 }
 
 /**
- * ZW_GUILD_MEMBER_UPDATE_SHORT
+ * ZW_GUILD_MEMBER_UPDATE
  * Change member info
  **/
 static void mapif_parse_GuildChangeMemberInfoShort(struct s_receive_action_data *act, struct mmo_map_server *server)
@@ -1856,7 +1856,7 @@ static void mapif_mail_sendinbox(struct socket_data *session, int char_id,
  * ZW_MAIL_INBOX_REQUEST
  * Client Inbox Request
  **/
-static void mapif_parse_mail_requestinbox(struct s_receive_action_data *act)
+static void mapif_parse_mail_requestinbox(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int char_id = RFIFOL(act, 2);
 	unsigned char flag = RFIFOB(act, 6);
@@ -1870,7 +1870,7 @@ static void mapif_parse_mail_requestinbox(struct s_receive_action_data *act)
  * ZW_MAIL_READ
  * Mark mail as 'Read'
  **/
-static void mapif_parse_mail_read(struct s_receive_action_data *act)
+static void mapif_parse_mail_read(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int mail_id = RFIFOL(act, 2);
 	inter_mail->mark_read(mail_id);
@@ -1898,7 +1898,7 @@ static void mapif_mail_sendattach(struct socket_data *session, int char_id,
  * ZW_MAIL_ATTACHMENT
  * Attachment request
  **/
-static void mapif_parse_mail_getattach(struct s_receive_action_data *act)
+static void mapif_parse_mail_getattach(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	struct mail_message msg = { 0 };
 	int char_id = RFIFOL(act, 2);
@@ -1927,7 +1927,7 @@ static void mapif_mail_delete(struct socket_data *session, int char_id, int mail
  * ZW_MAIL_DELETE
  * Mail deletion request
  **/
-static void mapif_parse_mail_delete(struct s_receive_action_data *act)
+static void mapif_parse_mail_delete(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int char_id = RFIFOL(act, 2);
 	int mail_id = RFIFOL(act, 6);
@@ -1974,7 +1974,7 @@ static void mapif_mail_return(struct socket_data *session, int char_id, int mail
  * ZW_MAIL_RETURN
  * Return message request
  **/
-static void mapif_parse_mail_return(struct s_receive_action_data *act)
+static void mapif_parse_mail_return(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int char_id = RFIFOL(act, 2);
 	int mail_id = RFIFOL(act, 6);
@@ -2007,7 +2007,7 @@ static void mapif_mail_send(struct socket_data *session, const struct mail_messa
  * ZW_MAIL_SEND
  * Send a mail
  **/
-static void mapif_parse_mail_send(struct s_receive_action_data *act)
+static void mapif_parse_mail_send(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	struct mail_message msg;
 	int account_id = 0;
@@ -2089,7 +2089,7 @@ static int mapif_parse_mercenary_data(struct s_receive_action_data *act,
  * ZW_MERCENARY_CREATE
  * Request to create a mercenary
  **/
-static void mapif_parse_mercenary_create(struct s_receive_action_data *act)
+static void mapif_parse_mercenary_create(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	struct s_mercenary merc = {0};
 	bool result;
@@ -2104,7 +2104,7 @@ static void mapif_parse_mercenary_create(struct s_receive_action_data *act)
  * ZW_MERCENARY_LOAD
  * Mercenary load request
  **/
-static void mapif_parse_mercenary_load(struct s_receive_action_data *act)
+static void mapif_parse_mercenary_load(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	struct s_mercenary merc = {0};
 	bool result = inter_mercenary->load(RFIFOL(act, 2), RFIFOL(act, 6), &merc);
@@ -2129,7 +2129,7 @@ static void mapif_mercenary_deleted(struct socket_data *session, int char_id, in
  * ZW_MERCENARY_DELETE
  * Deletion request
  **/
-static void mapif_parse_mercenary_delete(struct s_receive_action_data *act)
+static void mapif_parse_mercenary_delete(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int merc_id = RFIFOL(act, 2);
 	int char_id = RFIFOL(act, 6);
@@ -2155,7 +2155,7 @@ static void mapif_mercenary_saved(struct socket_data *session, int char_id, int 
  * ZW_MERCENARY_SAVE
  * Save request
  **/
-static void mapif_parse_mercenary_save(struct s_receive_action_data *act)
+static void mapif_parse_mercenary_save(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	struct s_mercenary merc = {0};
 	mapif->parse_mercenary_data(act, 2, &merc);
@@ -2380,7 +2380,7 @@ static int mapif_parse_party_member(struct s_receive_action_data *act, int pos, 
  *  RFIFOP(fd,4), RFIFOB(fd,28), RFIFOB(fd,29), RFIFOP(fd,30)
  *  const char *name, int item, int item2, const struct party_member *leader
  **/
-static void mapif_parse_CreateParty(struct s_receive_action_data *act)
+static void mapif_parse_CreateParty(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	struct party_data *p;
 	struct party_member leader = {0};
@@ -2408,7 +2408,7 @@ static void mapif_parse_CreateParty(struct s_receive_action_data *act)
  * WZ_PARTY_INFO
  * Party information request
  **/
-static void mapif_parse_PartyInfo(struct s_receive_action_data *act)
+static void mapif_parse_PartyInfo(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	struct party_data *p;
 	int party_id = RFIFOL(act, 2);
@@ -2421,7 +2421,7 @@ static void mapif_parse_PartyInfo(struct s_receive_action_data *act)
  * ZW_PARTY_MEMBER_ADD
  * Add a player to party request
  **/
-static void mapif_parse_PartyAddMember(struct s_receive_action_data *act)
+static void mapif_parse_PartyAddMember(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	struct party_member member = {0};
 	int party_id = RFIFOL(act, 2);
@@ -2436,7 +2436,7 @@ static void mapif_parse_PartyAddMember(struct s_receive_action_data *act)
  * ZW_PARTY_SETTING
  * Party setting change request
  **/
-static void mapif_parse_PartyChangeOption(struct s_receive_action_data *act)
+static void mapif_parse_PartyChangeOption(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int32 party_id   = RFIFOL(act, 2);
 	int32 account_id = RFIFOL(act,  6);
@@ -2450,7 +2450,7 @@ static void mapif_parse_PartyChangeOption(struct s_receive_action_data *act)
  * ZW_PARTY_WITHDRAW
  * Leave party request
  **/
-static void mapif_parse_PartyLeave(struct s_receive_action_data *act)
+static void mapif_parse_PartyLeave(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int32 party_id   = RFIFOL(act,  6);
 	int32 account_id = RFIFOL(act, 10);
@@ -2462,7 +2462,7 @@ static void mapif_parse_PartyLeave(struct s_receive_action_data *act)
  * ZW_MEMBER_UPDATE
  * Request to update member data
  **/
-static void mapif_parse_PartyChangeMap(struct s_receive_action_data *act)
+static void mapif_parse_PartyChangeMap(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int party_id = RFIFOL(act, 2);
 	struct party_member member = {0};
@@ -2480,7 +2480,7 @@ static void mapif_parse_PartyChangeMap(struct s_receive_action_data *act)
  * ZW_PARTY_BREAK
  * Request party dissolution
  **/
-static void mapif_parse_BreakParty(struct s_receive_action_data *act)
+static void mapif_parse_BreakParty(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	inter_party->disband(RFIFOL(act, 2));
 }
@@ -2489,7 +2489,7 @@ static void mapif_parse_BreakParty(struct s_receive_action_data *act)
  * ZW_PARTY_LEADER
  * Update party leader
  **/
-static void mapif_parse_PartyLeaderChange(struct s_receive_action_data *act)
+static void mapif_parse_PartyLeaderChange(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int32 party_id   = RFIFOL(act,  6);
 	int32 account_id = RFIFOL(act, 10);
@@ -2618,7 +2618,7 @@ static int mapif_parse_pet_data(struct s_receive_action_data *act, int pos, stru
  * ZW_PET_SAVE
  * Pet save request
  **/
-static void mapif_parse_save_pet(struct s_receive_action_data *act)
+static void mapif_parse_save_pet(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	struct s_pet p = {0};
 	mapif->parse_pet_data(act, 2, &p);
@@ -2631,7 +2631,7 @@ static void mapif_parse_save_pet(struct s_receive_action_data *act)
  * ZW_PET_DELETE
  * Pet deletion request
  **/
-static void mapif_parse_delete_pet(struct s_receive_action_data *act)
+static void mapif_parse_delete_pet(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int32 account_id = RFIFOL(act, 2);
 	int32 pet_id     = RFIFOL(act, 6);
@@ -2642,7 +2642,7 @@ static void mapif_parse_delete_pet(struct s_receive_action_data *act)
  * ZW_PET_CREATE
  * Pet creation request
  **/
-static void mapif_parse_CreatePet(struct s_receive_action_data *act)
+static void mapif_parse_CreatePet(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int account_id;
 	struct s_pet pet = {0};
@@ -2661,7 +2661,7 @@ static void mapif_parse_CreatePet(struct s_receive_action_data *act)
  * ZW_PET_INFO
  * Pet information request
  **/
-static void mapif_parse_LoadPet(struct s_receive_action_data *act)
+static void mapif_parse_LoadPet(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int account_id;
 	struct s_pet pet = {0};
@@ -2696,7 +2696,7 @@ static void mapif_quest_save_ack(struct socket_data *session, int char_id, bool 
  *
  * Received quests are saved, and an ack is sent back to the map server.
  */
-static void mapif_parse_quest_save(struct s_receive_action_data *act)
+static void mapif_parse_quest_save(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int quest_len = RFIFOW(act, 2) - (sizeof(struct PACKET_ZW_QUEST_SAVE) - sizeof(intptr));
 	int char_id = RFIFOL(act, 4);
@@ -2766,7 +2766,7 @@ static void mapif_send_quests(struct socket_data *session, int char_id, struct q
  * and the map server relies on this behavior (once the first Q_COMPLETE quest,
  * all of them are considered to be Q_COMPLETE)
  */
-static void mapif_parse_quest_load(struct s_receive_action_data *act)
+static void mapif_parse_quest_load(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int char_id = RFIFOL(act, 2);
 	struct quest *tmp_questlog = NULL;
@@ -2787,7 +2787,7 @@ static void mapif_parse_quest_load(struct s_receive_action_data *act)
  * ZW_RODEX_INBOX_REQUEST
  * Inbox Request
  **/
-static void mapif_parse_rodex_requestinbox(struct s_receive_action_data *act)
+static void mapif_parse_rodex_requestinbox(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int count;
 	int char_id    = RFIFOL(act,  2);
@@ -2901,7 +2901,7 @@ static void mapif_rodex_sendinbox(struct socket_data *session, int char_id,
  * ZW_RODEX_HASNEW
  * Checks if there are new mails
  **/
-static void mapif_parse_rodex_checkhasnew(struct s_receive_action_data *act)
+static void mapif_parse_rodex_checkhasnew(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int char_id    = RFIFOL(act, 2);
 	int account_id = RFIFOL(act, 6);
@@ -2933,7 +2933,7 @@ static void mapif_rodex_sendhasnew(struct socket_data *session, int char_id, boo
  * ZW_RODEX_UPDATE
  * Update/Delete mail
  **/
-static void mapif_parse_rodex_updatemail(struct s_receive_action_data *act)
+static void mapif_parse_rodex_updatemail(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int account_id = RFIFOL(act, 2);
 	int char_id    = RFIFOL(act, 6);
@@ -2948,7 +2948,7 @@ static void mapif_parse_rodex_updatemail(struct s_receive_action_data *act)
  * ZW_RODEX_SEND
  * Send Mail
  **/
-static void mapif_parse_rodex_send(struct s_receive_action_data *act)
+static void mapif_parse_rodex_send(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	struct rodex_message msg = { 0 };
 	size_t pos = 2;
@@ -3014,7 +3014,7 @@ static void mapif_rodex_send(struct socket_data *session, int sender_id,
  * Check Player
  * Tries to find player id / class / base level
  **/
-static void mapif_parse_rodex_checkname(struct s_receive_action_data *act)
+static void mapif_parse_rodex_checkname(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	char name[NAME_LENGTH];
 	int target_char_id, target_level;
@@ -3187,7 +3187,7 @@ static void mapif_account_storage_load(struct socket_data *session, int account_
  * ZW_PLAYER_STORAGE
  * Parses account storage load request from map server.
  **/
-static void mapif_parse_AccountStorageLoad(struct s_receive_action_data *act)
+static void mapif_parse_AccountStorageLoad(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	mapif->account_storage_load(act->session, RFIFOL(act, 2));
 }
@@ -3196,7 +3196,7 @@ static void mapif_parse_AccountStorageLoad(struct s_receive_action_data *act)
  * ZW_PLAYER_STORAGE_SAVE
  * Parses an account storage save request from the map server.
  **/
-static void mapif_parse_AccountStorageSave(struct s_receive_action_data *act)
+static void mapif_parse_AccountStorageSave(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int payload_size = RFIFOW(act, 2) - (sizeof(struct PACKET_ZW_PLAYER_STORAGE_SAVE)-sizeof(intptr));
 	int account_id   = RFIFOL(act, 4);
@@ -3241,7 +3241,7 @@ static void mapif_send_AccountStorageSaveAck(struct socket_data *session, int ac
  * ZW_GUILD_STORAGE_LOAD
  * Load guild storage request
  **/
-static void mapif_parse_LoadGuildStorage(struct s_receive_action_data *act)
+static void mapif_parse_LoadGuildStorage(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	mapif->load_guild_storage(act->session, RFIFOL(act, 2), RFIFOL(act, 6), 1);
 }
@@ -3252,7 +3252,7 @@ static void mapif_parse_LoadGuildStorage(struct s_receive_action_data *act)
  *
  * @see intif_send_guild_storage()
  **/
-static void mapif_parse_SaveGuildStorage(struct s_receive_action_data *act)
+static void mapif_parse_SaveGuildStorage(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int len              = RFIFOW(act, 2);
 	int account_id       = RFIFOL(act, 4);
@@ -3304,7 +3304,7 @@ static void mapif_itembound_ack(struct socket_data *session, int guild_id)
  * ZW_BOUND_RETRIEVE
  * Retrieve bound item from an offline character
  **/
-static void mapif_parse_ItemBoundRetrieve(struct s_receive_action_data *act)
+static void mapif_parse_ItemBoundRetrieve(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 #ifdef GP_BOUND_ITEMS
 	int char_id    = RFIFOL(act, 2);
@@ -3332,7 +3332,7 @@ static void mapif_parse_ItemBoundRetrieve(struct s_receive_action_data *act)
  * 0x3007 ZW_ACCINFO_REQUEST <requester fd>.L <target aid>.L <requester group lvl>.W <target name>.NAME_LENGTH
  * Parses account information request
  **/
-static void mapif_parse_accinfo(struct s_receive_action_data *act)
+static void mapif_parse_accinfo(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	char query[NAME_LENGTH];
 	int u_fd = RFIFOL(act, 2);
@@ -3371,7 +3371,7 @@ static void mapif_disconnectplayer(struct socket_data *session,
  * the char-server, before sending the remaining operations to the login-server.
  * @see inter_savereg
  **/
-static void mapif_parse_Registry(struct s_receive_action_data *act)
+static void mapif_parse_Registry(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int account_id = RFIFOL(act,  4);
 	int char_id    = RFIFOL(act,  8);
@@ -3436,7 +3436,7 @@ static void mapif_parse_Registry(struct s_receive_action_data *act)
  * ZW_ACCOUNT_REG_REQ
  * Request the value of all registries.
  **/
-static void mapif_parse_RegistryRequest(struct s_receive_action_data *act)
+static void mapif_parse_RegistryRequest(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int account_id = RFIFOL(act,  2);
 	int char_id    = RFIFOL(act,  6);
@@ -3476,7 +3476,7 @@ static void mapif_namechange_ack(struct socket_data *session, int account_id,
  * ZW_NAME_CHANGE
  * Request to change `type` name.
  **/
-static void mapif_parse_NameChangeRequest(struct s_receive_action_data *act)
+static void mapif_parse_NameChangeRequest(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int account_id     = RFIFOL(act, 2);
 	int char_id        = RFIFOL(act, 6);
@@ -3528,7 +3528,7 @@ static void mapif_ClanMemberKick_ack(struct socket_data *session, int clan_id, i
  * ZW_CLAN_KICK
  * Kick all inactive clan members
  **/
-static void mapif_parse_ClanMemberKick(struct s_receive_action_data *act)
+static void mapif_parse_ClanMemberKick(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int clan_id       = RFIFOL(act, 2);
 	int kick_interval = RFIFOL(act, 6);
@@ -3544,7 +3544,7 @@ static void mapif_parse_ClanMemberKick(struct s_receive_action_data *act)
  * ZW_CLAN_COUNT
  * Count active members of a clan
  **/
-static void mapif_parse_ClanMemberCount(struct s_receive_action_data *act)
+static void mapif_parse_ClanMemberCount(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int clan_id       = RFIFOL(act, 2);
 	int kick_interval = RFIFOL(act, 6);
@@ -3560,7 +3560,7 @@ static void mapif_parse_ClanMemberCount(struct s_receive_action_data *act)
  * ZW_ACHIEVEMENT_LOAD 
  * Parse achievement load request from the map server
  **/
-static void mapif_parse_load_achievements(struct s_receive_action_data *act)
+static void mapif_parse_load_achievements(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int char_id = RFIFOL(act, 2);
 
@@ -3618,7 +3618,7 @@ STATIC_ASSERT((sizeof(struct achievement_packet_data) * MAX_ACHIEVEMENT_DB
  * Handles achievement request and saves data from map server.
  * @packet[in] 0x3013 <packet_size>.W <char_id>.L <char_achievement>.P
  **/
-static void mapif_parse_save_achievements(struct s_receive_action_data *act)
+static void mapif_parse_save_achievements(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	struct char_achievements p = { 0 };
 
@@ -3685,6 +3685,8 @@ void mapif_init(void)
 	} inter_packet[] = {
 #define packet_def(name, fname) { HEADER_ ## name, sizeof(struct PACKET_ ## name), chr->parse_frommap_ ## fname }
 #define packet_def2(name, fname, len) { HEADER_ ## name, (len), chr->parse_frommap_ ## fname }
+#define packet_def3(name, fname) { HEADER_ ## name, sizeof(struct PACKET_ ## name), mapif->parse_ ## fname }
+#define packet_def4(name, fname, len) { HEADER_ ## name, (len), mapif->parse_ ## fname }
 	packet_def2(ZW_DATASYNC,             datasync, -1),
 	packet_def2(ZW_SKILLID2IDX,          skillid2idx, -1),
 	packet_def2(ZW_OWNED_MAP_LIST,       map_names, -1),
@@ -3711,8 +3713,95 @@ void mapif_init(void)
 	packet_def(ZW_WAN_UPDATE,            update_ip),
 	packet_def(ZW_STATUS_CHANGE_UPDATE,  scdata_update),
 	packet_def(ZW_STATUS_CHANGE_DELETE,  scdata_delete),
+
+	packet_def3(ZW_ACCOUNT_REG2,     Registry ),
+	packet_def3(ZW_ACCOUNT_REG_REQ,  RegistryRequest ),
+	packet_def3(ZW_NAME_CHANGE,      NameChangeRequest ),
+	packet_def3(ZW_ACCINFO_REQUEST,  accinfo ),
+
+	packet_def3(ZW_PARTY_CREATE,     CreateParty ),
+	packet_def3(ZW_PARTY_INFO,       PartyInfo ),
+	packet_def3(ZW_PARTY_MEMBER_ADD, PartyAddMember ),
+	packet_def3(ZW_PARTY_SETTING,    PartyChangeOption ),
+	packet_def3(ZW_PARTY_WITHDRAW,   PartyLeave ),
+	packet_def3(ZW_MEMBER_UPDATE,    PartyChangeMap ),
+	packet_def3(ZW_PARTY_BREAK,      BreakParty ),
+	packet_def3(ZW_PARTY_LEADER,     PartyLeaderChange ),
+
+	packet_def3(ZW_GUILD_CREATE,              CreateGuild ),
+	packet_def3(ZW_GUILD_INFO,                GuildInfo ),
+	packet_def3(ZW_GUILD_MEMBER_ADD,          GuildAddMember ),
+	packet_def3(ZW_GUILD_MASTER,              GuildMasterChange ),
+	packet_def3(ZW_GUILD_WITHDRAW,            GuildLeave ),
+	packet_def3(ZW_GUILD_MEMBER_UPDATE,       GuildChangeMemberInfoShort ),
+	packet_def3(ZW_GUILD_BREAK,               BreakGuild ),
+	packet_def4(ZW_GUILD_INFO_UPDATE,         GuildBasicInfoChange, -1 ),
+	packet_def4(ZW_GUILD_MEMBER_UPDATE_FIELD, GuildMemberInfoChange, -1 ),
+	packet_def3(ZW_GUILD_TITLE_UPDATE,        GuildPosition ),
+	packet_def3(ZW_GUILD_SKILL_UP,            GuildSkillUp ),
+	packet_def3(ZW_GUILD_ALLY_UPDATE,         GuildAlliance ),
+	packet_def3(ZW_GUILD_NOTICE,              GuildNotice ),
+	packet_def4(ZW_GUILD_EMBLEM,              GuildEmblem, -1 ),
+	packet_def4(ZW_GUILD_CASTLE_LOAD,         GuildCastleDataLoad, -1 ),
+	packet_def3(ZW_GUILD_CASTLE_SAVE,         GuildCastleDataSave ),
+
+	packet_def3(ZW_PLAYER_STORAGE,      AccountStorageLoad ),
+	packet_def4(ZW_PLAYER_STORAGE_SAVE, AccountStorageSave, -1 ),
+	packet_def3(ZW_GUILD_STORAGE_LOAD,  LoadGuildStorage ),
+	packet_def4(ZW_GUILD_STORAGE_SAVE,  SaveGuildStorage, -1 ),
+	packet_def3(ZW_BOUND_RETRIEVE,      ItemBoundRetrieve ),
+
+	packet_def3(ZW_PET_CREATE,  CreatePet ),
+	packet_def3(ZW_PET_LOAD,    LoadPet ),
+	packet_def3(ZW_PET_SAVE,    SavePet ),
+	packet_def3(ZW_PET_DELETE,  DeletePet ),
+
+	packet_def3(ZW_HOMUNCULUS_CREATE, homunculus_create ),
+	packet_def3(ZW_HOMUNCULUS_LOAD,   homunculus_load ),
+	packet_def3(ZW_HOMUNCULUS_SAVE,   homunculus_save ),
+	packet_def3(ZW_HOMUNCULUS_DELETE, homunculus_delete ),
+
+	packet_def3(ZW_MERCENARY_CREATE,  mercenary_create ),
+	packet_def3(ZW_MERCENARY_LOAD,    mercenary_load ),
+	packet_def3(ZW_MERCENARY_DELETE,  mercenary_delete ),
+	packet_def3(ZW_MERCENARY_SAVE,    mercenary_save ),
+
+	packet_def3(ZW_ELEMENTAL_CREATE,  elemental_create ),
+	packet_def3(ZW_ELEMENTAL_LOAD,    elemental_load ),
+	packet_def3(ZW_ELEMENTAL_DELETE,  elemental_delete ),
+	packet_def3(ZW_ELEMENTAL_SAVE,    elemental_save ),
+
+	packet_def3(ZW_MAIL_INBOX_REQUEST, mail_requestinbox ),
+	packet_def3(ZW_MAIL_READ,          mail_read ),
+	packet_def3(ZW_MAIL_ATTACHMENT,    mail_getattach ),
+	packet_def3(ZW_MAIL_DELETE,        mail_delete ),
+	packet_def3(ZW_MAIL_RETURN,        mail_return ),
+	packet_def3(ZW_MAIL_SEND,          mail_send ),
+
+	packet_def3(ZW_AUCTION_REQUEST_LIST, auction_requestlist ),
+	packet_def3(ZW_AUCTION_REGISTER,     auction_register ),
+	packet_def3(ZW_AUCTION_CANCEL,       auction_cancel ),
+	packet_def3(ZW_AUCTION_CLOSE,        auction_close ),
+	packet_def3(ZW_AUCTION_BID,          auction_bid ),
+
+	packet_def3(ZW_QUEST_LOAD,      quest_load ),
+	packet_def4(ZW_QUEST_SAVE,      quest_save, -1 ),
+
+	packet_def3(ZW_RODEX_INBOX_REQUEST, rodex_requestinbox ),
+	packet_def3(ZW_RODEX_HASNEW,        rodex_checkhasnew ),
+	packet_def3(ZW_RODEX_UPDATE,        rodex_updatemail ),
+	packet_def3(ZW_RODEX_SEND,          rodex_send ),
+	packet_def3(ZW_RODEX_CHECK,         rodex_checkname ),
+
+	packet_def3(ZW_CLAN_COUNT,  ClanMemberCount ),
+	packet_def3(ZW_CLAN_KICK,   ClanMemberKick ),
+
+	packet_def3(ZW_ACHIEVEMENT_LOAD, LoadAchievements ),
+	packet_def4(ZW_ACHIEVEMENT_SAVE, SaveAchievements, -1 ),
 #undef packet_def
 #undef packet_def2
+#undef packet_def3
+#undef packet_def4
 	};
 	size_t length = ARRAYLENGTH(inter_packet);
 
@@ -3759,9 +3848,9 @@ void mapif_defaults(void)
 	mapif->parse_item_data = mapif_parse_item_data;
 	mapif->send_item_data = mapif_send_item_data;
 	mapif->send_users_count = mapif_users_count;
-	mapif->pLoadAchievements = mapif_parse_load_achievements;
+	mapif->parse_LoadAchievements = mapif_parse_load_achievements;
 	mapif->sAchievementsToMap = mapif_send_achievements_to_map;
-	mapif->pSaveAchievements = mapif_parse_save_achievements;
+	mapif->parse_SaveAchievements = mapif_parse_save_achievements;
 	mapif->achievement_save = mapif_achievement_save;
 	mapif->auction_message = mapif_auction_message;
 	mapif->auction_sendlist = mapif_auction_sendlist;
@@ -3885,8 +3974,8 @@ void mapif_defaults(void)
 	mapif->save_guild_storage_ack = mapif_save_guild_storage_ack;
 	mapif->parse_LoadGuildStorage = mapif_parse_LoadGuildStorage;
 	mapif->parse_SaveGuildStorage = mapif_parse_SaveGuildStorage;
-	mapif->pAccountStorageLoad = mapif_parse_AccountStorageLoad;
-	mapif->pAccountStorageSave = mapif_parse_AccountStorageSave;
+	mapif->parse_AccountStorageLoad = mapif_parse_AccountStorageLoad;
+	mapif->parse_AccountStorageSave = mapif_parse_AccountStorageSave;
 	mapif->sAccountStorageSaveAck = mapif_send_AccountStorageSaveAck;
 	mapif->account_storage_load = mapif_account_storage_load;
 	mapif->itembound_ack = mapif_itembound_ack;

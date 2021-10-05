@@ -30,131 +30,131 @@
  **/
 enum inter_packet_zw_id {
 	// char_parse_frommap
-	HEADER_ZW_DATASYNC                      = 0x2b0a, // chr->parse_frommap_datasync(act);
-	HEADER_ZW_SKILLID2IDX                   = 0x2b0b, // chr->parse_frommap_skillid2idx(act);
-	HEADER_ZW_OWNED_MAP_LIST                = 0x2afa, // chr->parse_frommap_map_names(act, server);
-	HEADER_ZW_REQUEST_SCDATA                = 0x2afc, // chr->parse_frommap_request_scdata(act);
-	HEADER_ZW_SEND_USERS_COUNT              = 0x2afe, // chr->parse_frommap_set_users_count(act, server);
-	HEADER_ZW_USER_LIST                     = 0x2aff, // chr->parse_frommap_set_users(act, server);
-	HEADER_ZW_SAVE_CHARACTER                = 0x2b01, // chr->parse_frommap_save_character(act, server);
-	HEADER_ZW_CHAR_SELECT_REQ               = 0x2b02, // chr->parse_frommap_char_select_req(act);
-	HEADER_ZW_CHANGE_SERVER_REQUEST         = 0x2b05, // chr->parse_frommap_change_map_server(fd);
-	HEADER_ZW_REMOVE_FRIEND                 = 0x2b07, // chr->parse_frommap_remove_friend(fd);
-	HEADER_ZW_CHARNAME_REQUEST              = 0x2b08, // chr->parse_frommap_char_name_request(act);
-	HEADER_ZW_REQUEST_CHANGE_EMAIL          = 0x2b0c, // chr->parse_frommap_change_email(act);
-	HEADER_ZW_UPDATE_ACCOUNT                = 0x2b0e, // chr->parse_frommap_change_account(fd);
-	HEADER_ZW_FAME_LIST_UPDATE              = 0x2b10, // chr->parse_frommap_fame_list(act);
-	HEADER_ZW_DIVORCE                       = 0x2b11, // chr->parse_frommap_divorce_char(act);
-	HEADER_ZW_RATES                         = 0x2b16, // chr->parse_frommap_ragsrvinfo(act);
-	HEADER_ZW_SET_CHARACTER_OFFLINE         = 0x2b17, // chr->parse_frommap_set_char_offline(act);
-	HEADER_ZW_SET_ALL_OFFLINE               = 0x2b18, // chr->parse_frommap_set_all_offline(act, server);
-	HEADER_ZW_SET_CHARACTER_ONLINE          = 0x2b19, // chr->parse_frommap_set_char_online(act, server);
-	HEADER_ZW_FAME_LIST_BUILD               = 0x2b1a, // chr->parse_frommap_build_fame_list(act);
-	HEADER_ZW_STATUS_CHANGE_SAVE            = 0x2b1c, // chr->parse_frommap_save_status_change_data(act);
-	HEADER_ZW_PING                          = 0x2b23, // chr->parse_frommap_ping(act);
-	HEADER_ZW_AUTH                          = 0x2b26, // chr->parse_frommap_auth_request(act, server);
-	HEADER_ZW_WAN_UPDATE                    = 0x2736, // chr->parse_frommap_update_ip(act, server);
-	HEADER_ZW_STATUS_CHANGE_UPDATE          = 0x2740, // chr->parse_frommap_scdata_update(fd);
-	HEADER_ZW_STATUS_CHANGE_DELETE          = 0x2741, // chr->parse_frommap_scdata_delete(act);
+	HEADER_ZW_DATASYNC                      = 0x2b0a,
+	HEADER_ZW_SKILLID2IDX                   = 0x2b0b,
+	HEADER_ZW_OWNED_MAP_LIST                = 0x2afa,
+	HEADER_ZW_REQUEST_SCDATA                = 0x2afc,
+	HEADER_ZW_SEND_USERS_COUNT              = 0x2afe,
+	HEADER_ZW_USER_LIST                     = 0x2aff,
+	HEADER_ZW_SAVE_CHARACTER                = 0x2b01,
+	HEADER_ZW_CHAR_SELECT_REQ               = 0x2b02,
+	HEADER_ZW_CHANGE_SERVER_REQUEST         = 0x2b05,
+	HEADER_ZW_REMOVE_FRIEND                 = 0x2b07,
+	HEADER_ZW_CHARNAME_REQUEST              = 0x2b08,
+	HEADER_ZW_REQUEST_CHANGE_EMAIL          = 0x2b0c,
+	HEADER_ZW_UPDATE_ACCOUNT                = 0x2b0e,
+	HEADER_ZW_FAME_LIST_UPDATE              = 0x2b10,
+	HEADER_ZW_DIVORCE                       = 0x2b11,
+	HEADER_ZW_RATES                         = 0x2b16,
+	HEADER_ZW_SET_CHARACTER_OFFLINE         = 0x2b17,
+	HEADER_ZW_SET_ALL_OFFLINE               = 0x2b18,
+	HEADER_ZW_SET_CHARACTER_ONLINE          = 0x2b19,
+	HEADER_ZW_FAME_LIST_BUILD               = 0x2b1a,
+	HEADER_ZW_STATUS_CHANGE_SAVE            = 0x2b1c,
+	HEADER_ZW_PING                          = 0x2b23,
+	HEADER_ZW_AUTH                          = 0x2b26,
+	HEADER_ZW_WAN_UPDATE                    = 0x2736,
+	HEADER_ZW_STATUS_CHANGE_UPDATE          = 0x2740,
+	HEADER_ZW_STATUS_CHANGE_DELETE          = 0x2741,
 
 	// inter_parse_frommap
-	HEADER_ZW_ACCOUNT_REG2    = 0x3004, // mapif->parse_Registry(act); break;
-	HEADER_ZW_ACCOUNT_REG_REQ = 0x3005, // mapif->parse_RegistryRequest(act); break;
-	HEADER_ZW_NAME_CHANGE     = 0x3006, // mapif->parse_NameChangeRequest(act); break;
-	HEADER_ZW_ACCINFO_REQUEST = 0x3007, // mapif->parse_accinfo(act); break;
+	HEADER_ZW_ACCOUNT_REG2    = 0x3004,
+	HEADER_ZW_ACCOUNT_REG_REQ = 0x3005,
+	HEADER_ZW_NAME_CHANGE     = 0x3006,
+	HEADER_ZW_ACCINFO_REQUEST = 0x3007,
 
 	// inter_party_parse_frommap
-	HEADER_ZW_PARTY_CREATE     = 0x3020, // mapif->parse_CreateParty(fd, R
-	HEADER_ZW_PARTY_INFO       = 0x3021, // mapif->parse_PartyInfo(fd, RFI
-	HEADER_ZW_PARTY_MEMBER_ADD = 0x3022, // mapif->parse_PartyAddMember(fd
-	HEADER_ZW_PARTY_SETTING    = 0x3023, // mapif->parse_PartyChangeOption
-	HEADER_ZW_PARTY_WITHDRAW   = 0x3024, // mapif->parse_PartyLeave(fd, RF
-	HEADER_ZW_MEMBER_UPDATE    = 0x3025, // mapif->parse_PartyChangeMap(fd
-	HEADER_ZW_PARTY_BREAK      = 0x3026, // mapif->parse_BreakParty(fd, RF
-	HEADER_ZW_PARTY_LEADER     = 0x3029, // mapif->parse_PartyLeaderChange
+	HEADER_ZW_PARTY_CREATE     = 0x3020,
+	HEADER_ZW_PARTY_INFO       = 0x3021,
+	HEADER_ZW_PARTY_MEMBER_ADD = 0x3022,
+	HEADER_ZW_PARTY_SETTING    = 0x3023,
+	HEADER_ZW_PARTY_WITHDRAW   = 0x3024,
+	HEADER_ZW_MEMBER_UPDATE    = 0x3025,
+	HEADER_ZW_PARTY_BREAK      = 0x3026,
+	HEADER_ZW_PARTY_LEADER     = 0x3029,
 
 	// inter_guild_parse_frommap
-	HEADER_ZW_GUILD_CREATE              = 0x3030, // mapif->parse_CreateGuild(fd, RFIFO
-	HEADER_ZW_GUILD_INFO                = 0x3031, // mapif->parse_GuildInfo(fd,RFIFOL(f
-	HEADER_ZW_GUILD_MEMBER              = 0x3032, // mapif->parse_GuildAddMember(fd, RF
-	HEADER_ZW_GUILD_MASTER              = 0x3033, // mapif->parse_GuildMasterChange(fd,
-	HEADER_ZW_GUILD_WITHDRAW            = 0x3034, // mapif->parse_GuildLeave(fd, RFIFOL
-	HEADER_ZW_GUILD_MEMBER_UPDATE_SHORT = 0x3035, // mapif->parse_GuildChangeMemberInfo
-	HEADER_ZW_GUILD_BREAK               = 0x3036, // mapif->parse_BreakGuild(fd,RFIFOL(
-	HEADER_ZW_GUILD_INFO_UPDATE         = 0x3039, // mapif->parse_GuildBasicInfoChange(
-	HEADER_ZW_GUILD_MEMBER_UPDATE_FIELD = 0x303A, // mapif->parse_GuildMemberInfoChange
-	HEADER_ZW_GUILD_TITLE_UPDATE        = 0x303B, // mapif->parse_GuildPosition(fd, RFI
-	HEADER_ZW_GUILD_SKILL_UP            = 0x303C, // mapif->parse_GuildSkillUp(fd,RFIFO
-	HEADER_ZW_GUILD_ALLY_UPDATE         = 0x303D, // mapif->parse_GuildAlliance(fd,RFIF
-	HEADER_ZW_GUILD_NOTICE              = 0x303E, // mapif->parse_GuildNotice(fd, RFIFO
-	HEADER_ZW_GUILD_EMBLEM              = 0x303F, // mapif->parse_GuildEmblem(fd, RFIFO
-	HEADER_ZW_GUILD_CASTLE_LOAD         = 0x3040, // mapif->parse_GuildCastleDataLoad(f
-	HEADER_ZW_GUILD_CASTLE_SAVE         = 0x3041, // mapif->parse_GuildCastleDataSave(f
+	HEADER_ZW_GUILD_CREATE              = 0x3030,
+	HEADER_ZW_GUILD_INFO                = 0x3031,
+	HEADER_ZW_GUILD_MEMBER_ADD          = 0x3032,
+	HEADER_ZW_GUILD_MASTER              = 0x3033,
+	HEADER_ZW_GUILD_WITHDRAW            = 0x3034,
+	HEADER_ZW_GUILD_MEMBER_UPDATE       = 0x3035,
+	HEADER_ZW_GUILD_BREAK               = 0x3036,
+	HEADER_ZW_GUILD_INFO_UPDATE         = 0x3039,
+	HEADER_ZW_GUILD_MEMBER_UPDATE_FIELD = 0x303A,
+	HEADER_ZW_GUILD_TITLE_UPDATE        = 0x303B,
+	HEADER_ZW_GUILD_SKILL_UP            = 0x303C,
+	HEADER_ZW_GUILD_ALLY_UPDATE         = 0x303D,
+	HEADER_ZW_GUILD_NOTICE              = 0x303E,
+	HEADER_ZW_GUILD_EMBLEM              = 0x303F,
+	HEADER_ZW_GUILD_CASTLE_LOAD         = 0x3040,
+	HEADER_ZW_GUILD_CASTLE_SAVE         = 0x3041,
 
 	// inter_storage_parse_frommap
-	HEADER_ZW_PLAYER_STORAGE      = 0x3010, // mapif->pAccountStorageLoad(fd); bre
-	HEADER_ZW_PLAYER_STORAGE_SAVE = 0x3011, // mapif->pAccountStorageSave(fd); bre
-	HEADER_ZW_GUILD_STORAGE_LOAD  = 0x3018, // mapif->parse_LoadGuildStorage(fd); 
-	HEADER_ZW_GUILD_STORAGE_SAVE  = 0x3019, // mapif->parse_SaveGuildStorage(fd); 
-	HEADER_ZW_BOUND_RETRIEVE      = 0x3056, // mapif->parse_ItemBoundRetrieve(fd);
+	HEADER_ZW_PLAYER_STORAGE      = 0x3010,
+	HEADER_ZW_PLAYER_STORAGE_SAVE = 0x3011,
+	HEADER_ZW_GUILD_STORAGE_LOAD  = 0x3018,
+	HEADER_ZW_GUILD_STORAGE_SAVE  = 0x3019,
+	HEADER_ZW_BOUND_RETRIEVE      = 0x3056,
 
 	// inter_pet_parse_frommap
-	HEADER_ZW_PET_CREATE = 0x3080, // mapif->parse_CreatePet
-	HEADER_ZW_PET_LOAD   = 0x3081, // mapif->parse_LoadPet(f
-	HEADER_ZW_PET_SAVE   = 0x3082, // mapif->parse_SavePet(f
-	HEADER_ZW_PET_DELETE = 0x3083, // mapif->parse_DeletePet
+	HEADER_ZW_PET_CREATE = 0x3080,
+	HEADER_ZW_PET_LOAD   = 0x3081,
+	HEADER_ZW_PET_SAVE   = 0x3082,
+	HEADER_ZW_PET_DELETE = 0x3083,
 
 	// inter_homunculus_parse_frommap
-	HEADER_ZW_HOMUNCULUS_CREATE = 0x3090, // mapif->parse_homunculus_create
-	HEADER_ZW_HOMUNCULUS_LOAD   = 0x3091, // mapif->parse_homunculus_load  
-	HEADER_ZW_HOMUNCULUS_SAVE   = 0x3092, // mapif->parse_homunculus_save  
-	HEADER_ZW_HOMUNCULUS_DELETE = 0x3093, // mapif->parse_homunculus_delete
+	HEADER_ZW_HOMUNCULUS_CREATE = 0x3090,
+	HEADER_ZW_HOMUNCULUS_LOAD   = 0x3091,
+	HEADER_ZW_HOMUNCULUS_SAVE   = 0x3092,
+	HEADER_ZW_HOMUNCULUS_DELETE = 0x3093,
 
 	// inter_mercenary_parse_frommap
-	HEADER_ZW_MERCENARY_CREATE = 0x3070, // mapif->parse_mercenary_create
-	HEADER_ZW_MERCENARY_LOAD   = 0x3071, // mapif->parse_mercenary_load(f
-	HEADER_ZW_MERCENARY_DELETE = 0x3072, // mapif->parse_mercenary_delete
-	HEADER_ZW_MERCENARY_SAVE   = 0x3073, // mapif->parse_mercenary_save(f
+	HEADER_ZW_MERCENARY_CREATE = 0x3070,
+	HEADER_ZW_MERCENARY_LOAD   = 0x3071,
+	HEADER_ZW_MERCENARY_DELETE = 0x3072,
+	HEADER_ZW_MERCENARY_SAVE   = 0x3073,
 
 	// inter_elemental_parse_frommap
-	HEADER_ZW_ELEMENTAL_CREATE = 0x307c, // mapif->parse_elemental_create
-	HEADER_ZW_ELEMENTAL_LOAD   = 0x307d, // mapif->parse_elemental_load(f
-	HEADER_ZW_ELEMENTAL_DELETE =0x307e, // mapif->parse_elemental_delete
-	HEADER_ZW_ELEMENTAL_SAVE   =0x307f, // mapif->parse_elemental_save(f
+	HEADER_ZW_ELEMENTAL_CREATE = 0x307c,
+	HEADER_ZW_ELEMENTAL_LOAD   = 0x307d,
+	HEADER_ZW_ELEMENTAL_DELETE = 0x307e,
+	HEADER_ZW_ELEMENTAL_SAVE   = 0x307f,
 
 	// inter_mail_parse_frommap
-	HEADER_ZW_MAIL_INBOX_REQUEST = 0x3048, // mapif->parse_mail_requestinbox
-	HEADER_ZW_MAIL_READ          = 0x3049, // mapif->parse_mail_read(fd); br
-	HEADER_ZW_MAIL_ATTACHMENT    = 0x304a, // mapif->parse_mail_getattach(fd
-	HEADER_ZW_MAIL_DELETE        = 0x304b, // mapif->parse_mail_delete(fd); 
-	HEADER_ZW_MAIL_RETURN        = 0x304c, // mapif->parse_mail_return(fd); 
-	HEADER_ZW_MAIL_SEND          = 0x304d, // mapif->parse_mail_send(fd); br
+	HEADER_ZW_MAIL_INBOX_REQUEST = 0x3048,
+	HEADER_ZW_MAIL_READ          = 0x3049,
+	HEADER_ZW_MAIL_ATTACHMENT    = 0x304a,
+	HEADER_ZW_MAIL_DELETE        = 0x304b,
+	HEADER_ZW_MAIL_RETURN        = 0x304c,
+	HEADER_ZW_MAIL_SEND          = 0x304d,
 
 	// inter_auction_parse_frommap
-	HEADER_ZW_AUCTION_REQUEST_LIST = 0x3050, // mapif->parse_auction_requestlist
-	HEADER_ZW_AUCTION_REGISTER     = 0x3051, // mapif->parse_auction_register(ac
-	HEADER_ZW_AUCTION_CANCEL       = 0x3052, // mapif->parse_auction_cancel(act)
-	HEADER_ZW_AUCTION_CLOSE        = 0x3053, // mapif->parse_auction_close(act);
-	HEADER_ZW_AUCTION_BID_ACK      = 0x3055, // mapif->parse_auction_bid(act); b
+	HEADER_ZW_AUCTION_REQUEST_LIST = 0x3050,
+	HEADER_ZW_AUCTION_REGISTER     = 0x3051,
+	HEADER_ZW_AUCTION_CANCEL       = 0x3052,
+	HEADER_ZW_AUCTION_CLOSE        = 0x3053,
+	HEADER_ZW_AUCTION_BID          = 0x3055,
 
 	// inter_quest_parse_frommap
-	HEADER_ZW_QUEST_LOAD = 0x3060, // mapif->parse_quest_load
-	HEADER_ZW_QUEST_SAVE = 0x3061, // mapif->parse_quest_save
+	HEADER_ZW_QUEST_LOAD = 0x3060,
+	HEADER_ZW_QUEST_SAVE = 0x3061,
 
 	// inter_rodex_parse_frommap
-	HEADER_ZW_RODEX_INBOX_REQUEST = 0x3095, // mapif->parse_rodex_requestinbox
-	HEADER_ZW_RODEX_HASNEW        = 0x3096, // mapif->parse_rodex_checkhasnew(
-	HEADER_ZW_RODEX_UPDATE        = 0x3097, // mapif->parse_rodex_updatemail(f
-	HEADER_ZW_RODEX_SEND          = 0x3098, // mapif->parse_rodex_send(fd); br
-	HEADER_ZW_RODEX_CHECK         = 0x3099, // mapif->parse_rodex_checkname(fd
+	HEADER_ZW_RODEX_INBOX_REQUEST = 0x3095,
+	HEADER_ZW_RODEX_HASNEW        = 0x3096,
+	HEADER_ZW_RODEX_UPDATE        = 0x3097,
+	HEADER_ZW_RODEX_SEND          = 0x3098,
+	HEADER_ZW_RODEX_CHECK         = 0x3099,
 
 	// inter_clan_parse_frommap
-	HEADER_ZW_CLAN_COUNT = 0x3044, // mapif->parse_ClanMemberCount
-	HEADER_ZW_CLAN_KICK  = 0x3045, // mapif->parse_ClanMemberKick(
+	HEADER_ZW_CLAN_COUNT = 0x3044,
+	HEADER_ZW_CLAN_KICK  = 0x3045,
 
 	// inter_achievement_parse_frommap
-	HEADER_ZW_ACHIEVEMENT_LOAD = 0x3012, // mapif->pLoadAchievements
-	HEADER_ZW_ACHIEVEMENT_SAVE = 0x3013, // mapif->pSaveAchievements
+	HEADER_ZW_ACHIEVEMENT_LOAD = 0x3012,
+	HEADER_ZW_ACHIEVEMENT_SAVE = 0x3013,
 };
 
 #if !defined(sun) && (!defined(__NETBSD__) || __NetBSD_Version__ >= 600000000) // NetBSD 5 and Solaris don't like pragma pack but accept the packed attribute
@@ -219,7 +219,7 @@ struct PACKET_ZW_SEND_USERS_COUNT {
  **/
 struct PACKET_ZW_USER_LIST {
 	int16 packet_id;
-	int16 len;
+	int16 packet_len;
 	int16 user_count;
 	struct {
 		int32 account_id;
@@ -1195,7 +1195,7 @@ struct s_pet_packet_data {
  * @see mapif_parse_save_pet
  **/
 struct PACKET_ZW_PET_SAVE {
-	int16 packet_len;
+	int16 packet_id;
 	struct s_pet_packet_data pet;
 } __attribute__((packed));
 
@@ -1204,7 +1204,7 @@ struct PACKET_ZW_PET_SAVE {
  * @see mapif_parse_delete_pet
  **/
 struct PACKET_ZW_PET_DELETE {
-	int16 packet_len;
+	int16 packet_id;
 	int32 account_id;
 	int32 pet_id;
 } __attribute__((packed));
@@ -1214,7 +1214,7 @@ struct PACKET_ZW_PET_DELETE {
  * @see mapif_parse_CreatePet
  **/
 struct PACKET_ZW_PET_CREATE {
-	int16 packet_len;
+	int16 packet_id;
 	struct s_pet_packet_data pet;
 } __attribute__((packed));
 
@@ -1223,7 +1223,7 @@ struct PACKET_ZW_PET_CREATE {
  * @see mapif_parse_LoadPet
  **/
 struct PACKET_ZW_PET_LOAD {
-	int16 packet_len;
+	int16 packet_id;
 	int32 account_id;
 	int32 char_id;
 	int32 pet_id;
@@ -1379,7 +1379,7 @@ struct PACKET_ZW_PLAYER_STORAGE_SAVE {
  *
  * @see mapif_parse_LoadGuildStorage
  **/
-struct PACKET_WZ_GUILD_STORAGE_LOAD {
+struct PACKET_ZW_GUILD_STORAGE_LOAD {
 	int16 packet_id;
 	int32 account_id;
 	int32 guild_id;
