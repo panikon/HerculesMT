@@ -85,7 +85,12 @@
 #	endif
 #endif
 
-// private declarations
+/**
+ * Private declarations
+ *
+ * These declarations don't need any locks to be accessed because they're only
+ * changed on server startup [Panikon]
+ **/
 char char_db[256] = "char";
 char scdata_db[256] = "sc_data";
 char cart_db[256] = "cart_inventory";
@@ -182,14 +187,44 @@ static struct point start_point = { 0, 97, 90 };
 static struct point start_point = { 0, 53, 111 };
 #endif
 
+/**
+ * RO skill id to internal skill index
+ * This is used so the internal indices of the map-server and the char-server
+ * are in sync. The reason that mmo_charstatus::skill doesn't map 1-to-1 to
+ * the RO indices is to avoid wasting internal space with skipped or
+ * non-implemented ids.
+ *
+ * @see mmo_charstatus::skill
+ * @see char_mmo_char_fromsql
+ * @see char_parse_frommap_skillid2idx
+ **/
 static unsigned short skillid2idx[MAX_SKILL_ID];
+static struct rwlock_data *skillid2idx_lock = NULL;
 
 //-----------------------------------------------------
 // Auth database
 //-----------------------------------------------------
 #define AUTH_TIMEOUT 30000
 
-static struct DBMap *auth_db; // int account_id -> struct char_auth_node*
+/**
+ * Authentication DB
+ *
+ * Entries of this database are used so we can keep track of the users
+ * that were already authenticated by us and are currently moving to a
+ * map-server. Entries are added using chr->create_auth_entry and then
+ * removed in char_parse_frommap_auth_request after a succesful auth.
+ * After removal the character is added to chr->online_char_db.
+ *
+ * @see char_create_auth_entry
+ * @see char_parse_frommap_auth_request
+ *
+ * int account_id -> struct char_auth_node*
+ *
+ * TODO: Verify if it'd be less expensive to use a unique auth db per
+ * map-server so we can reduce the number of lock calls [Panikon]
+ **/
+static struct DBMap *auth_db;
+static struct mutex_data *auth_db_mutex = NULL;
 
 //-----------------------------------------------------
 // Online User Database
@@ -1253,6 +1288,8 @@ static int char_mmo_chars_fromsql(struct char_session_data *sd, uint8 *buf, int 
  * @param out_db          load_everything false - (IN/OUT)Memory to be filled with loaded data.
  * @param load_everything Should the entire character data be loaded and inserted in char_db_
  * @retval bool Success
+ *
+ * Acquires skillid2idx_lock 
  **/
 static int char_mmo_char_fromsql(int char_id, struct mmo_charstatus **out_db, bool load_everything)
 {
@@ -1453,6 +1490,7 @@ static int char_mmo_char_fromsql(int char_id, struct mmo_charstatus **out_db, bo
 	if (tmp_skill.flag != SKILL_FLAG_PERM_GRANTED)
 		tmp_skill.flag = SKILL_FLAG_PERMANENT;
 
+	rwlock->read_lock(skillid2idx_lock);
 	for (i = 0; i < MAX_SKILL_DB && SQL_SUCCESS == SQL->StmtNextRow(stmt); ++i) {
 		if( skillid2idx[tmp_skill.id] )
 			memcpy(&data.skill[skillid2idx[tmp_skill.id]], &tmp_skill, sizeof(tmp_skill));
@@ -1461,6 +1499,8 @@ static int char_mmo_char_fromsql(int char_id, struct mmo_charstatus **out_db, bo
 				"character %s (AID=%d,CID=%d)\n", tmp_skill.id, tmp_skill.lv, data.name,
 				data.account_id, data.char_id);
 	}
+	rwlock->read_unlock(skillid2idx_lock);
+
 	strcat(t_msg, " skills");
 
 	//read friends
@@ -2753,11 +2793,18 @@ static void char_parse_frommap_datasync(struct s_receive_action_data *act, struc
 /**
  * ZW_SKILLID2IDX
  * Updates char-server skill-id to skill index according to the map-server
+ *
+ * TODO: Send new skillid2idx to other map-servers so they can check if the
+ * skill indices are still in sync [Panikon]
+ *
+ * Acquires write skillid2idx_lock
  **/
 static void char_parse_frommap_skillid2idx(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int i;
 	int j = RFIFOW(act, 2) - 4;
+
+	rwlock->write_lock(skillid2idx_lock);
 
 	memset(&skillid2idx, 0, sizeof(skillid2idx));
 	if( j )
@@ -2772,6 +2819,8 @@ static void char_parse_frommap_skillid2idx(struct s_receive_action_data *act, st
 		}
 		skillid2idx[RFIFOW(act, 4 + (i*4))] = RFIFOW(act, 6 + (i*4));
 	}
+
+	rwlock->write_unlock(skillid2idx_lock);
 }
 
 /**
@@ -3086,6 +3135,8 @@ static void char_parse_frommap_change_email(struct s_receive_action_data *act, s
 /**
  * Kicks an account, if the character is in the map-server notifies it.
  * @see loginif->parse_kick
+ *
+ * Acquires auth_db_mutex
  **/
 static void char_kick(int account_id)
 {
@@ -3128,7 +3179,9 @@ static void char_kick(int account_id)
 			chr->set_char_offline(-1, account_id);
 	}
 remove_auth_db:
+	mutex->lock(auth_db_mutex);
 	idb_remove(auth_db, account_id); // reject auth attempts from map-server
+	mutex->unlock(auth_db_mutex);
 }
 
 static void char_ban(int account_id, int char_id, time_t *unban_time, short year, short month, short day, short hour, short minute, short second)
@@ -3187,6 +3240,7 @@ static void char_unban(int char_id, int *result)
  * Changes the sex of all characters of an account.
  * @see loginif_parse_changesex_reply
  * @see char_change_sex_sub
+ * Acquires auth_db_mutex
  **/
 static void char_changecharsex_all(int account_id, int sex)
 {
@@ -3194,9 +3248,11 @@ static void char_changecharsex_all(int account_id, int sex)
 	struct char_auth_node *node;
 	struct SqlStmt *stmt;
 
+	mutex->lock(auth_db_mutex);
 	node = idb_get(auth_db, account_id);
 	if(node != NULL)
 		node->sex = sex;
+	mutex->unlock(auth_db_mutex);
 
 	// get characters
 	stmt = SQL->StmtMalloc(inter->sql_handle);
@@ -3558,10 +3614,11 @@ static void char_parse_frommap_ping(struct s_receive_action_data *act, struct mm
 /**
  * ZW_AUTH
  * Map-server account authentication request
+ *
+ * Acquires auth_db_mutex
  **/
 static void char_parse_frommap_auth_request(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
-	struct char_auth_node* node;
 	struct mmo_charstatus* cd;
 
 	int account_id  = RFIFOL(act,2);
@@ -3571,7 +3628,6 @@ static void char_parse_frommap_auth_request(struct s_receive_action_data *act, s
 	uint32 ip       = ntohl(RFIFOL(act,15));
 	char standalone = RFIFOB(act, 19);
 
-	node = idb_get(auth_db, account_id);
 	cd = uidb_get(chr->char_db_,char_id);
 
 	if( cd == NULL ) //Really shouldn't happen.
@@ -3584,6 +3640,9 @@ static void char_parse_frommap_auth_request(struct s_receive_action_data *act, s
 		chr->set_char_online(server->pos, char_id, account_id);
 		return;
 	}
+
+	mutex->lock(auth_db_mutex);
+	struct char_auth_node *node = idb_get(auth_db, account_id);
 
 	if( core->runflag == CHARSERVER_ST_RUNNING &&
 		cd != NULL &&
@@ -3600,10 +3659,12 @@ static void char_parse_frommap_auth_request(struct s_receive_action_data *act, s
 		mapif->auth_ok(act->session, account_id, node, cd);
 		// only use the auth once and mark user online
 		idb_remove(auth_db, account_id);
+		mutex->unlock(auth_db_mutex);
 		chr->set_char_online(server->pos, char_id, account_id);
 	}
 	else
 	{// auth failed
+		mutex->unlock(auth_db_mutex);
 		mapif->auth_failed(act->session, account_id, char_id, login_id1, sex, ip);
 	}
 }
@@ -3979,12 +4040,16 @@ static void char_send_account_id(struct socket_data *session, int account_id)
  *
  * @see chclif_parse_enter
  * @retval NBE_SUCCESS successful first step of authentication
+ *
+ * Acquires auth_db_mutex
  **/
 static enum notify_ban_errorcode char_auth(struct socket_data *session, struct char_session_data *sd,
 	int ipl
 ) {
+	mutex->lock(auth_db_mutex);
 	struct char_auth_node *node = idb_get(auth_db, sd->account_id);
 	if(!node) {
+		mutex->unlock(auth_db_mutex);
 		// Authentication not found (coming from login server)
 		if(!chr->login_session)
 			return NBE_SERVER_CLOSED;
@@ -3997,16 +4062,22 @@ static enum notify_ban_errorcode char_auth(struct socket_data *session, struct c
 		|| node->ip         != ipl
 		) {
 			// Authentication mismatch, deny connection
+			mutex->unlock(auth_db_mutex);
 			return NBE_DISCONNECTED;
 		}
+		enum notify_ban_errorcode temp_code = NBE_SUCCESS;
 		/* restrictions apply */
 		if( chr->server_type == CST_MAINTENANCE && node->group_id < char_maintenance_min_group_id )
-			return NBE_SERVER_CLOSED;
+			temp_code = NBE_SERVER_CLOSED;
 		/* the client will already deny this request, this check is to avoid someone bypassing. */
-		if( chr->server_type == CST_PAYING && (time_t)node->expiration_time < time(NULL) )
-			return NBE_NO_PAYING_TIME;
+		else if( chr->server_type == CST_PAYING && (time_t)node->expiration_time < time(NULL) )
+			temp_code = NBE_NO_PAYING_TIME;
 
 		idb_remove(auth_db, sd->account_id);
+		mutex->unlock(auth_db_mutex);
+
+		if(temp_code != NBE_SUCCESS)
+			return temp_code;
 		chr->auth_ok(session, sd);
 	}
 	mutex->lock(session->mutex);
@@ -4175,9 +4246,6 @@ static int char_slot2id(int account_id, int slot)
 /**
  * Creates an authentication entry in 'auth_db'
  *
- * This entry is later queried when map-server asks for information of the
- * authentication status of this character or when the player re-enters
- * char-server from map-server.
  * @see auth_db
  **/
 static void char_create_auth_entry(struct char_session_data *sd, int char_id, int ipl, bool changing_map_servers)
@@ -4193,7 +4261,10 @@ static void char_create_auth_entry(struct char_session_data *sd, int char_id, in
 	node->group_id             = sd->group_id;
 	node->ip                   = ipl;
 	node->changing_mapservers  = changing_map_servers;
+
+	mutex->lock(auth_db_mutex);
 	idb_put(auth_db, sd->account_id, node);
+	mutex->unlock(auth_db_mutex);
 }
 
 static void char_creation_failed(struct socket_data *session, enum refuse_make_char_errorcode result)
@@ -5256,7 +5327,9 @@ int do_final(void)
 
 	chr->char_db_->destroy(chr->char_db_, NULL);
 	chr->online_char_db->destroy(chr->online_char_db, NULL);
+
 	auth_db->destroy(auth_db, NULL);
+	mutex->destroy(auth_db_mutex);
 
 	HPM_char_do_final();
 
@@ -5269,6 +5342,8 @@ int do_final(void)
 	aFree(chr->NET_CONF_NAME);
 	aFree(chr->SQL_CONF_NAME);
 	aFree(chr->INTER_CONF_NAME);
+
+	rwlock->destroy(skillid2idx_lock);
 
 	HPM->event(HPET_POST_FINAL);
 
@@ -5380,6 +5455,9 @@ void cmdline_args_init_local(void)
 int do_init(int argc, char **argv)
 {
 	memset(&skillid2idx, 0, sizeof(skillid2idx));
+	skillid2idx_lock = rwlock->create();
+	if(!skillid2idx_lock)
+		exit(EXIT_FAILURE);
 
 	char_load_defaults();
 
@@ -5443,6 +5521,9 @@ int do_init(int argc, char **argv)
 	inter->init_sql(chr->INTER_CONF_NAME); // inter server configuration
 
 	auth_db = idb_alloc(DB_OPT_RELEASE_DATA);
+	if(!(auth_db_mutex = mutex->create()))
+		exit(EXIT_FAILURE);
+
 	chr->online_char_db = idb_alloc(DB_OPT_RELEASE_DATA);
 
 	HPM->event(HPET_INIT);
@@ -5588,6 +5669,7 @@ void char_defaults(void)
 	chr->show_save_log = true;
 	chr->enable_logs = true;
 
+	chr->create_auth_entry = char_create_auth_entry;
 	chr->waiting_disconnect = char_waiting_disconnect;
 	chr->delete_char_sql = char_delete_char_sql;
 	chr->create_online_char_data = char_create_online_char_data;
