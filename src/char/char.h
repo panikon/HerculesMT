@@ -95,6 +95,7 @@ struct online_char_data {
  **/
 struct mmo_map_server {
 	uint32 pos; // Position in list (@see char_interface::map_server_list)
+	int32 queue_index; // Index of the queue of this map-server
 
 	struct socket_data *session;
 	uint32 ip;

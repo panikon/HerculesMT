@@ -4290,13 +4290,16 @@ static void char_parse_char_login_map_server(struct s_receive_action_data *act, 
 	chr->mapif_init(act->session);
 
 	mutex->lock(act->session->mutex);
+
 	socket_io->session_update_parse(act->session, chr->parse_frommap);
 	act->session->flag.server = 1;
 	act->session->flag.validate = 0;
-	mutex->unlock(act->session->mutex);
+	action->queue_set(act->session, server->queue_index);
 
 	act->session->session_data = aMalloc(sizeof(server->pos));
 	*(uint32*)act->session->session_data = server->pos;
+
+	mutex->unlock(act->session->mutex);
 
 	socket_io->datasync(act, true);
 

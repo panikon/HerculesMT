@@ -50,6 +50,7 @@
 #include "common/sql.h"
 #include "common/strlib.h"
 
+#include "common/action.h"
 #include "common/rwlock.h"
 #include "common/mutex.h"
 #include "common/packets_zw_struct.h"
@@ -188,6 +189,25 @@ static struct mmo_map_server *mapif_on_connect(struct socket_data *session, uint
 	rwlock->write_lock(chr->map_server_list_lock);
 	INDEX_MAP_ADD(chr->map_server_list, server, server->pos);
 	rwlock->write_unlock(chr->map_server_list_lock);
+
+	// Find an empty action queue for this map-server
+	mutex->lock(chr->action_information_mutex);
+	struct s_action_information *data = linkdb_search(&chr->action_information, NULL);
+	if(!data) { // Create a new action queue
+		struct s_action_queue *queue = action->queue_create(10, chr->ers_collection);
+		data = aMalloc(sizeof(*data));
+		data->index = action->queue_get_index(queue);
+		data->server = server;
+	} else { // Remove and then reinsert with a server
+		data->server = server;
+		data = linkdb_erase(&chr->action_information, NULL);
+	}
+	linkdb_insert(&chr->action_information, server, data);
+	mutex->unlock(chr->action_information_mutex);
+
+	server->queue_index = data->index;
+	// This queue is attached to this session in char_parse_char_login_map_server
+
 	return server;
 }
 

@@ -1933,11 +1933,6 @@ static void login_parse_request_connection(struct s_receive_action_data *act, st
 		data = aMalloc(sizeof(*data));
 		data->index = action->queue_get_index(queue);
 		data->server = server;
-		action_information_mutex = mutex->create();
-		if(!action_information_mutex) {
-			ShowFatalError("Failed to initialize action information list\n");
-			exit(EXIT_FAILURE);
-		}
 	} else { // Remove and then reinsert with a server
 		data->server = server;
 		data = linkdb_erase(&action_information, NULL);
