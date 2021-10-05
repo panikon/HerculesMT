@@ -1622,10 +1622,13 @@ static bool char_char_slotchange(struct char_session_data *sd, struct socket_dat
 
 /**
  * Changes the provided character name using sd::rename data
- * Assumes that the data in sd::rename is already validated (i.e. the name is valid)
  *
  * @return Change charname result code (success CRR_SUCCESS)
  * @see enum change_charname_result
+ *
+ * @remarks
+ * Assumes that the data in sd::rename is already validated
+ * (i.e. the name is valid and escaped)
  **/
 static enum change_charname_result char_rename_char_sql(struct char_session_data *sd, int char_id)
 {
@@ -1639,7 +1642,7 @@ static enum change_charname_result char_rename_char_sql(struct char_session_data
 	if(!chr->mmo_char_fromsql(char_id, &cd, false)) // Only the short data is needed.
 		return CRR_INCORRECT_USER;
 
-	if(sd->account_id != char_dat.account_id) // Tryed to rename not owned char
+	if(sd->account_id != char_dat.account_id) // Tried to rename not owned char
 		return CRR_INCORRECT_USER;
 
 	if(char_dat.rename == 0)
@@ -1670,7 +1673,7 @@ static enum change_charname_result char_rename_char_sql(struct char_session_data
 
 	// Change character's name into guild_db.
 	if(char_dat.guild_id)
-		inter_guild->charname_changed(char_dat.guild_id, sd->account_id, char_id, sd->rename->new_name);
+		inter_guild->charname_changed(char_dat.guild_id, char_id, sd->rename->new_name);
 
 	safestrncpy(char_dat.name, sd->rename->new_name, NAME_LENGTH);
 	aFree(sd->rename);
@@ -2265,7 +2268,7 @@ static void char_send_HC_ACK_CHARINFO_PER_PAGE(struct socket_data *session, stru
 #if PACKETVER_MAIN_NUM >= 20130522 || PACKETVER_RE_NUM >= 20130327 || defined(PACKETVER_ZERO)
 	WFIFOHEAD(session,
 		sizeof(struct PACKET_HC_ACK_CHARINFO_PER_PAGE) + (MAX_CHARS * MAX_CHAR_BUF), true);
-	struct PACKET_HC_ACK_CHARINFO_PER_PAGE *p = WFIFOP(session, 0, true);
+	struct PACKET_HC_ACK_CHARINFO_PER_PAGE *p = WFIFOP(session, 0);
 	int count = 0;
 	p->packetId = HEADER_HC_ACK_CHARINFO_PER_PAGE;
 	p->packetLen = chr->mmo_chars_fromsql(sd, WFIFOP(session, 4), &count) + sizeof(struct PACKET_HC_ACK_CHARINFO_PER_PAGE);

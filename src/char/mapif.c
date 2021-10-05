@@ -38,6 +38,7 @@
 #include "char/int_rodex.h"
 #include "char/int_storage.h"
 #include "char/inter.h"
+#include "char/loginif.h"
 #include "common/cbasetypes.h"
 #include "common/memmgr.h"
 #include "common/mmo.h"
@@ -1728,22 +1729,6 @@ static void mapif_homunculus_saved(struct socket_data *session, int account_id, 
 }
 
 /**
- * WZ_HOMUNCULUS_RENAME_ACK
- * Result of a rename request
- **/
-static void mapif_homunculus_renamed(struct socket_data *session, int account_id, int homun_id, unsigned char flag, const char *name)
-{
-	nullpo_retv(name);
-	WFIFOHEAD(session, NAME_LENGTH + 12, true);
-	WFIFOW(session, 0) = 0x3894;
-	WFIFOL(session, 2) = account_id;
-	WFIFOL(session, 6) = homun_id;
-	WFIFOB(session, 10) = flag;
-	safestrncpy(WFIFOP(session, 11), name, NAME_LENGTH);
-	WFIFOSET(session, NAME_LENGTH + 12);
-}
-
-/**
  * ZW_HOMUNCULUS_CREATE
  * Create homunculus request
  **/
@@ -1845,23 +1830,6 @@ static void mapif_parse_homunculus_save(struct s_receive_action_data *act, struc
 	memcpy(hd.hskill, RFIFOP(act, 68), hskill_len);
 	bool result = inter_homunculus->save(&hd);
 	mapif->homunculus_saved(act->session, account_id, result);
-}
-
-/**
- * ZW_HOMUNCULUS_RENAME
- * Homunculus rename request
- *
- * TODO: This doesn't seem to be implemented in map-server
- * Currently all rename requests are handled by 0x3006 (parse_NameChangeRequest),
- * but all char-server is doing now is verifying if the names are valid or not
- * without actually updating the database...
- **/
-static void mapif_parse_homunculus_rename(struct s_receive_action_data *act, struct mmo_map_server *server)
-{
-	int account_id = RFIFOL(act, 2);
-	int homun_id   = RFIFOL(act, 6);
-	bool result = inter_homunculus->rename(homun_id, RFIFOP(act, 10));
-	mapif->homunculus_renamed(act->session, account_id, homun_id, result, RFIFOP(act, 10));
 }
 
 /*======================================
@@ -3316,36 +3284,42 @@ static void mapif_parse_SaveGuildStorage(struct s_receive_action_data *act)
  * MAPIF : BOUND ITEMS
  *------------------------------------------*/
 
-static int mapif_itembound_ack(int fd, int aid, int guild_id)
+/**
+ * WZ_BOUND_RETRIEVE_ACK
+ * Notify completion of retrieval of a bound item
+ **/
+static void mapif_itembound_ack(struct socket_data *session, int guild_id)
 {
 #ifdef GP_BOUND_ITEMS
-	WFIFOHEAD(fd, 8);
-	WFIFOW(fd, 0) = 0x3856;
-	WFIFOL(fd, 2) = aid;/* the value is not being used, drop? */
-	WFIFOW(fd, 6) = guild_id;
-	WFIFOSET(fd, 8);
+	WFIFOHEAD(session, sizeof(struct PACKET_WZ_BOUND_RETRIEVE_ACK), true);
+	WFIFOW(session, 0) = HEADER_WZ_BOUND_RETRIEVE_ACK;
+	WFIFOW(session, 2) = guild_id;
+	WFIFOSET(session, sizeof(struct PACKET_WZ_BOUND_RETRIEVE_ACK));
 #endif
-	return 0;
 }
 
-static void mapif_parse_ItemBoundRetrieve(int fd)
+/**
+ * ZW_BOUND_RETRIEVE
+ * Retrieve bound item from an offline character
+ **/
+static void mapif_parse_ItemBoundRetrieve(struct s_receive_action_data *act)
 {
 #ifdef GP_BOUND_ITEMS
-	int char_id = RFIFOL(fd, 2);
-	int account_id = RFIFOL(fd, 6);
-	int guild_id = RFIFOW(fd, 10);
+	int char_id    = RFIFOL(act, 2);
+	int account_id = RFIFOL(act, 6);
+	int guild_id   = RFIFOL(act, 10);
 
 	inter_storage->retrieve_bound_items(char_id, account_id, guild_id);
 
 	//Finally reload storage and tell map we're done
-	mapif->load_guild_storage(fd, account_id, guild_id, 0);
+	mapif->load_guild_storage(act->session, account_id, guild_id, 0);
 
 	// If character is logged in char, disconnect
 	chr->disconnect_player(account_id);
 #endif // GP_BOUND_ITEMS
 
 	/* tell map server the operation is over and it can unlock the storage */
-	mapif->itembound_ack(fd, RFIFOL(fd, 6), RFIFOW(fd, 10));
+	mapif->itembound_ack(act->session, guild_id);
 }
 
 /*==========================================
@@ -3368,156 +3342,167 @@ static void mapif_parse_accinfo(struct s_receive_action_data *act)
 	inter->accinfo(u_fd, aid, castergroup, query, act->session_id);
 }
 
-#if 0
-// Account registry transfer to map-server
-static void mapif_account_reg(int fd, unsigned char *src)
-{
-	nullpo_retv(src);
-	WBUFW(src, 0) = 0x3804; //NOTE: writing to RFIFO
-	mapif->sendallwos(fd, src, WBUFW(src, 2));
-}
-#endif // 0
+/**
+ * WZ_DISCONNECT_PLAYER
+ * Request to kick char from a certain map server.
+ * @author [Skotlex]
+ **/
+static void mapif_disconnectplayer(struct socket_data *session,
+	int account_id, int char_id, enum notify_ban_errorcode reason
+) {
+	if(!session)
+		return;
 
-// Send the requested account_reg
-static int mapif_account_reg_reply(int fd,int account_id,int char_id, int type)
-{
-	inter->accreg_fromsql(account_id, char_id, fd, type);
-	return 0;
-}
-
-//Request to kick char from a certain map server. [Skotlex]
-static int mapif_disconnectplayer(int fd, int account_id, int char_id, int reason)
-{
-	if (fd < 0)
-		return -1;
-
-	WFIFOHEAD(fd, 7);
-	WFIFOW(fd, 0) = 0x2b1f;
-	WFIFOL(fd, 2) = account_id;
-	WFIFOB(fd, 6) = reason;
-	WFIFOSET(fd, 7);
-	return 0;
+	WFIFOHEAD(session, sizeof(struct PACKET_WZ_DISCONNECT_PLAYER), true);
+	WFIFOW(session, 0) = HEADER_WZ_DISCONNECT_PLAYER;
+	WFIFOL(session, 2) = account_id;
+	WFIFOB(session, 6) = reason;
+	WFIFOSET(session, sizeof(struct PACKET_WZ_DISCONNECT_PLAYER));
 }
 
-// Save account_reg into sql (type=2)
-static int mapif_parse_Registry(int fd)
+/**
+ * PACKET_ZW_ACCOUNT_REG2
+ * Saves account_reg into sql
+ *
+ * @remarks Albeit this is the same packet as WA_ACCOUNT_REG2 we need to process
+ * what map-server sent so we can perform SQL operations that are exclusive to
+ * the char-server, before sending the remaining operations to the login-server.
+ * @see inter_savereg
+ **/
+static void mapif_parse_Registry(struct s_receive_action_data *act)
 {
-	int account_id = RFIFOL(fd, 4), char_id = RFIFOL(fd, 8), count = RFIFOW(fd, 12);
+	int account_id = RFIFOL(act,  4);
+	int char_id    = RFIFOL(act,  8);
+	int count      = RFIFOW(act, 12);
 
-	if (count != 0) {
-		int cursor = 14, i;
-		char key[SCRIPT_VARNAME_LENGTH + 1];
-		char sval[SCRIPT_STRING_VAR_LENGTH + 1];
-		bool isLoginActive = sockt->session_is_active(chr->login_fd);
+	if(!count)
+		return;
 
-		/**
-		 * Prepare packet to request login-server to save, this packet is filled
-		 * in every call of inter->savereg, and then set to send in the end of
-		 * this function.
-		 **/
-		if (isLoginActive)
-			loginif->save_accreg2_head(account_id, char_id);
+	int cursor = offsetof(struct PACKET_ZW_ACCOUNT_REG2, entry);
+	char key[SCRIPT_VARNAME_LENGTH + 1];
+	char sval[SCRIPT_STRING_VAR_LENGTH + 1];
+	bool isLoginActive = socket_io->session_marked_removal(chr->login_session);
 
-		for (i = 0; i < count; i++) {
-			unsigned int index;
-			int len = RFIFOB(fd, cursor);
-			safestrncpy(key, RFIFOP(fd, cursor + 1), min((int)sizeof(key), len));
-			cursor += len + 1;
+	/**
+	 * Prepare packet to request login-server to save, this packet is filled
+	 * in every call of inter->savereg, and then set to send in the end of
+	 * this function.
+	 **/
+	if (isLoginActive)
+		loginif->save_accreg2_head(account_id, char_id);
 
-			index = RFIFOL(fd, cursor);
+	for(int i = 0; i < count; i++) {
+		unsigned int index;
+		int len = RFIFOB(act, cursor);
+		safestrncpy(key, RFIFOP(act, cursor + 1), min((int)sizeof(key), len));
+		cursor += len + 1;
+
+		index = RFIFOL(act, cursor);
+		cursor += 4;
+
+		switch(RFIFOB(act, cursor++)) {
+		/* int */
+		case 0:
+			inter->savereg(account_id, char_id, key, index, RFIFOL(act, cursor), false);
 			cursor += 4;
-
-			switch (RFIFOB(fd, cursor++)) {
-			/* int */
-			case 0:
-				inter->savereg(account_id, char_id, key, index, RFIFOL(fd, cursor), false);
-				cursor += 4;
-				break;
-			case 1:
-				inter->savereg(account_id, char_id, key, index, 0, false);
-				break;
-			/* str */
-			case 2:
-				len = RFIFOB(fd, cursor);
-				safestrncpy(sval, RFIFOP(fd, cursor + 1), min((int)sizeof(sval), len + 1));
-				cursor += len + 2;
-				inter->savereg(account_id, char_id, key, index, (intptr_t)sval, true);
-				break;
-			case 3:
-				inter->savereg(account_id, char_id, key, index, 0, true);
-				break;
-			default:
-				ShowError("mapif->parse_Registry: unknown type %d\n", RFIFOB(fd, cursor - 1));
-				return 1;
-			}
+			break;
+		case 1:
+			inter->savereg(account_id, char_id, key, index, 0, false);
+			break;
+		/* str */
+		case 2:
+			len = RFIFOB(act, cursor);
+			safestrncpy(sval, RFIFOP(act, cursor + 1), min((int)sizeof(sval), len + 1));
+			cursor += len + 2;
+			inter->savereg(account_id, char_id, key, index, (intptr_t)sval, true);
+			break;
+		case 3:
+			inter->savereg(account_id, char_id, key, index, 0, true);
+			break;
+		default:
+			// As WFIFO wasn't set all written data is ignored
+			ShowError("mapif->parse_Registry: unknown type %d\n", RFIFOB(act, cursor - 1));
+			return;
 		}
-
-		if (isLoginActive)
-			loginif->save_accreg2_send();
 	}
-	return 0;
+
+	if(isLoginActive)
+		loginif->save_accreg2_send();
 }
 
-// Request the value of all registries.
-static int mapif_parse_RegistryRequest(int fd)
+/**
+ * ZW_ACCOUNT_REG_REQ
+ * Request the value of all registries.
+ **/
+static int mapif_parse_RegistryRequest(struct s_receive_action_data *act)
 {
+	int account_id = RFIFOL(act,  2);
+	int char_id    = RFIFOL(act,  6);
+	bool acc_reg2  = RFIFOB(act, 10);
+	bool acc_reg   = RFIFOB(act, 11);
+	bool char_reg  = RFIFOB(act, 12);
+
 	//Load Char Registry
-	if (RFIFOB(fd, 12))
-		mapif->account_reg_reply(fd, RFIFOL(fd, 2), RFIFOL(fd, 6), 3); // 3: char reg
+	if(char_reg)
+		inter->accreg_fromsql(account_id, char_id, act->session, 3);
 	//Load Account Registry
-	if (RFIFOB(fd, 11) != 0)
-		mapif->account_reg_reply(fd, RFIFOL(fd, 2), RFIFOL(fd, 6), 2); // 2: account reg
+	if(acc_reg)
+		inter->accreg_fromsql(account_id, char_id, act->session, 2);
 	//Ask Login Server for Account2 values.
-	if (RFIFOB(fd, 10) != 0)
-		loginif->request_accreg2(RFIFOL(fd, 2), RFIFOL(fd, 6));
-	return 1;
+	if(acc_reg2)
+		loginif->request_accreg2(account_id, char_id);
 }
 
-static void mapif_namechange_ack(int fd, int account_id, int char_id, int type, int flag, const char *const name)
-{
-	nullpo_retv(name);
-	WFIFOHEAD(fd, NAME_LENGTH+13);
-	WFIFOW(fd, 0) = 0x3806;
-	WFIFOL(fd, 2) = account_id;
-	WFIFOL(fd, 6) = char_id;
-	WFIFOB(fd, 10) = type;
-	WFIFOB(fd, 11) = flag;
-	memcpy(WFIFOP(fd, 12), name, NAME_LENGTH);
-	WFIFOSET(fd, NAME_LENGTH + 13);
+/**
+ * WZ_NAME_CHANGE_ACK
+ * @copydoc PACKET_WZ_NAME_CHANGE_ACK
+ **/
+static void mapif_namechange_ack(struct socket_data *session, int account_id,
+	int char_id, int type, uint8 flag, const char *esc_name
+) {
+	WFIFOHEAD(session, sizeof(struct PACKET_WZ_NAME_CHANGE_ACK), true);
+	WFIFOW(session, 0) = HEADER_WZ_NAME_CHANGE_ACK;
+	WFIFOL(session, 2) = account_id;
+	WFIFOL(session, 6) = char_id;
+	WFIFOB(session, 10) = type;
+	WFIFOB(session, 11) = flag;
+	safestrncpy(WFIFOP(session, 12), esc_name, NAME_LENGTH);
+	WFIFOSET(session, sizeof(struct PACKET_WZ_NAME_CHANGE_ACK));
 }
 
-static int mapif_parse_NameChangeRequest(int fd)
+/**
+ * ZW_NAME_CHANGE
+ * Request to change `type` name.
+ **/
+static void mapif_parse_NameChangeRequest(struct s_receive_action_data *act)
 {
-	int account_id, char_id, type;
-	const char *name;
-	int i;
+	int account_id     = RFIFOL(act, 2);
+	int char_id        = RFIFOL(act, 6);
+	int target_id      = RFIFOL(act, 10);
+	unsigned char type = RFIFOB(act, 14);
+	const char *name_  = RFIFOP(act, 15);
 
-	account_id = RFIFOL(fd, 2);
-	char_id = RFIFOL(fd, 6);
-	type = RFIFOB(fd, 10);
-	name = RFIFOP(fd, 11);
+	char name[NAME_LENGTH];
+	char esc_name[NAME_LENGTH*2+1];
+	uint8 result;
 
-	// Check Authorized letters/symbols in the name
-	if (char_name_option == 1) { // only letters/symbols in char_name_letters are authorized
-		for (i = 0; i < NAME_LENGTH && name[i]; i++)
-		if (strchr(char_name_letters, name[i]) == NULL) {
-			mapif->namechange_ack(fd, account_id, char_id, type, 0, name);
-			return 0;
-		}
-	} else if (char_name_option == 2) { // letters/symbols in char_name_letters are forbidden
-		for (i = 0; i < NAME_LENGTH && name[i]; i++)
-		if (strchr(char_name_letters, name[i]) != NULL) {
-			mapif->namechange_ack(fd, account_id, char_id, type, 0, name);
-			return 0;
+	safestrncpy(name, name_, NAME_LENGTH);
+	chr->escape_normalize_name(name, esc_name);
+	if(chr->check_symbols(name))
+		result = 1; // Invalid letters/symbols in name
+	else {
+		switch(type) {
+			case 0: result = inter->char_rename(char_id, target_id, esc_name); break;
+			case 1: result = inter_pet->rename(target_id, esc_name); break;
+			case 2: result = inter_homunculus->rename(target_id, esc_name); break;
+			default:
+				ShowError("mapif_parse_NameChangeRequest: Unknown type %d\n", type);
+				result = 4;
+				break;
 		}
 	}
-	//TODO: type holds the type of object to rename.
-	//If it were a player, it needs to have the guild information and db information
-	//updated here, because changing it on the map won't make it be saved [Skotlex]
 
-	//name allowed.
-	mapif->namechange_ack(fd, account_id, char_id, type, 1, name);
-	return 0;
+	mapif->namechange_ack(act->session, account_id, char_id, type, result, esc_name);
 }
 
 /*==========================================
@@ -3824,12 +3809,10 @@ void mapif_defaults(void)
 	mapif->homunculus_deleted = mapif_homunculus_deleted;
 	mapif->homunculus_loaded = mapif_homunculus_loaded;
 	mapif->homunculus_saved = mapif_homunculus_saved;
-	mapif->homunculus_renamed = mapif_homunculus_renamed;
 	mapif->parse_homunculus_create = mapif_parse_homunculus_create;
 	mapif->parse_homunculus_delete = mapif_parse_homunculus_delete;
 	mapif->parse_homunculus_load = mapif_parse_homunculus_load;
 	mapif->parse_homunculus_save = mapif_parse_homunculus_save;
-	mapif->parse_homunculus_rename = mapif_parse_homunculus_rename;
 	mapif->mail_sendinbox = mapif_mail_sendinbox;
 	mapif->parse_mail_requestinbox = mapif_parse_mail_requestinbox;
 	mapif->parse_mail_read = mapif_parse_mail_read;
@@ -3902,7 +3885,6 @@ void mapif_defaults(void)
 	mapif->itembound_ack = mapif_itembound_ack;
 	mapif->parse_ItemBoundRetrieve = mapif_parse_ItemBoundRetrieve;
 	mapif->parse_accinfo = mapif_parse_accinfo;
-	mapif->account_reg_reply = mapif_account_reg_reply;
 	mapif->disconnectplayer = mapif_disconnectplayer;
 	mapif->parse_Registry = mapif_parse_Registry;
 	mapif->parse_RegistryRequest = mapif_parse_RegistryRequest;

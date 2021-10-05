@@ -803,7 +803,7 @@ static void clif_authrefuse(int fd, uint8 error_code)
 ///     113 = access is restricted between the hours of midnight to 6:00am.
 ///     115 = You are in game connection ban period.
 ///     ? = disconnected -> MsgStringTable[3]
-// TODO: type enum
+// @see notify_ban_errorcode
 static void clif_authfail_fd(int fd, int type)
 {
 	if (!fd || !sockt->session[fd] || sockt->session[fd]->func_parse != clif->parse) //clif_authfail should only be invoked on players!

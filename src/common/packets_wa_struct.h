@@ -187,6 +187,8 @@ struct PACKET_WA_SEX_CHANGE {
  * @param entry      Entry data
  * @see login_fromchar_parse_account_reg2
  * @see account->mmo_save_accreg2
+ * @see intif_saveregistry
+ * @see mapif_parse_Registry
  **/
 struct PACKET_WA_ACCOUNT_REG2 {
 	int16 packet_id;

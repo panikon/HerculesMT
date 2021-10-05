@@ -207,7 +207,7 @@ struct PACKET_AW_ACCOUNT_INFO_FAILURE {
  **/
 struct PACKET_AW_ACCOUNT_REG2 {
 	int16 packet_id;
-	int16 len;
+	int16 packet_len;
 	int32 account_id;
 	int32 char_id;
 	uint8 is_complete;

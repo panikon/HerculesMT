@@ -42,6 +42,7 @@ struct inter_interface {
 	const char* (*job_name) (int class);
 	void (*vmsg_to_fd) (int map_id, int u_fd, int aid, char* msg, va_list ap);
 	void (*msg_to_fd) (int map_id, int u_fd, int aid, char *msg, ...) __attribute__((format(printf, 4, 5)));
+	uint8 (*char_rename) (int char_id, int guild_id, const char *esc_name);
 	void (*savereg) (int account_id, int char_id, const char *key, unsigned int index, intptr_t val, bool is_string);
 	int (*accreg_fromsql) (int account_id,int char_id, struct socket_data *session, int type);
 	int (*vlog) (char* fmt, va_list ap);

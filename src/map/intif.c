@@ -1457,7 +1457,7 @@ static void intif_parse_ChangeNameOk(int fd)
 	if((sd=map->id2sd(RFIFOL(fd,2)))==NULL ||
 		sd->status.char_id != RFIFOL(fd,6))
 		return;
-
+	//TODO: Rewrite with new packet [Panikon]
 	switch (RFIFOB(fd,10)) {
 	case 0: //Players [NOT SUPPORTED YET]
 		break;

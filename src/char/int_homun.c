@@ -222,29 +222,27 @@ static bool inter_homunculus_delete(int homun_id)
 
 /**
  * Renames a homunculus
+ *
+ * @param esc_name Escaped and normalized name.
+ * @retval 0 Successfuly updated name
+ * @retval 3 Already renamed
+ * @retval 4 Not found
+ * @see mapif_parse_NameChangeRequest
  **/
-static bool inter_homunculus_rename(int homun_id, const char *name_)
+static uint8 inter_homunculus_rename(int homun_id, const char *esc_name)
 {
-	char name[NAME_LENGTH];
-	char esc_name[NAME_LENGTH*2+1];
-
-	safestrncpy(name, name_, NAME_LENGTH);
-	if(chr->check_symbols(name))
-		return false; // Invalid letters/symbols in homun name
-	chr->escape_normalize_name(name, esc_name);
-
 	int sql_result = 
 	SQL->Query(inter->sql_handle,
-		"UPDATE `%s` SET `name` = '%s', `rename_flag`='1' WHERE `homun_id` = '%d'",
+		"UPDATE `%s` SET `name` = '%s', `rename_flag`='1' WHERE `homun_id` = '%d' AND `rename_flag`='0'",
 		homunculus_db, esc_name, homun_id);
 	if(SQL_ERROR == sql_result) {
 		Sql_ShowDebug(inter->sql_handle);
-		return false;
+		return 4;
 	}
 	if(SQL->NumAffectedRows(inter->sql_handle) <= 0)
-		return false;
+		return 3;
 
-	return true;
+	return 0;
 }
 
 

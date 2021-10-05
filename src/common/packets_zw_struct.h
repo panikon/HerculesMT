@@ -109,7 +109,6 @@ enum inter_packet_zw_id {
 	HEADER_ZW_HOMUNCULUS_LOAD   = 0x3091, // mapif->parse_homunculus_load  
 	HEADER_ZW_HOMUNCULUS_SAVE   = 0x3092, // mapif->parse_homunculus_save  
 	HEADER_ZW_HOMUNCULUS_DELETE = 0x3093, // mapif->parse_homunculus_delete
-	HEADER_ZW_HOMUNCULUS_RENAME = 0x3094, // mapif->parse_homunculus_rename
 
 	// inter_mercenary_parse_frommap
 	HEADER_ZW_MERCENARY_CREATE = 0x3070, // mapif->parse_mercenary_create
@@ -1397,6 +1396,102 @@ struct PACKET_ZW_GUILD_STORAGE_SAVE {
 	int32 account_id;
 	int32 guild_id;
 	struct item_packet_data *item_list;
+} __attribute__((packed));
+
+/**
+ * Request to retrieve bound item from offline character.
+ * 
+ * @see mapif_parse_ItemBoundRetrieve
+ **/
+struct PACKET_ZW_BOUND_RETRIEVE {
+	int16 packet_id;
+	int32 char_id;
+	int32 account_id;
+	int32 guild_id;
+} __attribute__((packed));
+
+/**
+ * Account information request from map-server
+ * This request is then relayed to the login-server via WA_ACCOUNT_INFO_REQUEST
+ * @see inter_accinfo
+ * @see mapif_parse_accinfo
+ **/
+struct PACKET_ZW_ACCINFO_REQUEST {
+	int16 packet_id;
+	int32 requester_session_id;
+	int32 target_account_id;
+	int16 requester_group_lv;
+	uint8 target_name[NAME_LENGTH];
+} __attribute__((packed));
+
+// 0x3004
+// @copydoc PACKET_WA_ACCOUNT_REG2
+struct PACKET_ZW_ACCOUNT_REG2 {
+	int16 packet_id;
+	int16 len;
+	int32 account_id;
+	int32 char_id;
+	int16 count;
+	/**
+	 * Entry data
+	 *
+	 * @param key_len Length of key (maximum value SCRIPT_VARNAME_LENGTH + 1)
+	 * @param key     Key to be altered
+	 * @param index   Index in db
+	 * @param flag    Operation flag (0: Replace int, 1: Delete int, 2: Replace string, 3: Delete string)
+	 * @param val     Entry value, in deletion operations this is not sent
+	 **/
+	struct {
+		int16 key_len;
+		uint8 *key; // key[key_len]
+		int32 index;
+		/**
+		 * Operation flag
+		 * 0 Replace int
+		 * 1 Delete int
+		 * 2 Replace string
+		 * 3 Delete string
+		 **/
+		uint8 flag;
+		union {
+			int32 integer;
+			uint8 *string;
+			void *empty;
+		} val;
+	} *entry;
+} __attribute__((packed));
+
+/**
+ * Registry request
+ *
+ * @see intif_request_registry
+ * @see mapif_parse_RegistryRequest
+ **/
+struct PACKET_ZW_ACCOUNT_REG_REQ {
+	int16 packet_id;
+	int32 account_id;
+	int32 char_id;
+	uint8 acc_reg2;
+	uint8 acc_reg;
+	uint8 char_reg;
+} __attribute__((packed));
+
+/**
+ * Name update request
+ *
+ * @param target_id Id to be updated (depends on `type`, in type 0 is guild_id)
+ * @param type      0 Player Character
+ * @param type      1 Pet
+ * @param type      2 Homunculus
+ * @see mapif_parse_NameChangeRequest
+ **/
+struct PACKET_ZW_NAME_CHANGE {
+	int16 packet_id;
+	int32 account_id;
+	int32 char_id;
+	int32 target_id;
+	uint8 type;
+	uint8 name[NAME_LENGTH];
 } __attribute__((packed));
 
 #if !defined(sun) && (!defined(__NETBSD__) || __NetBSD_Version__ >= 600000000) // NetBSD 5 and Solaris don't like pragma pack but accept the packed attribute

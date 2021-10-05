@@ -155,12 +155,10 @@ struct mapif_interface {
 	void (*homunculus_deleted) (struct socket_data *session, int flag);
 	void (*homunculus_loaded)  (struct socket_data *session, int account_id, struct s_homunculus *hd);
 	void (*homunculus_saved)   (struct socket_data *session, int account_id, bool flag);
-	void (*homunculus_renamed) (struct socket_data *session, int account_id, int homun_id, unsigned char flag, const char *name);
 	void (*parse_homunculus_create) (struct s_receive_action_data *act, struct mmo_map_server *server);
 	void (*parse_homunculus_delete) (struct s_receive_action_data *act, struct mmo_map_server *server);
 	void (*parse_homunculus_load)   (struct s_receive_action_data *act, struct mmo_map_server *server);
 	void (*parse_homunculus_save)   (struct s_receive_action_data *act, struct mmo_map_server *server);
-	void (*parse_homunculus_rename) (struct s_receive_action_data *act, struct mmo_map_server *server);
 
 	void (*mail_sendinbox) (struct socket_data *session, int char_id, unsigned char flag, const struct mail_data *md);
 	void (*parse_mail_requestinbox) (struct s_receive_action_data *act);
@@ -237,15 +235,15 @@ struct mapif_interface {
 	int (*pAccountStorageSave) (struct s_receive_action_data *act);
 	void (*sAccountStorageSaveAck) (struct socket_data *session, int account_id, bool save);
 
-	int (*itembound_ack) (struct s_receive_action_data *act, int aid, int guild_id);
+	void (*itembound_ack) (struct socket_data *session, int guild_id);
 	void (*parse_ItemBoundRetrieve) (struct s_receive_action_data *act);
+
 	void (*parse_accinfo) (struct s_receive_action_data *act);
-	int (*account_reg_reply) (struct s_receive_action_data *act,int account_id,int char_id, int type);
 	int (*disconnectplayer)  (struct socket_data *session, int account_id, int char_id, int reason);
 	int (*parse_Registry) (struct s_receive_action_data *act);
 	int (*parse_RegistryRequest) (struct s_receive_action_data *act);
-	void (*namechange_ack) (struct s_receive_action_data *act, int account_id, int char_id, int type, int flag, const char *name);
-	int (*parse_NameChangeRequest) (struct s_receive_action_data *act);
+	void (*namechange_ack) (struct socket_data *session, int account_id, int char_id, int type, uint8 flag, const char *esc_name);
+	void (*parse_NameChangeRequest) (struct s_receive_action_data *act);
 	// Clan System
 	int (*parse_ClanMemberKick)  (struct s_receive_action_data *act, int clan_id, int kick_interval);
 	int (*parse_ClanMemberCount) (struct s_receive_action_data *act, int clan_id, int kick_interval);

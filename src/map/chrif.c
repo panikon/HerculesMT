@@ -1094,13 +1094,7 @@ static int chrif_disconnectplayer(int fd)
 		return 0;
 	}
 
-	switch(RFIFOB(fd, 6)) {
-		case 1: clif->authfail_fd(sd->fd, 1); break; //server closed
-		case 2: clif->authfail_fd(sd->fd, 2); break; //someone else logged in
-		case 3: clif->authfail_fd(sd->fd, 4); break; //server overpopulated
-		case 4: clif->authfail_fd(sd->fd, 10); break; //out of available time paid for
-		case 5: clif->authfail_fd(sd->fd, 15); break; //forced to dc by gm
-	}
+	clif->authfail_fd(sd->fd, RFIFOB(fd, 6));
 	return 0;
 }
 

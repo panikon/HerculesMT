@@ -41,6 +41,31 @@ static struct inter_pet_interface inter_pet_s;
 struct inter_pet_interface *inter_pet;
 
 /**
+ * Renames a pet
+ *
+ * @param esc_name Escaped and normalized name.
+ * @retval 0 Successfuly updated name
+ * @retval 3 Already renamed
+ * @retval 4 Not found
+ * @see mapif_parse_NameChangeRequest
+ **/
+static uint8 inter_pet_rename(int pet_id, const char *esc_name)
+{
+	int sql_result = 
+	SQL->Query(inter->sql_handle,
+		"UPDATE `%s` SET `name` = '%s', `rename_flag`='1' WHERE `pet_id` = '%d' AND `rename_flag` = '0'",
+		pet_db, esc_name, pet_id);
+	if(SQL_ERROR == sql_result) {
+		Sql_ShowDebug(inter->sql_handle);
+		return 4; // Not found
+	}
+	if(SQL->NumAffectedRows(inter->sql_handle) <= 0)
+		return 3; // Already renamed
+
+	return 0;
+}
+
+/**
  * Saves a pet to the SQL database.
  *
  * Table structure:
@@ -252,6 +277,7 @@ void inter_pet_defaults(void)
 
 	inter_pet->tosql = inter_pet_tosql;
 	inter_pet->fromsql = inter_pet_fromsql;
+	inter_pet->rename = inter_pet_rename;
 	inter_pet->sql_init = inter_pet_sql_init;
 	inter_pet->sql_final = inter_pet_sql_final;
 	inter_pet->delete_ = inter_pet_delete;

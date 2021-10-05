@@ -1401,28 +1401,31 @@ static int inter_guild_sex_changed(int guild_id, int account_id, int char_id, sh
 	return inter_guild->update_member_info(guild_id, account_id, char_id, GMI_GENDER, (const char*)&gender, sizeof(gender));
 }
 
-static int inter_guild_charname_changed(int guild_id, int account_id, int char_id, char *name)
+/**
+ * Notifies map-server of a member name change
+ *
+ * @return BOOL Success
+ **/
+static bool inter_guild_charname_changed(int guild_id, int char_id, const char *name)
 {
 	struct guild *g;
 	int i, flag = 0;
 
 	nullpo_ret(name);
 	g = inter_guild->fromsql(guild_id);
-	if( g == NULL )
-	{
-		ShowError("inter_guild_charrenamed: Can't find guild %d.\n", guild_id);
-		return 0;
+	if(g == NULL) {
+		ShowError("inter_guild_charname_changed: Can't find guild %d.\n", guild_id);
+		return false;
 	}
 
 	ARR_FIND(0, g->max_member, i, g->member[i].char_id == char_id);
-	if( i == g->max_member )
-	{
-		ShowError("inter_guild_charrenamed: Can't find character %d in the guild\n", char_id);
-		return 0;
+	if(i == g->max_member){
+		ShowError("inter_guild_charname_changed: Can't find character %d in the guild\n",
+			char_id);
+		return false;
 	}
 
-	if( !strcmp(g->member[i].name, g->master) )
-	{
+	if(!strcmp(g->member[i].name, g->master)) {
 		safestrncpy(g->master, name, NAME_LENGTH);
 		flag |= GS_BASIC;
 	}
@@ -1430,12 +1433,12 @@ static int inter_guild_charname_changed(int guild_id, int account_id, int char_i
 	g->member[i].modified = GS_MEMBER_MODIFIED;
 	flag |= GS_MEMBER;
 
-	if( !inter_guild->tosql(g, flag) )
-		return 0;
+	if(!inter_guild->tosql(g, flag))
+		return false;
 
 	mapif->guild_info(NULL,g,true);
 
-	return 0;
+	return true;
 }
 
 // Change a position desc

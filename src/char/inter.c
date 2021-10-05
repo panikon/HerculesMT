@@ -428,6 +428,58 @@ static void inter_msg_to_fd(int map_id, int u_fd, int aid, char *msg, ...)
 	va_end(ap);
 }
 
+/** 
+ * Performs rename operation in provided char-id (used in map-server requests)
+ *
+ * @param esc_name Escaped and normalized name.
+ * @retval 0 Successfuly updated name
+ * @retval 2 Duplicate
+ * @retval 3 Already renamed
+ * @see mapif_parse_NameChangeRequest
+ *
+ * @remarks
+ * Regular name change operations are performed only when the player is logged
+ * in the char-server via @see char_rename_char_sql
+ **/
+static uint8 inter_char_rename(int char_id, int guild_id, const char *esc_name)
+{
+	/**
+	 * There's no need to check if the name is in use when performing the update, the 
+	 * `name` field is defined as UNIQUE, so the query will simply fail if there's
+	 * a duplicate. This way we avoid possible data-races of multiple simultaneous writes.
+	 **/
+	int sql_result = 
+	SQL->Query(inter->sql_handle,
+		"UPDATE `%s` SET `name` = '%s', `rename` = rename-1 WHERE `char_id` = '%d' AND `rename` > 0",
+		char_db, esc_name, char_id);
+	if(SQL_ERROR == sql_result) {
+		Sql_ShowDebug(inter->sql_handle);
+		return 2; // Duplicate
+	}
+	if(SQL->NumAffectedRows(inter->sql_handle) <= 0)
+		return 3; // Already renamed
+
+	// Change character's name into guild_db.
+	if(guild_id)
+		inter_guild->charname_changed(guild_id, char_id, esc_name);
+
+	// log change
+	if(chr->enable_logs) {
+		if(SQL_ERROR == SQL->Query(inter->sql_handle,
+					"INSERT INTO `%s` ("
+					" `time`, `char_msg`, `char_id`, `name`"
+					") VALUES ("
+					" NOW(), 'change char name (inter request)', '%d', '%d'"
+					")",
+					charlog_db,
+					char_id, esc_name
+					))
+			Sql_ShowDebug(inter->sql_handle);
+	}
+
+	return 0;
+}
+
 /**
  * Processes account information request and relays to login-server
  * When the account isn't found relays message to map-server via inter->msg_to_fd,
@@ -1066,6 +1118,7 @@ void inter_defaults(void)
 	inter->job_name = inter_job_name;
 	inter->vmsg_to_fd = inter_vmsg_to_fd;
 	inter->msg_to_fd = inter_msg_to_fd;
+	inter->char_rename = inter_char_rename;
 	inter->savereg = inter_savereg;
 	inter->accreg_fromsql = inter_accreg_fromsql;
 	inter->config_read = inter_config_read;

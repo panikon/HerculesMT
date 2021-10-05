@@ -638,6 +638,56 @@ struct PACKET_WZ_PLAYER_STORAGE_SAVE_ACK {
 } __attribute__((packed));
 DEFINE_PACKET_ID(WZ_PLAYER_STORAGE_SAVE_ACK, 0x3808);
 
+/**
+ * Notify completion of retrieval of a bound item.
+ * This packet is needed so map-server knows that it's safe to unlock guild storage.
+ *
+ * @see mapif_itembound_ack
+ **/
+struct PACKET_WZ_BOUND_RETRIEVE_ACK {
+	int16 packet_id;
+	int32 guild_id;
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_BOUND_RETRIEVE_ACK, 0x3856);
+
+/**
+ * Request player disconnection.
+ * Map-server will then disconnect the player using SC_NOTIFY_BAN
+ *
+ * @param reason @see notify_ban_errorcode
+ * @see mapif_itembound_ack
+ **/
+struct PACKET_WZ_DISCONNECT_PLAYER {
+	int16 packet_id;
+	int32 account_id;
+	uint8 reason;
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_DISCONNECT_PLAYER, 0x2b1f);
+
+/**
+ * Answer to a name change request
+ *
+ * @param type 0 Player Character
+ * @param type 1 Pet
+ * @param type 2 Homunculus
+ * @param flag 0 Successfuly updated name
+ * @param flag 1 Invalid letters/symbols in name
+ * @param flag 2 Duplicate (only for player characters)
+ * @param flag 3 Already renamed
+ * @param flag 4 Not found
+ * @param esc_name Escaped and normalized name
+ * @see mapif_namechange_ack
+ **/
+struct PACKET_WZ_NAME_CHANGE_ACK {
+	int16 packet_id;
+	int32 account_id;
+	int32 char_id;
+	uint8 type;
+	uint8 flag;
+	uint8 esc_name[NAME_LENGTH];
+} __attribute__((packed));
+DEFINE_PACKET_ID(WZ_NAME_CHANGE_ACK, 0x3806);
+
 #if !defined(sun) && (!defined(__NETBSD__) || __NetBSD_Version__ >= 600000000) // NetBSD 5 and Solaris don't like pragma pack but accept the packed attribute
 #pragma pack(pop)
 #endif // not NetBSD < 6 / Solaris

@@ -35,7 +35,7 @@ struct inter_homunculus_interface {
 	bool (*save) (const struct s_homunculus *hd);
 	bool (*load) (int homun_id, struct s_homunculus* hd);
 	bool (*delete) (int homun_id);
-	bool (*rename) (int homun_id, const char *name_);
+	uint8 (*rename) (int homun_id, const char *esc_name);
 };
 
 #ifdef HERCULES_CORE

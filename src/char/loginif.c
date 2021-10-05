@@ -115,7 +115,7 @@ static void do_init_loginif(void)
 		packet_def(AW_IP_UPDATE,             update_ip),
 		packet_def(AW_ACCOUNT_INFO_SUCCESS,  accinfo2_ok),
 		packet_def(AW_ACCOUNT_INFO_FAILURE,  accinfo2_failed),
-		packet_def2(AW_ACCOUNT_REG2,          account_reg2, -1),
+		packet_def2(AW_ACCOUNT_REG2,         account_reg2, -1),
 #undef packet_def
 #undef packet_def2
 	};

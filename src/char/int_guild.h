@@ -66,7 +66,7 @@ struct inter_guild_interface {
 	int (*checkskill) (struct guild *g, int id);
 	int (*calcinfo) (struct guild *g);
 	int (*sex_changed) (int guild_id, int account_id, int char_id, short gender);
-	int (*charname_changed) (int guild_id, int account_id, int char_id, char *name);
+	bool (*charname_changed) (int guild_id, int char_id, const char *name);
 
 	int (*broken) (int guild_id);
 	struct guild *(*create) (const char *name, const struct guild_member *master);

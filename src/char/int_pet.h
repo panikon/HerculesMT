@@ -31,6 +31,7 @@ struct s_pet;
 struct inter_pet_interface {
 	int (*tosql) (const struct s_pet *p);
 	bool (*fromsql) (int pet_id, struct s_pet* p);
+	uint8 (*rename) (int pet_id, const char *esc_name);
 	int (*sql_init) (void);
 	void (*sql_final) (void);
 	bool (*delete_) (int pet_id);
