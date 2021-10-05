@@ -299,6 +299,8 @@ void chclif_parse_delete2_req(struct s_receive_action_data *act, struct char_ses
 /**
  * CH_DELETE_CHAR and CH_DELETE_CHAR2
  * Confirmation of a delete character request
+ *
+ * Acquires online_char_db_mutex
  **/
 void chclif_parse_delete_char(struct s_receive_action_data *act, struct char_session_data *sd, int ipl)
 {
@@ -311,10 +313,17 @@ void chclif_parse_delete_char(struct s_receive_action_data *act, struct char_ses
 
 #if PACKETVER >= 20110309
 	if(pincode->enabled) { // hack check
-		struct online_char_data* character;
-		character = (struct online_char_data*)idb_get(chr->online_char_db, sd->account_id);
-		if(character && character->pincode_enable == -1){
+		struct online_char_data *character;
+
+		int pincode_enable = 0;
+		mutex->lock(chr->online_char_db_mutex);
+		character = idb_get(chr->online_char_db, sd->account_id);
+		pincode_enable = (character)?character->pincode_enable:0;
+		mutex->unlock(chr->online_char_db_mutex);
+
+		if(pincode_enable == -1) {
 			chr->auth_error(act->session, 0);
+			socket_io->session_disconnect_guard(act->session);
 			return;
 		}
 	}
@@ -425,8 +434,14 @@ void chclif_parse_select_char(struct s_receive_action_data *act, struct char_ses
 #if PACKETVER >= 20110309
 	if(pincode->enabled) { // hack check
 		struct online_char_data *character;
+
+		int pincode_enable = 0;
+		mutex->lock(chr->online_char_db_mutex);
 		character = idb_get(chr->online_char_db, sd->account_id);
-		if(character && character->pincode_enable == -1){
+		pincode_enable = (character)?character->pincode_enable:0;
+		mutex->unlock(chr->online_char_db_mutex);
+
+		if(pincode_enable == -1) {
 			chr->auth_error(act->session, 0);
 			socket_io->session_disconnect_guard(act->session);
 			return;
@@ -536,7 +551,7 @@ void chclif_parse_enter(struct s_receive_action_data *act, int ipl)
 	}
 
 	CREATE(act->session->session_data, struct char_session_data, 1);
-	sd = (struct char_session_data*)act->session->session_data;
+	sd = act->session->session_data;
 	sd->account_id = account_id;
 	sd->login_id1 = login_id1;
 	sd->login_id2 = login_id2;

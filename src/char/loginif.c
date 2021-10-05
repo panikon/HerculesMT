@@ -222,6 +222,8 @@ static void loginif_update_ip(void)
  * Load this character's account id into the 'online accounts' packet
  * @see DBApply
  * @see loginif_account_list
+ * @see online_char_db
+ * @mutex online_char_db_mutex
  */
 static int loginif_account_list_sub(const struct DBKey_s *key, struct DBData *data, va_list ap)
 {
@@ -260,12 +262,15 @@ static void loginif_accinfo_request(int account_id, int u_fd, int u_aid, int u_g
  * Periodic broadcast of logged user accounts to login-server
  * @see loginif_account_list_sub
  * @see TimerFunc
+ *
+ * Acquires online_char_db_mutex
  **/
 static int loginif_account_list(struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data)
 {
 	if(!chr->login_session)
 		return 0;
 
+	mutex->lock(chr->online_char_db_mutex);
 	int users = chr->online_char_db->size(chr->online_char_db);
 	int i = 0;
 
@@ -276,6 +281,7 @@ static int loginif_account_list(struct timer_interface *tm, int tid, int64 tick,
 	WFIFOL(chr->login_session,4) = i; // count
 	WFIFOSET(chr->login_session,WFIFOW(chr->login_session,2));
 
+	mutex->unlock(chr->online_char_db_mutex);
 	return 0;
 }
 

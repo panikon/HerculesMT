@@ -34,6 +34,7 @@
 #include "common/showmsg.h"
 #include "common/socket.h"
 #include "common/strlib.h"
+#include "common/mutex.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -44,6 +45,8 @@ struct pincode_interface *pincode;
 /**
  * Pincode system activation triggered after login-server authentication
  * @see pincode->loginstate
+ *
+ * Acquires online_char_db_mutex
  **/
 static void pincode_handle(struct socket_data *session, struct char_session_data *sd)
 {
@@ -51,11 +54,13 @@ static void pincode_handle(struct socket_data *session, struct char_session_data
 
 	nullpo_retv(sd);
 
-	character = (struct online_char_data*)idb_get(chr->online_char_db, sd->account_id);
+	mutex->lock(chr->online_char_db_mutex);
+	character = idb_get(chr->online_char_db, sd->account_id);
 
 	if(character && character->pincode_enable > pincode->charselect) {
 		character->pincode_enable = pincode->charselect * 2;
 	} else {
+		mutex->unlock(chr->online_char_db_mutex);
 		// Player already answered the PIN correctly enough times.
 		pincode->loginstate(session, sd, PINCODE_LOGIN_OK);
 		return;
@@ -76,6 +81,7 @@ static void pincode_handle(struct socket_data *session, struct char_session_data
 
 	if (character)
 		character->pincode_enable = -1;
+	mutex->unlock(chr->online_char_db_mutex);
 }
 
 /**

@@ -120,6 +120,7 @@ static void mapif_server_destroy(struct mmo_map_server *server, bool remove)
  * Notifies other map-servers of the shutdown and also login-server, then
  * sets all of its characters offline and frees all data related to it.
  * Acquires map_server_list_lock
+ * Acquires online_char_db_mutex
  **/
 static void mapif_server_reset(struct mmo_map_server *server)
 {
@@ -159,8 +160,10 @@ static void mapif_server_reset(struct mmo_map_server *server)
 	 * This information is broadcasted in fixed intervals
 	 * @see do_init_loginif
 	 **/
+	mutex->lock(chr->online_char_db_mutex);
 	chr->online_char_db->foreach(chr->online_char_db,
 		chr->db_setoffline, server->pos); //Tag relevant chars as 'in disconnected' server.
+	mutex->unlock(chr->online_char_db_mutex);
 	mapif->server_destroy(server, true);
 }
 

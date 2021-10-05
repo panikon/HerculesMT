@@ -76,17 +76,27 @@ struct char_session_data {
 	} *rename;
 };
 
+/**
+ * Online character information
+ * Objects of this struct are stored in chr->online_char_db
+ *
+ * @param account_id         Account id
+ * @param char_id            Selected character (-1 when in char selection)
+ * @param session_id         Session connected to char-server (-1 when in map-server)
+ * @oaram waiting_disconnect Timeout timer id when moving to map-server (chr->waiting_disconnect)
+ * @param server             -2 Unknown server
+ * @param server             -1 Not connected
+ * @param server             Index position of server
+ * @param pincode_enable     Should the player be queried for the pincode? (2: true)
+ * @see pincode_handle
+ * @see chr->online_char_db
+ **/
 struct online_char_data {
 	int account_id;
 	int char_id;
 	int session_id;
-	// Account timeout timer id when moving to map-server
 	int waiting_disconnect;
-	short server; // -2: unknown server, -1: not connected, 0+: id of server
-	/**
-	 * Should the player be queried for the pincode? (2: true)
-	 * @see pincode_handle
-	 **/
+	short server;
 	int pincode_enable;
 };
 
@@ -189,7 +199,6 @@ struct char_interface {
 	 **/
 	struct s_mmo_map_server_list map_server_list;
 	struct rwlock_data *map_server_list_lock;
-	//struct mmo_map_server server[MAX_MAP_SERVERS];
 
 	/**
 	 * Action queue information
@@ -200,16 +209,27 @@ struct char_interface {
 	struct mutex_data *action_information_mutex;
 
 	struct socket_data *login_session;
-	int char_fd;
-	struct DBMap *online_char_db; // int account_id -> struct online_char_data*
-	struct DBMap *char_db_; // int char_id -> struct mmo_charstatus*
+
 	/**
-	 * Players connected to the char-server
-	 * @see char_disconnect_player
-	 * @see char_connect_add
-	 * @see char_connect_remove
+	 * Online character db
+	 *
+	 * Players currently connected either to the char-server (in char selection
+	 * screen) or to a map-server. When a new entry is added a cleanup timer is
+	 * started (online_char_data::waiting_disconnect, char_waiting_disconnect).
+	 * The table is also cleaned up periodically via chr->online_data_cleanup
+	 *
+	 * @see char_set_char_charselect
+	 * @see char_set_char_online
+	 * @see char_online_data_cleanup_sub
+	 *
+	 * int account_id -> struct online_char_data*
+	 * @see online_char_data
 	 **/
-	struct DBMap *connected_db; // int account_id -> struct socket_data*
+	struct DBMap *online_char_db;
+	struct mutex_data *online_char_db_mutex;
+
+	struct DBMap *char_db_; // int char_id -> struct mmo_charstatus*
+
 	char userid[NAME_LENGTH];
 	char passwd[NAME_LENGTH];
 	char server_name[20];
@@ -277,9 +297,8 @@ struct char_interface {
 	bool (*char_child) (int parent_id, int child_id);
 	int (*char_family) (int cid1, int cid2, int cid3);
 	void (*disconnect_player) (int account_id);
-	void (*connect_add) (int account_id, struct socket_data *session);
-	void (*connect_remove) (int account_id);
 	void (*authfail_fd) (struct socket_data *session, enum notify_ban_errorcode flag);
+	bool (*auth_kick_online) (struct socket_data *session, struct online_char_data *character);
 	void (*auth_ok) (struct socket_data *session, struct char_session_data *sd);
 	void (*ping_login_server) (struct socket_data *session);
 	void (*auth_error) (struct socket_data *session, unsigned char flag);
