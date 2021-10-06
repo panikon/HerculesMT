@@ -34,6 +34,7 @@
 #include "common/socket.h"
 #include "common/sql.h"
 #include "common/strlib.h"
+#include "common/mutex.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,6 +48,7 @@ struct inter_achievement_interface *inter_achievement;
  * @param[out]  cp          pointer to loaded achievements.
  * @param[in]   p           pointer to map-sent character achievements.
  * @return number of achievements saved.
+ * @mutex char_achievements_mutex
  */
 static int inter_achievement_tosql(int char_id, struct char_achievements *cp, const struct char_achievements *p)
 {
@@ -72,7 +74,10 @@ static int inter_achievement_tosql(int char_id, struct char_achievements *cp, co
 
 		if (j == VECTOR_LENGTH(*cp))
 			save = true;
-		else if (memcmp(cpa, pa, sizeof(struct achievement)) != 0)
+		else if(cpa->id != pa->id || cpa->completed_at != pa->completed_at
+		     || cpa->rewarded_at != pa->rewarded_at
+			 || memcmp(cpa->objective, pa->objective, sizeof(cpa->objective))
+			)
 			save = true;
 
 		if (save) {
@@ -173,6 +178,7 @@ static int inter_achievement_sql_init(void)
 	// Initialize the loaded db storage.
 	// used as a comparand against map-server achievement data before saving.
 	inter_achievement->char_achievements = idb_alloc(DB_OPT_RELEASE_DATA);
+	inter_achievement->char_achievements_mutex = mutex->create();
 	return 1;
 }
 
@@ -207,6 +213,7 @@ static int inter_achievement_char_achievements_clear(const struct DBKey_s *key, 
 static void inter_achievement_sql_final(void)
 {
 	inter_achievement->char_achievements->destroy(inter_achievement->char_achievements, inter_achievement->char_achievements_clear);
+	mutex->destroy(inter_achievement->char_achievements_mutex);
 }
 
 /**

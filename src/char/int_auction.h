@@ -31,7 +31,18 @@ struct DBMap; // common/db.h
  * inter_auction_interface interface
  **/
 struct inter_auction_interface {
-	struct DBMap *db; // int auction_id -> struct auction_data*
+	/**
+	 * Auction cache
+	 *
+	 * int auction_id -> struct auction_data*
+	 **/
+	struct DBMap *db;
+	struct mutex_data *db_mutex;
+
+	void (*cancel) (struct socket_data *session, int char_id, unsigned int auction_id);
+	void (*close) (struct socket_data *session, int char_id, unsigned int auction_id);
+	void (*bid)(struct socket_data *session, int char_id, unsigned int auction_id, int bid, const char *buyer_name);
+
 	int (*count) (int char_id, bool buy);
 	void (*save) (struct auction_data *auction);
 	unsigned int (*create) (const struct auction_data *auction);

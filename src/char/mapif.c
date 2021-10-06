@@ -785,6 +785,8 @@ static void mapif_auction_sendlist(struct socket_data *session, int char_id, sho
 /**
  * 0x3050 ZW_AUCTION_REQUEST_LIST <char_id>.L <type>.W <price>.L <page>.W <search>[NAME_LENGTH].B
  * Map-server request of information of an auction list
+ *
+ * Acquires inter_auction->db_mutex
  **/
 static void mapif_parse_auction_requestlist(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
@@ -797,6 +799,8 @@ static void mapif_parse_auction_requestlist(struct s_receive_action_data *act, s
 	safestrncpy(searchtext, RFIFOP(act, 16), NAME_LENGTH);
 
 	int len = sizeof(struct auction_data);
+
+	mutex->lock(inter_auction->db_mutex);
 
 	unsigned char buf[5 * sizeof(struct auction_data)];
 	struct DBIterator *iter = db_iterator(inter_auction->db);
@@ -824,10 +828,11 @@ static void mapif_parse_auction_requestlist(struct s_receive_action_data *act, s
 		if (page != pages)
 			continue; // This is not the requested Page
 
-		memcpy(WBUFP(buf, j * len), auction, len);
+		memcpy(WBUFP(buf, j * len), auction, len); // TODO/FIXME: Copy of a padded struct
 		j++; // Found Results
 	}
 	dbi_destroy(iter);
+	mutex->unlock(inter_auction->db_mutex);
 
 	mapif->auction_sendlist(act->session, char_id, j, pages, buf);
 }
@@ -857,11 +862,16 @@ static void mapif_auction_register(struct socket_data *session,
 /**
  * 0x3051 ZW_AUCTION_REGISTER
  * Parses map-server request to register an auction
+ *
+ * Acquires inter_auction->db_mutex
  **/
 static void mapif_parse_auction_register(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	size_t pos = 2;
 	struct auction_data a = {0};
+
+	mutex->lock(inter_auction->db_mutex);
+
 	offsetof(struct PACKET_ZW_AUCTION_REGISTER, data.seller_id);
 	pos += sizeof((a.seller_id  = RFIFOL(act, pos)));
 	if(inter_auction->count(a.seller_id, false) < 5) {
@@ -886,6 +896,8 @@ static void mapif_parse_auction_register(struct s_receive_action_data *act, stru
 
 		a.auction_id = inter_auction->create(&a);
 	}
+
+	mutex->unlock(inter_auction->db_mutex);
 
 	mapif->auction_register(act->session,
 		a.auction_id,
@@ -912,34 +924,16 @@ static void mapif_auction_cancel(struct socket_data *session, int char_id, enum 
 /**
  * 0x3052 ZW_AUCTION_CANCEL <char_id>.L <auction_id>.L
  * Parses cancelation request (CZ_AUCTION_ADD_CANCEL)
+ *
+ * Acquires inter_auction->db_mutex
  **/
 static void mapif_parse_auction_cancel(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int char_id    = RFIFOL(act, 2);
 	int auction_id = RFIFOL(act, 6);
-	struct auction_data *auction;
-
-	if ((auction = (struct auction_data *)idb_get(inter_auction->db, auction_id)) == NULL) {
-		mapif->auction_cancel(act->session, char_id, AUCTIONCANCEL_INCORRECT_ID);
-		return;
-	}
-
-	if (auction->seller_id != char_id) {
-		mapif->auction_cancel(act->session, char_id, AUCTIONCANCEL_FAILED);
-		return;
-	}
-
-	if (auction->buyer_id > 0) {
-		// An auction with at least one bidder cannot be canceled
-		mapif->auction_message(char_id, AUCTIONRESULT_CANNOT_CANCEL);
-		return;
-	}
-
-	inter_mail->sendmail(0, "Auction Manager", auction->seller_id,
-		auction->seller_name, "Auction", "Auction canceled.", 0, &auction->item);
-	inter_auction->delete_(auction);
-
-	mapif->auction_cancel(act->session, char_id, AUCTIONCANCEL_SUCCESS);
+	mutex->lock(inter_auction->db_mutex);
+	inter_auction->cancel(act->session, char_id, auction_id);
+	mutex->unlock(inter_auction->db_mutex);
 }
 
 /**
@@ -957,36 +951,17 @@ static void mapif_auction_close(struct socket_data *session, int char_id, enum e
 /**
  * 0x3053 ZW_AUCTION_CLOSE <char_id>.L <result>.B
  * Parses close request (CZ_AUCTION_REQ_MY_SELL_STOP)
+ *
+ * Acquires inter_auction->db_mutex
  **/
 static void mapif_parse_auction_close(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int char_id    = RFIFOL(act, 2);
 	int auction_id = RFIFOL(act, 6);
-	struct auction_data *auction;
 
-	if ((auction = (struct auction_data *)idb_get(inter_auction->db, auction_id)) == NULL) {
-		mapif->auction_close(act->session, char_id, AUCTIONCANCEL_INCORRECT_ID); // Bid Number is Incorrect
-		return;
-	}
-
-	if (auction->seller_id != char_id) {
-		mapif->auction_close(act->session, char_id, AUCTIONCANCEL_FAILED); // You cannot end the auction
-		return;
-	}
-
-	if (auction->buyer_id == 0) {
-		mapif->auction_close(act->session, char_id, AUCTIONCANCEL_FAILED); // You cannot end the auction
-		return;
-	}
-
-	// Send Money to Seller
-	inter_mail->sendmail(0, "Auction Manager", auction->seller_id, auction->seller_name, "Auction", "Auction closed.", auction->price, NULL);
-	// Send Item to Buyer
-	inter_mail->sendmail(0, "Auction Manager", auction->buyer_id, auction->buyer_name, "Auction", "Auction winner.", 0, &auction->item);
-	mapif->auction_message(auction->buyer_id, AUCTIONRESULT_WON); // You have won the auction
-	inter_auction->delete_(auction);
-
-	mapif->auction_close(act->session, char_id, AUCTIONCANCEL_SUCCESS); // You have ended the auction
+	mutex->lock(inter_auction->db_mutex);
+	inter_auction->close(act->session, char_id, auction_id);
+	mutex->unlock(inter_auction->db_mutex);
 }
 
 /**
@@ -1005,66 +980,20 @@ static void mapif_auction_bid(struct socket_data *session, int char_id, int bid,
 
 /**
  * 0x3055 ZW_AUCTION_BID <char_id>.L <auction_id>.L <bid>.L <buyer_name>
+ *
+ * Acquires inter_auction->db_mutex
  **/
 static void mapif_parse_auction_bid(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
+	char buyer_name[NAME_LENGTH];
 	int char_id             = RFIFOL(act, 4);
 	unsigned int auction_id = RFIFOL(act, 8);
 	int bid                 = RFIFOL(act, 12);
-	struct auction_data *auction = idb_get(inter_auction->db, auction_id);
+	safestrncpy(buyer_name, RFIFOP(act, 16), NAME_LENGTH);
 
-	if(auction == NULL || auction->price >= bid || auction->seller_id == char_id) {
-		mapif->auction_bid(act->session, char_id, bid, AUCTIONRESULT_BID_FAILED);
-		return;
-	}
-
-	if(inter_auction->count(char_id, true) > 4
-	&& bid < auction->buynow
-	&& auction->buyer_id != char_id
-	) {
-		mapif->auction_bid(act->session, char_id, bid, AUCTIONRESULT_BID_EXCEEDED); // You cannot place more than 5 bids at a time
-		return;
-	}
-
-	if(auction->buyer_id > 0) {
-		// Send Money back to the previous Buyer
-		if(auction->buyer_id != char_id) {
-			inter_mail->sendmail(0, "Auction Manager", auction->buyer_id,
-				auction->buyer_name,
-				"Auction", "Someone has placed a higher bid.",
-				auction->price, NULL);
-			mapif->auction_message(auction->buyer_id, AUCTIONRESULT_LOSE); // You have failed to win the auction
-		} else {
-			inter_mail->sendmail(0, "Auction Manager", auction->buyer_id,
-				auction->buyer_name,
-				"Auction", "You have placed a higher bid.",
-				auction->price, NULL);
-		}
-	}
-
-	auction->buyer_id = char_id;
-	safestrncpy(auction->buyer_name, RFIFOP(act, 16), NAME_LENGTH);
-	auction->price = bid;
-
-	if(bid >= auction->buynow) {
-		// Automatic won the auction
-		mapif->auction_bid(act->session, char_id, bid - auction->buynow, AUCTIONRESULT_BID_SUCCESS);
-
-		inter_mail->sendmail(0, "Auction Manager", auction->buyer_id,
-			auction->buyer_name,
-			"Auction", "You have won the auction.", 0, &auction->item);
-		mapif->auction_message(char_id, AUCTIONRESULT_WON); // You have won the auction
-		inter_mail->sendmail(0, "Auction Manager", auction->seller_id,
-			auction->seller_name,
-			"Auction", "Payment for your auction!.", auction->buynow, NULL);
-
-		inter_auction->delete_(auction);
-		return;
-	}
-
-	inter_auction->save(auction);
-
-	mapif->auction_bid(act->session, char_id, 0, AUCTIONRESULT_BID_SUCCESS); // You have successfully bid in the auction
+	mutex->lock(inter_auction->db_mutex);
+	inter_auction->bid(act->session, char_id, auction_id, bid, buyer_name);
+	mutex->unlock(inter_auction->db_mutex);
 }
 
 /*======================================
@@ -3589,6 +3518,7 @@ static void mapif_parse_load_achievements(struct s_receive_action_data *act, str
 
 	struct char_achievements *cp = NULL;
 
+	mutex->lock(inter_achievement->char_achievements_mutex);
 	/* Ensure data exists */
 	cp = idb_ensure(inter_achievement->char_achievements, char_id, inter_achievement->ensure_char_achievements);
 
@@ -3597,6 +3527,8 @@ static void mapif_parse_load_achievements(struct s_receive_action_data *act, str
 
 	/* Send Achievements to map server. */
 	mapif->sAchievementsToMap(act->session, char_id, cp);
+
+	mutex->unlock(inter_achievement->char_achievements_mutex);
 }
 
 /**
@@ -3679,12 +3611,14 @@ static void mapif_parse_save_achievements(struct s_receive_action_data *act, str
 static void mapif_achievement_save(int char_id, const struct char_achievements *p)
 {
 	struct char_achievements *cp = NULL;
-	
+
+	mutex->lock(inter_achievement->char_achievements_mutex);
 	/* Get loaded achievements. */
 	cp = idb_ensure(inter_achievement->char_achievements, char_id, inter_achievement->ensure_char_achievements);
 
 	if (VECTOR_LENGTH(*p)) /* Save current achievements. */
 		inter_achievement->tosql(char_id, cp, p);
+	mutex->unlock(inter_achievement->char_achievements_mutex);
 }
 
 /**

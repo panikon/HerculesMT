@@ -32,6 +32,8 @@ struct char_achievements;
  */
 struct inter_achievement_interface {
 	struct DBMap *char_achievements;
+	struct mutex_data *char_achievements_mutex;
+
 	/* */
 	int (*sql_init) (void);
 	void (*sql_final) (void);

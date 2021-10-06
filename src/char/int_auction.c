@@ -36,6 +36,7 @@
 #include "common/sql.h"
 #include "common/strlib.h"
 #include "common/timer.h"
+#include "common/mutex.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,6 +44,11 @@
 static struct inter_auction_interface inter_auction_s;
 struct inter_auction_interface *inter_auction;
 
+/**
+ * Returns number of active auctions of a char_id
+ *
+ * @mutex inter_auction->db_mutex
+ **/
 static int inter_auction_count(int char_id, bool buy)
 {
 	int i = 0;
@@ -97,6 +103,7 @@ static void inter_auction_save(struct auction_data *auction)
  * @remarks timestamp is ignored and is generated using auction->hours
  * @return auction id
  * @retval 0 Failed
+ * @mutex inter_auction->db_mutex
  **/
 static unsigned int inter_auction_create(const struct auction_data *auction)
 {
@@ -166,10 +173,18 @@ static unsigned int inter_auction_create(const struct auction_data *auction)
 	return id;
 }
 
+/**
+ * Auction end timer
+ *
+ * @see TimerFunc
+ * Acquires inter_auction->db_mutex
+ **/
 static int inter_auction_end_timer(struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data)
 {
 	struct auction_data *auction;
-	if( (auction = (struct auction_data *)idb_get(inter_auction->db, id)) != NULL )
+	mutex->lock(inter_auction->db_mutex);
+
+	if( (auction = idb_get(inter_auction->db, id)) != NULL )
 	{
 		if( auction->buyer_id )
 		{
@@ -192,9 +207,15 @@ static int inter_auction_end_timer(struct timer_interface *tm, int tid, int64 ti
 		inter_auction->delete_(auction);
 	}
 
+	mutex->unlock(inter_auction->db_mutex);
 	return 0;
 }
 
+/**
+ * Removes auction from database and cache
+ *
+ * @mutex inter_auction->db_mutex
+ **/
 static void inter_auction_delete(struct auction_data *auction)
 {
 	unsigned int auction_id;
@@ -211,6 +232,141 @@ static void inter_auction_delete(struct auction_data *auction)
 	idb_remove(inter_auction->db, auction_id);
 }
 
+/**
+ * Cancels an auction
+ *
+ * @mutex inter_auction->db_mutex
+ **/
+static void inter_auction_cancel(struct socket_data *session, int char_id,
+	unsigned int auction_id
+) {
+	struct auction_data *auction = idb_get(inter_auction->db, auction_id);
+
+	if(!auction) {
+		mapif->auction_cancel(session, char_id, AUCTIONCANCEL_INCORRECT_ID);
+		return;
+	}
+
+	if (auction->seller_id != char_id) {
+		mapif->auction_cancel(session, char_id, AUCTIONCANCEL_FAILED);
+		return;
+	}
+
+	if(auction->buyer_id > 0) {
+		// An auction with at least one bidder cannot be canceled
+		mapif->auction_message(char_id, AUCTIONRESULT_CANNOT_CANCEL);
+		return;
+	}
+
+	inter_mail->sendmail(0, "Auction Manager", auction->seller_id,
+		auction->seller_name, "Auction", "Auction canceled.", 0, &auction->item);
+	inter_auction->delete_(auction);
+
+	mapif->auction_cancel(session, char_id, AUCTIONCANCEL_SUCCESS);
+}
+
+/**
+ * Closes an auction
+ *
+ * @mutex inter_auction->db_mutex
+ **/
+static void inter_auction_close(struct socket_data *session, int char_id,
+	unsigned int auction_id
+) {
+	struct auction_data *auction = idb_get(inter_auction->db, auction_id);
+
+	if(!auction) {
+		mapif->auction_close(session, char_id, AUCTIONCANCEL_INCORRECT_ID);
+		return;
+	}
+
+	if(auction->seller_id != char_id || auction->buyer_id == 0) {
+		mapif->auction_close(session, char_id, AUCTIONCANCEL_FAILED); // You cannot end the auction
+		return;
+	}
+
+	// Send Money to Seller
+	inter_mail->sendmail(0, "Auction Manager", auction->seller_id,
+		auction->seller_name, "Auction", "Auction closed.", auction->price, NULL);
+	// Send Item to Buyer
+	inter_mail->sendmail(0, "Auction Manager", auction->buyer_id,
+		auction->buyer_name, "Auction", "Auction winner.", 0, &auction->item);
+	mapif->auction_message(auction->buyer_id, AUCTIONRESULT_WON); // You have won the auction
+	inter_auction->delete_(auction);
+
+	mapif->auction_close(session, char_id, AUCTIONCANCEL_SUCCESS); // You have ended the auction
+}
+
+/**
+ * Places a new bid in provided auction
+ *
+ * @mutex inter_auction->db_mutex
+ **/
+static void inter_auction_bid(struct socket_data *session, int char_id,
+	unsigned int auction_id, int bid, const char *buyer_name
+) {
+	struct auction_data *auction = idb_get(inter_auction->db, auction_id);
+
+	if(auction == NULL || auction->price >= bid || auction->seller_id == char_id) {
+		mapif->auction_bid(session, char_id, bid, AUCTIONRESULT_BID_FAILED);
+		return;
+	}
+
+	if(inter_auction->count(char_id, true) > 4
+	&& bid < auction->buynow
+	&& auction->buyer_id != char_id
+	) {
+		// You cannot place more than 5 bids at a time
+		mapif->auction_bid(session, char_id, bid, AUCTIONRESULT_BID_EXCEEDED);
+		return;
+	}
+
+	if(auction->buyer_id > 0) {
+		// Send Money back to the previous Buyer
+		if(auction->buyer_id != char_id) {
+			inter_mail->sendmail(0, "Auction Manager", auction->buyer_id,
+				auction->buyer_name,
+				"Auction", "Someone has placed a higher bid.",
+				auction->price, NULL);
+			mapif->auction_message(auction->buyer_id, AUCTIONRESULT_LOSE); // You have failed to win the auction
+		} else {
+			inter_mail->sendmail(0, "Auction Manager", auction->buyer_id,
+				auction->buyer_name,
+				"Auction", "You have placed a higher bid.",
+				auction->price, NULL);
+		}
+	}
+
+	auction->buyer_id = char_id;
+	safestrncpy(auction->buyer_name, buyer_name, NAME_LENGTH);
+	auction->price = bid;
+
+	if(bid >= auction->buynow) {
+		// Automatic win the auction
+		mapif->auction_bid(session, char_id, bid - auction->buynow, AUCTIONRESULT_BID_SUCCESS);
+
+		inter_mail->sendmail(0, "Auction Manager", auction->buyer_id,
+			auction->buyer_name,
+			"Auction", "You have won the auction.", 0, &auction->item);
+		mapif->auction_message(char_id, AUCTIONRESULT_WON); // You have won the auction
+		inter_mail->sendmail(0, "Auction Manager", auction->seller_id,
+			auction->seller_name,
+			"Auction", "Payment for your auction!.", auction->buynow, NULL);
+
+		inter_auction->delete_(auction);
+		return;
+	}
+
+	inter_auction->save(auction);
+
+	mapif->auction_bid(session, char_id, 0, AUCTIONRESULT_BID_SUCCESS);
+}
+
+/**
+ * Loads auctions from database to cache
+ *
+ * @mutex inter_auction->db_mutex
+ **/
 static void inter_auctions_fromsql(void)
 {
 	int i;
@@ -287,6 +443,7 @@ static void inter_auctions_fromsql(void)
 static int inter_auction_sql_init(void)
 {
 	inter_auction->db = idb_alloc(DB_OPT_RELEASE_DATA);
+	inter_auction->db_mutex = mutex->create();
 	inter_auction->fromsql();
 
 	return 0;
@@ -295,6 +452,7 @@ static int inter_auction_sql_init(void)
 static void inter_auction_sql_final(void)
 {
 	inter_auction->db->destroy(inter_auction->db,NULL);
+	mutex->destroy(inter_auction->db_mutex);
 
 	return;
 }
@@ -304,6 +462,11 @@ void inter_auction_defaults(void)
 	inter_auction = &inter_auction_s;
 
 	inter_auction->db = NULL; // int auction_id -> struct auction_data*
+	inter_auction->db_mutex = NULL;
+
+	inter_auction->cancel = inter_auction_cancel;
+	inter_auction->close = inter_auction_close;
+	inter_auction->bid = inter_auction_bid;
 
 	inter_auction->count = inter_auction_count;
 	inter_auction->save = inter_auction_save;

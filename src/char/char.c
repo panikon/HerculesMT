@@ -175,10 +175,19 @@ static int fame_list_size_chemist = MAX_FAME_LIST;
 static int fame_list_size_smith   = MAX_FAME_LIST;
 static int fame_list_size_taekwon = MAX_FAME_LIST;
 
-// Char-server-side stored fame lists [DracoRPG]
+/**
+ * Char-server-side stored fame lists [DracoRPG]
+ *
+ * Fame lists are always calculated on the fly by the char-server using fame
+ * values of all characters in 'char_db', @see chr->read_fame_list. This
+ * loading is triggered either by the initialization of the char-server or
+ * when ZW_FAME_LIST_BUILD (map-server sends when a character job changes).
+ * Otherwise they are updated by ZW_FAME_LIST_UPDATE.
+ **/
 static struct fame_list smith_fame_list[MAX_FAME_LIST];
 static struct fame_list chemist_fame_list[MAX_FAME_LIST];
 static struct fame_list taekwon_fame_list[MAX_FAME_LIST];
+static struct mutex_data *fame_list_mutex = NULL;
 
 // Initial position (it's possible to set it in conf file)
 #ifdef RENEWAL
@@ -2963,6 +2972,8 @@ static void char_change_sex_sub(int sex, int acc, int char_id, int class, int gu
 
 /**
  * Loads fame list from SQL to memory
+ *
+ * @mutex fame_list_mutex
  **/
 static void char_read_fame_list(void)
 {
@@ -3090,6 +3101,8 @@ static void char_parse_frommap_skillid2idx(struct s_receive_action_data *act, st
 /**
  * ZW_OWNED_MAP_LIST
  * Receives list of indices owned by this map-server
+ *
+ * Acquires fame_list_mutex
  **/
 static void char_parse_frommap_map_names(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
@@ -3110,9 +3123,11 @@ static void char_parse_frommap_map_names(struct s_receive_action_data *act, stru
 	ShowStatus("Map-server %d loading complete.\n", server->pos);
 
 	mapif->map_received(act->session, wisp_server_name, 0);
+	mutex->lock(fame_list_mutex);
 	mapif->fame_list(server, smith_fame_list, fame_list_size_smith,
 	                         chemist_fame_list, fame_list_size_chemist,
 	                         taekwon_fame_list, fame_list_size_taekwon);
+	mutex->unlock(fame_list_mutex);
 	mapif->send_maps(server, RFIFOP(act, 4));
 
 	rwlock->write_unlock(chr->map_server_list_lock);
@@ -3753,6 +3768,8 @@ static void char_parse_frommap_change_account(struct s_receive_action_data *act,
 /**
  * ZW_FAME_LIST_UPDATE
  * Fame list update request
+ *
+ * Acquires fame_list_mutex
  **/
 static void char_parse_frommap_fame_list(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
@@ -3764,6 +3781,8 @@ static void char_parse_frommap_fame_list(struct s_receive_action_data *act, stru
 	int player_pos;
 	int fame_pos;
 
+	mutex->lock(fame_list_mutex);
+
 	switch(type) {
 		case RANKTYPE_BLACKSMITH: size = fame_list_size_smith;   list = smith_fame_list;   break;
 		case RANKTYPE_ALCHEMIST:  size = fame_list_size_chemist; list = chemist_fame_list; break;
@@ -3771,8 +3790,10 @@ static void char_parse_frommap_fame_list(struct s_receive_action_data *act, stru
 		default:                  size = 0;                      list = NULL;              break;
 	}
 
-	if(!list)
+	if(!list) {
+		mutex->unlock(fame_list_mutex);
 		return;
+	}
 
 	ARR_FIND(0, size, player_pos, list[player_pos].id == cid);// position of the player
 	ARR_FIND(0, size, fame_pos, list[fame_pos].fame <= fame);// where the player should be
@@ -3802,6 +3823,7 @@ static void char_parse_frommap_fame_list(struct s_receive_action_data *act, stru
 	           chemist_fame_list, fame_list_size_chemist,
 	           taekwon_fame_list, fame_list_size_taekwon);
 	}
+	mutex->unlock(fame_list_mutex);
 }
 
 /**
@@ -3862,13 +3884,17 @@ static void char_parse_frommap_set_char_online(struct s_receive_action_data *act
  * ZW_FAME_LIST_BUILD
  * Build and send fame ranking lists
  * @author DracoRPG
+ *
+ * Acquires fame_list_mutex
  **/
 static void char_parse_frommap_build_fame_list(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
+	mutex->lock(fame_list_mutex);
 	chr->read_fame_list();
 	mapif->fame_list(NULL, smith_fame_list, fame_list_size_smith,
 	       chemist_fame_list, fame_list_size_chemist,
 	       taekwon_fame_list, fame_list_size_taekwon);
+	mutex->unlock(fame_list_mutex);
 }
 
 /**
@@ -5655,6 +5681,7 @@ int do_final(void)
 	auth_db->destroy(auth_db, NULL);
 	mutex->destroy(auth_db_mutex);
 
+	mutex->destroy(fame_list_mutex);
 	HPM_char_do_final();
 
 	SQL->Free(inter->sql_handle);
@@ -5855,6 +5882,9 @@ int do_init(int argc, char **argv)
 	HPM->event(HPET_INIT);
 
 	chr->mmo_char_sql_init();
+
+	if(!(fame_list_mutex = mutex->create()))
+		exit(EXIT_FAILURE);
 	chr->read_fame_list(); //Read fame lists.
 
 	if ((socket_io->naddr_ != 0) && (!login_ip || !chr->ip)) {
