@@ -417,9 +417,13 @@ void chclif_parse_make_char(struct s_receive_action_data *act, struct char_sessi
 	 * we can be sure that any access to the data in char_data is safe.
 	 **/
 	struct mmo_charstatus char_dat;
-	struct mmo_charstatus *cd = &char_dat;
-	chr->mmo_char_fromsql(char_id, &cd, false); //Only the short data is needed.
-	chr->creation_ok(act->session, cd);
+	if(!chr->mmo_char_fromsql(char_id, CHARSAVE_STATUS, &char_dat,
+		CHARCACHE_IGNORE_NOLOCK)
+	) { //Only the short data is needed.
+		chr->creation_failed(act->session, RMCE_DENIED);
+		return;
+	}
+	chr->creation_ok(act->session, &char_dat);
 
 	// add new entry to the chars list
 	sd->found_char[char_dat.slot] = char_id;
@@ -428,6 +432,8 @@ void chclif_parse_make_char(struct s_receive_action_data *act, struct char_sessi
 /**
  * CH_SELECT_CHAR
  * Parses character selection and notifies player of the available map-server.
+ *
+ * Acquires char_db_lock
  **/
 void chclif_parse_select_char(struct s_receive_action_data *act, struct char_session_data *sd, int ipl)
 {
@@ -480,23 +486,29 @@ void chclif_parse_select_char(struct s_receive_action_data *act, struct char_ses
 	chr->set_char_online(-2,char_id,sd->account_id);
 
 	struct mmo_charstatus *cd;
-	if(!chr->mmo_char_fromsql(char_id, &cd, true)) { // Inserts loaded data to char_db_
-		chr->set_char_offline(char_id, sd->account_id);
+	rwlock->write_lock(chr->char_db_lock);
+	cd = chr->mmo_char_fromsql(char_id, CHARSAVE_ALL, NULL, CHARCACHE_INSERT);
+	if(!cd) {
+		rwlock->write_unlock(chr->char_db_lock);
 		/* failed to load something. REJECT! */
+		chr->set_char_offline(char_id, sd->account_id);
 		chr->auth_error(act->session, 0);
 		socket_io->session_disconnect_guard(act->session);
 		return;/* jump off this boat */
 	}
 	if(cd->sex == 99)
 		cd->sex = sd->sex;
-
 	chr->log_select(cd, slot);
 	ShowInfo("Selected char: (Account %d: %d - %s)\n",
 		sd->account_id, slot, cd->name);
 
+	struct point last_point;
+	memcpy(&last_point, &cd->last_point, sizeof(last_point));
+	rwlock->write_unlock(chr->char_db_lock);
+
 	rwlock->read_lock(chr->map_server_list_lock);
 	struct mmo_map_server *server;
-	int server_id = chr->get_map_server(cd);
+	int server_id = chr->get_map_server(&last_point);
 	if(server_id < 0 || !(server = INDEX_MAP_INDEX(chr->map_server_list, server_id))) {
 		rwlock->read_unlock(chr->map_server_list_lock);
 		ShowInfo("Connection Closed. %s.\n",
@@ -514,7 +526,8 @@ void chclif_parse_select_char(struct s_receive_action_data *act, struct char_ses
 	int subnet_map_ip = chr->lan_subnet_check(ipl);
 
 	// Send map information to client and then create a new auth entry
-	chr->send_map_info(act->session, subnet_map_ip, map_ip, map_port, cd, NULL);
+	chr->send_map_info(act->session, subnet_map_ip, map_ip,
+		map_port, char_id, &last_point, NULL);
 	chr->create_auth_entry(sd, cd->char_id, ipl, false);
 }
 

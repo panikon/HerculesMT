@@ -618,7 +618,7 @@ static void mapif_pong(struct socket_data *session)
 /**
  * Sends authentication data to map-server
  **/
-static void mapif_auth_ok(struct socket_data *session, int account_id, struct char_auth_node *node, struct mmo_charstatus *cd)
+static void mapif_auth_ok(struct socket_data *session, int account_id, struct char_auth_node *node, const struct mmo_charstatus *cd)
 {
 	nullpo_retv(cd);
 	WFIFOHEAD(session,25 + sizeof(struct mmo_charstatus), true);

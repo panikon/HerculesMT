@@ -70,17 +70,29 @@ static bool inter_mercenary_owner_fromsql(int char_id, struct mmo_charstatus *st
 	return true;
 }
 
-static bool inter_mercenary_owner_tosql(int char_id, struct mmo_charstatus *status)
+/**
+ * Saves mercenary data to database
+ *
+ * @retval 0 Success
+ *
+ * This function returns 0 upon success so it follows other 'tosql' functions [Panikon]
+ **/
+static int inter_mercenary_owner_tosql(int char_id, struct mmo_charstatus *status)
 {
 	nullpo_ret(status);
-	if( SQL_ERROR == SQL->Query(inter->sql_handle, "REPLACE INTO `%s` (`char_id`, `merc_id`, `arch_calls`, `arch_faith`, `spear_calls`, `spear_faith`, `sword_calls`, `sword_faith`) VALUES ('%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d')",
-		mercenary_owner_db, char_id, status->mer_id, status->arch_calls, status->arch_faith, status->spear_calls, status->spear_faith, status->sword_calls, status->sword_faith) )
-	{
+	if( SQL_ERROR == SQL->Query(inter->sql_handle,
+		"REPLACE INTO `%s` (`char_id`, `merc_id`, `arch_calls`, `arch_faith`,"
+		"`spear_calls`, `spear_faith`, `sword_calls`, `sword_faith`) "
+		"VALUES ('%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d')",
+		mercenary_owner_db, char_id, status->mer_id, status->arch_calls,
+		status->arch_faith, status->spear_calls, status->spear_faith,
+		status->sword_calls, status->sword_faith)
+	) {
 		Sql_ShowDebug(inter->sql_handle);
-		return false;
+		return 1;
 	}
 
-	return true;
+	return 0;
 }
 
 static bool inter_mercenary_owner_delete(int char_id)

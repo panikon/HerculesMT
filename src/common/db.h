@@ -697,7 +697,9 @@ struct DBMap {
 // Get pointer-type data from DBMaps of various key types
 #define db_get(db,k)     ( DB->data2ptr((db)->get((db),(k))) )
 #define idb_get(db,k)    ( DB->data2ptr((db)->get((db),DB->i2key(k))) )
+#define idb_get_safe(db,k)( DB->data2ptr((db)->get_safe((db),DB->i2key(k))) )
 #define uidb_get(db,k)   ( DB->data2ptr((db)->get((db),DB->ui2key(k))) )
+#define uidb_get_safe(db,k)( DB->data2ptr((db)->get_safe((db),DB->ui2key(k))) )
 #define strdb_get(db,k,l)( DB->data2ptr((db)->get((db),DB->str2key((k),(l)))) )
 #define i64db_get(db,k)  ( DB->data2ptr((db)->get((db),DB->i642key(k))) )
 #define ui64db_get(db,k) ( DB->data2ptr((db)->get((db),DB->ui642key(k))) )

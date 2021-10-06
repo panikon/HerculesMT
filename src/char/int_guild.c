@@ -363,7 +363,7 @@ static bool inter_guild_tosql(struct guild *g, int flag)
 }
 
 /**
- * Retrieves a guild's information from SQL.
+ * Retrieves a guild's information from SQL or from cache, when available
  *
  * @param guild_id The guild ID to look up.
  * @return The guild data or NULL.
@@ -660,7 +660,13 @@ static bool inter_guild_exp_parse_row(char *split[], int column, int current)
 	return true;
 }
 
-
+/**
+ * Sets a guild member online in guild cache.
+ *
+ * @param char_id  Character to be set
+ * @param guild_id Character's guild, when -1 searches in database for the guild id
+ * @return BOOL Success
+ **/
 static int inter_guild_CharOnline(int char_id, int guild_id)
 {
 	struct guild *g;

@@ -155,6 +155,8 @@ struct char_auth_node {
 	time_t expiration_time; // # of seconds 1/1/1970 (timestamp): Validity limit of the account (0 = unlimited)
 	int group_id;
 	unsigned changing_mapservers : 1;
+
+	bool read_flag; // When set to true this node is being read
 };
 
 /**
@@ -186,6 +188,38 @@ enum change_charname_result {
 	CRR_DUPLICATE,        // Other user already selected the character name. Please use other name.
 	CRR_BELONGS_TO_GUILD, // MSG_FAILED_RENAME_BELONGS_TO_GUILD
 	CRR_BELONGS_TO_PARTY, // MSG_FAILED_RENAME_BELONGS_TO_PARTY
+};
+
+/**
+ * Flags used to mark which members have changed in a mmo_charstatus object
+ * @see char_mmo_compare
+ * @see char_mmo_char_save
+ **/
+enum char_save_flag {
+	CHARSAVE_NONE         = 0x0,
+	CHARSAVE_INVENTORY    = 0x1,
+	CHARSAVE_CART         = 0x2,
+	CHARSAVE_STATUS_LONG  = 0x4,
+	CHARSAVE_ACCDATA      = 0x8,
+	CHARSAVE_STATUS_SHORT = 0x10,
+	CHARSAVE_MERCENARY    = 0x20,
+	CHARSAVE_MEMO         = 0x40,
+	CHARSAVE_SKILL        = 0x80,
+	CHARSAVE_FRIENDS      = 0x100,
+	CHARSAVE_HOTKEYS      = 0x200,
+
+	CHARSAVE_STATUS       = CHARSAVE_STATUS_LONG|CHARSAVE_STATUS_SHORT,
+	CHARSAVE_ALL          = 0x3FF
+};
+
+/**
+ * Parameter of char_mmo_char_fromsql
+ * @see char_mmo_char_fromsql
+ **/
+enum e_char_cache {
+	CHARCACHE_IGNORE_NOLOCK, // Don't change cache
+	CHARCACHE_INSERT,        // Insert data to cache
+	CHARCACHE_UPDATE         // Update cache
 };
 
 /**
@@ -228,7 +262,19 @@ struct char_interface {
 	struct DBMap *online_char_db;
 	struct mutex_data *online_char_db_mutex;
 
-	struct DBMap *char_db_; // int char_id -> struct mmo_charstatus*
+	/**
+	 * Character status database
+	 *
+	 * All currently loaded characters have an active entry in this table,
+	 * these entries are set up via chr->create_charstatus that is usually
+	 * triggered by chr->mmo_char_fromsql in the authentication process
+	 * after char selection (chclif_parse_select_char, CH_SELECT_CHAR).
+	 *
+	 * int char_id -> struct mmo_charstatus*
+	 * @see mmo_charstatus
+	 **/
+	struct DBMap *char_db_;
+	struct rwlock_data *char_db_lock;
 
 	char userid[NAME_LENGTH];
 	char passwd[NAME_LENGTH];
@@ -268,15 +314,17 @@ struct char_interface {
 	void (*set_all_offline) (int id);
 	void (*set_all_offline_sql) (void);
 
+	char *(*mmo_flag2str)(char *save_status, size_t len, int32 save_flag);
 	int (*mmo_char_tosql) (int char_id, struct mmo_charstatus* p);
 	int (*getitemdata_from_sql) (struct item *items, int max, int guid, enum inventory_table_type table);
 	int (*memitemdata_to_sql) (const struct item items[], int current_size, int guid, enum inventory_table_type table);
 	int (*mmo_gender) (const struct char_session_data *sd, const struct mmo_charstatus *p, char sex);
 	int (*mmo_chars_fromsql) (struct char_session_data* sd, uint8* buf, int *count);
-	int (*mmo_char_fromsql) (int char_id, struct mmo_charstatus **out_db, bool load_everything);
+	uint32 (*mmo_char_compare) (const struct mmo_charstatus *cp, const struct mmo_charstatus *p);
+	struct mmo_charstatus *(*mmo_char_fromsql) (int char_id, int load_flag, struct mmo_charstatus *out, enum e_char_cache cache_data);
 	int (*mmo_char_sql_init) (void);
-	int (*get_map_server)(struct mmo_charstatus *cd);
-	void (*log_select) (struct mmo_charstatus *cd, int slot);
+	int (*get_map_server)(struct point *last_point);
+	void (*log_select) (const struct mmo_charstatus *cd, int slot);
 	bool (*char_slotchange) (struct char_session_data *sd, struct socket_data *session, unsigned short from, unsigned short to);
 	enum change_charname_result (*rename_char_sql) (struct char_session_data *sd, int char_id);
 	bool (*name_exists) (const char *name, const char *esc_name);
@@ -350,10 +398,10 @@ struct char_interface {
 	void (*delete2_cancel_ack) (struct socket_data *session, int char_id, uint32 result);
 
 	void (*send_account_id) (struct socket_data *session, int account_id);
-	void (*send_map_info) (struct socket_data *session, uint32 subnet_map_ip, uint32 map_ip, uint16 map_port, struct mmo_charstatus *cd, char *dnsHost);
+	void (*send_map_info) (struct socket_data *session, uint32 subnet_map_ip, uint32 map_ip, uint16 map_port, int char_id, const struct point *last_point, char *dnsHost);
 	void (*create_auth_entry)(struct char_session_data *sd, int char_id, int ipl, bool changing_map_servers);
 	void (*send_wait_char_server) (struct socket_data *session);
-	int (*search_default_maps_mapserver) (struct mmo_charstatus *cd);
+	int (*search_default_maps_mapserver) (struct point *last_point);
 	void (*creation_failed) (struct socket_data *session, enum refuse_make_char_errorcode result);
 	void (*creation_ok) (struct socket_data *session, struct mmo_charstatus *char_dat);
 	void (*delete_char_failed) (struct socket_data *session, int flag);

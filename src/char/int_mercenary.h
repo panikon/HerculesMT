@@ -31,7 +31,7 @@ struct mmo_charstatus;
  **/
 struct inter_mercenary_interface {
 	bool (*owner_fromsql) (int char_id, struct mmo_charstatus *status);
-	bool (*owner_tosql) (int char_id, struct mmo_charstatus *status);
+	int (*owner_tosql) (int char_id, struct mmo_charstatus *status);
 	bool (*owner_delete) (int char_id);
 	int (*sql_init) (void);
 	void (*sql_final) (void);

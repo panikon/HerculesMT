@@ -35,6 +35,7 @@
 #include "common/socket.h"
 #include "common/sql.h"
 #include "common/strlib.h"
+#include "common/rwlock.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -85,6 +86,7 @@ static int inter_party_check_lv(struct party_data *p)
  * @param p The party.
  * @return The child's char ID on success, otherwise 0.
  *
+ * Acquires char_db_lock
  **/
 static int inter_party_is_family_party(struct party_data *p)
 {
@@ -94,6 +96,8 @@ static int inter_party_is_family_party(struct party_data *p)
 		return 0;
 
 	int child_id = 0;
+
+	rwlock->read_lock(chr->char_db_lock);
 
 	for (int i = 0; i < MAX_PARTY - 1; i++) {
 		if (p->party.member[i].online == 0)
@@ -148,6 +152,7 @@ static int inter_party_is_family_party(struct party_data *p)
 		}
 	}
 
+	rwlock->read_unlock(chr->char_db_lock);
 	return child_id;
 }
 
