@@ -550,6 +550,47 @@ struct PACKET_ZW_ELEMENTAL_SAVE {
 } __attribute__((packed));
 
 /**
+ * Castle data used in inter-server
+ * @see guild_castle
+ **/
+struct guild_castle_packet_data {
+	int32 castle_id;
+	int32 mapindex;
+	uint8 castle_name[NAME_LENGTH];
+	uint8 castle_event[NAME_LENGTH];
+	int32 siege_type;
+	uint8 enable_client_warp;
+	struct {
+		int32 x;
+		int32 y;
+		int32 zeny;
+		int32 zeny_siege;
+	} __attribute__((packed)) client_warp;
+	int32 guild_id;
+	int32 economy;
+	int32 defense;
+	int32 triggerE;
+	int32 triggerD;
+	int32 nextTime;
+	int32 payTime;
+	int32 createTime;
+	int32 visibleC;
+	struct {
+		uint8 visible;
+		int32 id; // object id
+	} __attribute__((packed)) guardian[MAX_GUARDIANS];
+} __attribute__((packed));
+
+/**
+ * Guild skill data used in inter-server
+ * @see guild_skill
+ **/
+struct guild_skill_packet_data {
+	int32 id;
+	int32 lv;
+} __attribute__((packed));
+
+/**
  * Guild member data used in inter-server
  * @see guild_member
  * @param hair       GMI_HAIR

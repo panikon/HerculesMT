@@ -932,6 +932,7 @@ struct guild_expulsion {
 	int char_id;
 };
 
+// @see guild_skill_packet_data
 struct guild_skill {
 	int id,lv;
 };
@@ -969,6 +970,7 @@ struct guild {
 	struct hplugin_data_store *hdata;                     ///< HPM Plugin Data Store
 };
 
+// @see guild_castle_packet_data
 struct guild_castle {
 	int castle_id;
 	int mapindex;

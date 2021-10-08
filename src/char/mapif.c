@@ -1376,18 +1376,47 @@ static void mapif_guild_master_changed(struct guild *g, int aid, int cid)
 static int mapif_guild_castle_dataload(struct socket_data *session, const int *castle_ids, int num)
 {
 	struct guild_castle *gc = NULL;
-	int len = 4 + num * sizeof(*gc);
+	int len = 4 + num * sizeof(struct guild_castle_packet_data);
 	int i;
 
 	nullpo_ret(castle_ids);
 	WFIFOHEAD(session, len, true);
 	WFIFOW(session, 0) = 0x3840;
 	WFIFOW(session, 2) = len;
+	mutex->lock(inter_guild->castle_db_mutex);
+	size_t pos = 4;
 	for (i = 0; i < num; i++) {
 		gc = inter_guild->castle_fromsql(*(castle_ids++));
-		// TODO/FIXME: Copy of a padded struct
-		memcpy(WFIFOP(session, 4 + i * sizeof(*gc)), gc, sizeof(*gc));
+
+		pos += sizeof((WFIFOL(session, pos) = gc->castle_id));
+		pos += sizeof((WFIFOL(session, pos) = gc->mapindex));
+		memcpy(WFIFOP(session, pos), gc->castle_name,
+			SIZEOF_MEMBER(struct guild_castle_packet_data, castle_name));
+		pos += SIZEOF_MEMBER(struct guild_castle_packet_data, castle_name);
+		memcpy(WFIFOP(session, pos), gc->castle_name,
+			SIZEOF_MEMBER(struct guild_castle_packet_data, castle_event));
+		pos += SIZEOF_MEMBER(struct guild_castle_packet_data, castle_event);
+		pos += sizeof((WFIFOL(session, pos) = gc->siege_type));
+		pos += sizeof((WFIFOB(session, pos) = gc->enable_client_warp));
+		pos += sizeof((WFIFOL(session, pos) = gc->client_warp.x));
+		pos += sizeof((WFIFOL(session, pos) = gc->client_warp.y));
+		pos += sizeof((WFIFOL(session, pos) = gc->client_warp.zeny));
+		pos += sizeof((WFIFOL(session, pos) = gc->client_warp.zeny_siege));
+		pos += sizeof((WFIFOL(session, pos) = gc->guild_id));
+		pos += sizeof((WFIFOL(session, pos) = gc->economy));
+		pos += sizeof((WFIFOL(session, pos) = gc->defense));
+		pos += sizeof((WFIFOL(session, pos) = gc->triggerE));
+		pos += sizeof((WFIFOL(session, pos) = gc->triggerD));
+		pos += sizeof((WFIFOL(session, pos) = gc->nextTime));
+		pos += sizeof((WFIFOL(session, pos) = gc->payTime));
+		pos += sizeof((WFIFOL(session, pos) = gc->createTime));
+		pos += sizeof((WFIFOL(session, pos) = gc->visibleC));
+		for(int j = 0; j < MAX_GUARDIANS; j++) {
+			pos += sizeof((WFIFOB(session, pos) = gc->guardian[j].visible));
+			pos += sizeof((WFIFOL(session, pos) = gc->guardian[j].id));
+		}
 	}
+	mutex->unlock(inter_guild->castle_db_mutex);
 	WFIFOSET(session, len);
 	return 0;
 }
@@ -1398,7 +1427,6 @@ static int mapif_guild_castle_dataload(struct socket_data *session, const int *c
  **/
 static void mapif_parse_CreateGuild(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
-	struct guild *g;
 	int master_account_id = RFIFOL(act, 26);
 	struct guild_member m = {
 			.account_id = RFIFOL(act, 26),
@@ -1416,13 +1444,10 @@ static void mapif_parse_CreateGuild(struct s_receive_action_data *act, struct mm
 			.modified   = RFIFOB(act, 86),
 		};
 	safestrncpy(m.name, RFIFOP(act, 62), sizeof(m.name));
-	g = inter_guild->create(RFIFOP(act, 2), &m);
+	char name[NAME_LENGTH];
+	safestrncpy(m.name, RFIFOP(act, 2), sizeof(name));
 
-	// Report to client
-	mapif->guild_created(act->session, master_account_id,g);
-	if (g != NULL) {
-		mapif->guild_info(server, g, true);
-	}
+	inter_guild->create(name, &m, server);
 }
 
 /**
@@ -1432,6 +1457,7 @@ static void mapif_parse_CreateGuild(struct s_receive_action_data *act, struct mm
 static void mapif_parse_GuildInfo(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	//We use this because on start-up the info of castle-owned guilds is required. [Skotlex]
+	mutex->lock(inter_guild->guild_db_mutex);
 	struct guild * g = inter_guild->fromsql(RFIFOL(act, 2));
 	if(g != NULL) {
 		if(!inter_guild->calcinfo(g))
@@ -1440,6 +1466,7 @@ static void mapif_parse_GuildInfo(struct s_receive_action_data *act, struct mmo_
 		// Failed to load info
 		mapif->guild_info(server, &(struct guild){.guild_id = RFIFOL(act, 2)}, false);
 	}
+	mutex->unlock(inter_guild->guild_db_mutex);
 }
 
 /**
@@ -1517,10 +1544,11 @@ static void mapif_parse_GuildBasicInfoChange(struct s_receive_action_data *act, 
 {
 	int field_length = RFIFOW(act,2) - (sizeof(struct PACKET_ZW_GUILD_INFO_UPDATE) - sizeof(intptr));
 	Assert(field_length > 0 && "Malformed PACKET_ZW_GUILD_INFO_UPDATE");
-	inter_guild->update_basic_info(RFIFOL(act, 4), RFIFOW(act, 8),
-		RFIFOP(act, 10), field_length);
-	// Information is already sent in mapif->guild_info
-	//mapif->guild_basicinfochanged(guild_id,type,data,len);
+
+	int guild_id = RFIFOL(act, 4);
+	int16 type = RFIFOW(act, 8);
+	inter_guild->update_basic_info(guild_id, type, RFIFOP(act, 10), field_length);
+	mapif->guild_basicinfochanged(guild_id,type, RFIFOP(act, 10), field_length);
 }
 
 /**

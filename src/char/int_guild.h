@@ -44,19 +44,41 @@ enum guild_save_types {
  * inter_guild interface
  **/
 struct inter_guild_interface {
-	struct DBMap *guild_db; // int guild_id -> struct guild*
+	/**
+	 * Guild cache
+	 * Cached guild information loaded by inter_guild->fromsql, only guilds with
+	 * online members are kept in cache, otherwise they're marked for deletion
+	 * (@see inter_guild_CharOffline and inter_guild_CharOnline).
+	 * The cache is saved periodically via inter_guild_save_timer.
+	 *
+	 * int guild_id -> struct guild*
+	 **/
+	struct DBMap *guild_db;
+	struct mutex_data *guild_db_mutex;
+
+	/**
+	 * Castle cache
+	 * Cached castle information, all castles are loaded when map-server requests
+	 * the first castle information in WZ_GUILD_CASTLE_LOAD and every time any
+	 * information is updated it's saved.
+	 *
+	 * int castle_id -> struct guild_castle*
+	 **/
 	struct DBMap *castle_db;
+	struct mutex_data *castle_db_mutex;
+
 	unsigned int exp[MAX_GUILDLEVEL];
 
 	int (*save_timer) (struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data);
-	int (*removemember_tosql) (int account_id, int char_id);
+	void (*removemember_tosql) (int account_id, int char_id, bool update_guild_member_db);
 	bool (*tosql) (struct guild *g, int flag);
 	struct guild* (*fromsql) (int guild_id);
-	int (*castle_tosql) (struct guild_castle *gc);
+	void (*castle_tosql) (struct guild_castle *gc);
 	struct guild_castle* (*castle_fromsql) (int castle_id);
 	bool (*exp_parse_row) (char* split[], int column, int current);
-	int (*CharOnline) (int char_id, int guild_id);
-	int (*CharOffline) (int char_id, int guild_id);
+	int (*find) (int char_id);
+	bool (*CharOnline) (int char_id, int guild_id);
+	bool (*CharOffline) (int char_id, int guild_id);
 	int (*sql_init) (void);
 	int (*db_final) (const struct DBKey_s *key, struct DBData *data, va_list args);
 	void (*sql_final) (void);
@@ -65,14 +87,16 @@ struct inter_guild_interface {
 	unsigned int (*nextexp) (int level);
 	int (*checkskill) (struct guild *g, int id);
 	int (*calcinfo) (struct guild *g);
-	int (*sex_changed) (int guild_id, int account_id, int char_id, short gender);
+	bool (*sex_changed) (int guild_id, int account_id, int char_id, short gender);
 	bool (*charname_changed) (int guild_id, int char_id, const char *name);
 
-	struct guild *(*create) (const char *name, const struct guild_member *master);
-	bool (*add_member) (int guild_id, const struct guild_member *member, struct mmo_map_server *server);
-	bool (*leave) (int guild_id, int account_id, int char_id, int flag, const char *mes, struct mmo_map_server *server);
+	bool (*create) (const char *name, const struct guild_member *master, struct mmo_map_server *server);
+	void (*add_member) (int guild_id, const struct guild_member *member, struct mmo_map_server *server);
+	void (*leave) (int guild_id, int account_id, int char_id, int flag, const char *mes, struct mmo_map_server *server);
 	bool (*update_member_info_short) (int guild_id, int account_id, int char_id, int online, int lv, int class);
 	bool (*update_member_info) (int guild_id, int account_id, int char_id, enum guild_member_info type, const char *data, int len);
+	void (*disband_tosql) (int guild_id);
+	void (*break_) (int guild_id);
 	bool (*disband) (int guild_id);
 	bool (*update_basic_info) (int guild_id, enum guild_basic_info type, const void *data, int len);
 	bool (*update_position) (int guild_id, int idx, const struct guild_position *p);
