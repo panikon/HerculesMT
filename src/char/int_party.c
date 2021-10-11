@@ -36,6 +36,7 @@
 #include "common/sql.h"
 #include "common/strlib.h"
 #include "common/rwlock.h"
+#include "common/mutex.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,7 +49,7 @@ struct inter_party_interface *inter_party;
  *
  * @param p The party.
  * @return 0 on failure, 1 on success.
- *
+ * @mutex inter_party->mutex_db
  **/
 static int inter_party_check_lv(struct party_data *p)
 {
@@ -87,6 +88,7 @@ static int inter_party_check_lv(struct party_data *p)
  * @return The child's char ID on success, otherwise 0.
  *
  * Acquires char_db_lock
+ * @mutex inter_party->mutex_db
  **/
 static int inter_party_is_family_party(struct party_data *p)
 {
@@ -160,7 +162,7 @@ static int inter_party_is_family_party(struct party_data *p)
  * Calculates the state of a party.
  *
  * @param p The party.
- *
+ * @mutex inter_party->db_mutex
  **/
 static void inter_party_calc_state(struct party_data *p)
 {
@@ -183,14 +185,18 @@ static void inter_party_calc_state(struct party_data *p)
 	inter_party->check_lv(p);
 }
 
-// Save party to mysql
+/**
+ * Saves party to database
+ *
+ * @mutex inter_party->mutex_db
+ **/
 static int inter_party_tosql(struct party *p, int flag, int index)
 {
 	// 'party' ('party_id','name','exp','item','leader_id','leader_char')
 	char esc_name[NAME_LENGTH*2+1];// escaped party name
 	int party_id;
 
-	if( p == NULL || p->party_id == 0 )
+	if(p == NULL || p->party_id == 0)
 		return 0;
 	Assert_ret(index >= 0 && index < MAX_PARTY);
 	party_id = p->party_id;
@@ -265,7 +271,7 @@ static int inter_party_tosql(struct party *p, int flag, int index)
  *
  * @param party_id The party ID.
  * @return 0 on failure, 1 on success.
- *
+ * @mutex inter_party->db_mutex
  **/
 static int inter_party_del_nonexistent_party(int party_id)
 {
@@ -291,7 +297,12 @@ static int inter_party_del_nonexistent_party(int party_id)
 	return 1;
 }
 
-// Read party from mysql
+/**
+ * Loads party from database or from cache if available
+ *
+ * @return party_data
+ * @mutex inter_party->db_mutex
+ **/
 static struct party_data *inter_party_fromsql(int party_id)
 {
 	int leader_id = 0;
@@ -305,25 +316,31 @@ static struct party_data *inter_party_fromsql(int party_id)
 #ifdef NOISY
 	ShowInfo("Load party request ("CL_BOLD"%d"CL_RESET")\n", party_id);
 #endif
-	if( party_id <= 0 )
+	if(party_id <= 0)
 		return NULL;
 
 	//Load from memory
-	p = (struct party_data*)idb_get(inter_party->db, party_id);
-	if( p != NULL )
+	p = idb_get(inter_party->db, party_id);
+	if(p != NULL)
 		return p;
 
-	p = inter_party->pt;
-	memset(p, 0, sizeof(struct party_data));
+	CREATE(p, struct party_data, 1);
 
-	if( SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT `party_id`, `name`,`exp`,`item`, `leader_id`, `leader_char` FROM `%s` WHERE `party_id`='%d'", party_db, party_id) )
-	{
+	if(SQL_ERROR == SQL->Query(inter->sql_handle,
+	                           "SELECT `party_id`, `name`,`exp`,`item`, "
+	                           "`leader_id`, `leader_char` "
+	                           "FROM `%s` WHERE `party_id`='%d'",
+	                           party_db, party_id)
+	) {
+		aFree(p);
 		Sql_ShowDebug(inter->sql_handle);
 		return NULL;
 	}
 
-	if( SQL_SUCCESS != SQL->NextRow(inter->sql_handle) )
+	if(SQL_SUCCESS != SQL->NextRow(inter->sql_handle)) {
+		aFree(p);
 		return NULL;
+	}
 
 	p->party.party_id = party_id;
 	SQL->GetData(inter->sql_handle, 1, &data, &len); memcpy(p->party.name, data, min(len, NAME_LENGTH));
@@ -334,8 +351,13 @@ static struct party_data *inter_party_fromsql(int party_id)
 	SQL->FreeResult(inter->sql_handle);
 
 	// Load members
-	if( SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT `account_id`,`char_id`,`name`,`base_level`,`last_map`,`online`,`class` FROM `%s` WHERE `party_id`='%d'", char_db, party_id) )
-	{
+	if(SQL_ERROR == SQL->Query(inter->sql_handle,
+	                           "SELECT `account_id`,`char_id`,`name`,"
+	                           "`base_level`,`last_map`,`online`,`class` "
+	                           "FROM `%s` WHERE `party_id`='%d'",
+	                           char_db, party_id)
+	) {
+		aFree(p);
 		Sql_ShowDebug(inter->sql_handle);
 		return NULL;
 	}
@@ -355,10 +377,8 @@ static struct party_data *inter_party_fromsql(int party_id)
 
 	if (chr->show_save_log)
 		ShowInfo("Party loaded (%d - %s).\n", party_id, p->party.name);
-	//Add party to memory.
-	CREATE(p, struct party_data, 1);
-	memcpy(p, inter_party->pt, sizeof(struct party_data));
-	//init state
+
+	// Add party to memory and init state
 	inter_party->calc_state(p);
 	idb_put(inter_party->db, party_id, p);
 	return p;
@@ -366,13 +386,9 @@ static struct party_data *inter_party_fromsql(int party_id)
 
 static int inter_party_sql_init(void)
 {
-	//memory alloc
 	inter_party->db = idb_alloc(DB_OPT_RELEASE_DATA);
-	inter_party->pt = (struct party_data*)aCalloc(sizeof(struct party_data), 1);
-	if (!inter_party->pt) {
-		ShowFatalError("inter_party->sql_init: Out of Memory!\n");
+	if(!(inter_party->db_mutex = mutex->create()))
 		exit(EXIT_FAILURE);
-	}
 
 #if 0 // Enable if you want to do a party_db cleanup (remove parties with no members) on startup.[Skotlex]
 	ShowStatus("cleaning party table...\n");
@@ -386,19 +402,28 @@ static int inter_party_sql_init(void)
 static void inter_party_sql_final(void)
 {
 	inter_party->db->destroy(inter_party->db, NULL);
-	aFree(inter_party->pt);
+	mutex->destroy(inter_party->db_mutex);
 	return;
 }
 
-// Search for the party according to its name
-static struct party_data *inter_party_search_partyname(const char *const str)
+/**
+ * Search for the party according to its name
+ *
+ * @param esc_name Normalized and escaped name (can be NULL)
+ * @mutex inter_party->db_mutex
+ **/
+static struct party_data *inter_party_search_partyname(const char *const str, const char *esc)
 {
-	char esc_name[NAME_LENGTH*2+1];
+	char esc_name_[NAME_LENGTH*2+1];
 	char* data;
 	struct party_data* p = NULL;
 
-	SQL->EscapeStringLen(inter->sql_handle, esc_name, str, safestrnlen(str, NAME_LENGTH));
-	if( SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT `party_id` FROM `%s` WHERE `name`='%s'", party_db, esc_name) )
+	if(!esc) {
+		SQL->EscapeStringLen(inter->sql_handle, esc_name_, str, safestrnlen(str, NAME_LENGTH));
+		esc = esc_name_;
+	}
+		
+	if( SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT `party_id` FROM `%s` WHERE `name`='%s'", party_db, esc) )
 		Sql_ShowDebug(inter->sql_handle);
 	else if( SQL_SUCCESS == SQL->NextRow(inter->sql_handle) ) {
 		SQL->GetData(inter->sql_handle, 0, &data, NULL);
@@ -415,6 +440,7 @@ static struct party_data *inter_party_search_partyname(const char *const str)
  * @param p The party.
  * @return 1 if party can share EXP, otherwise 0.
  *
+ * @mutex inter_party->db_mutex
  **/
 static int inter_party_check_exp_share(struct party_data *const p)
 {
@@ -423,54 +449,53 @@ static int inter_party_check_exp_share(struct party_data *const p)
 	return (p->party.count < 2 || p->family != 0 || p->max_lv - p->min_lv <= party_share_level);
 }
 
-// Is there any member in the party?
-static int inter_party_check_empty(struct party_data *p)
+/**
+ * Is there any member in the party?
+ *
+ * @return 0 Success
+ * @mutex inter_party->db_mutex
+ **/
+static bool inter_party_check_empty(struct party_data *p)
 {
 	int i;
-	if (p==NULL||p->party.party_id==0) return 1;
-	for(i=0;i<MAX_PARTY && !p->party.member[i].account_id;i++);
-	if (i < MAX_PARTY) return 0;
+	if(p == NULL||p->party.party_id == 0)
+		return 1;
+	for(i = 0; i < MAX_PARTY && !p->party.member[i].account_id; i++);
+	if(i < MAX_PARTY)
+		return 0;
 	// If there is no member, then break the party
 	mapif->party_broken(p->party.party_id,0);
 	inter_party->tosql(&p->party, PS_BREAK, 0);
 	return 1;
 }
 
-// Create Party
+/**
+ * Creates a Party
+ *
+ * @mutex inter_party->db_mutex
+ **/
 static struct party_data *inter_party_create(const char *name, int item, int item2, const struct party_member *leader)
 {
 	struct party_data *p;
-	int i;
+	char esc_name[NAME_LENGTH*2+1];
+
 	nullpo_ret(name);
 	nullpo_ret(leader);
-
-	if (!*name || inter_party->search_partyname(name) != NULL) {
+	if(!*name)
 		return NULL;
-	}
-	// Check Authorized letters/symbols in the name of the character
-	if (char_name_option == 1) { // only letters/symbols in char_name_letters are authorized
-		for (i = 0; i < NAME_LENGTH && name[i]; i++)
-			if (strchr(char_name_letters, name[i]) == NULL) {
-				if (name[i] == '"') { /* client-special-char */
-					char *newname = aStrndup(name, NAME_LENGTH-1);
-					normalize_name(newname,"\"");
-					trim(newname);
-					p = inter_party->create(newname, item, item2, leader);
-					aFree(newname);
-					return p;
-				}
-				return NULL;
-			}
-	} else if (char_name_option == 2) { // letters/symbols in char_name_letters are forbidden
-		for (i = 0; i < NAME_LENGTH && name[i]; i++)
-			if (strchr(char_name_letters, name[i]) != NULL) {
-				return NULL;
-			}
-	}
 
-	p = (struct party_data*)aCalloc(1, sizeof(struct party_data));
+	if(chr->check_symbols(name))
+		return NULL; // Invalid letters/symbols in party name
+	chr->escape_normalize_name(name, esc_name);
+	normalize_name(esc_name, "\""); // client-special-char
+	trim(esc_name);
 
-	safestrncpy(p->party.name, name, NAME_LENGTH);
+	if(inter_party->search_partyname(name, esc_name) != NULL)
+		return NULL;
+
+	p = aCalloc(1, sizeof(struct party_data));
+
+	safestrncpy(p->party.name, esc_name, NAME_LENGTH);
 	p->party.exp=0;
 	p->party.item=(item?1:0)|(item2?2:0);
 
@@ -479,7 +504,7 @@ static struct party_data *inter_party_create(const char *name, int item, int ite
 	p->party.member[0].online=1;
 
 	p->party.party_id=-1;//New party.
-	if (!inter_party->tosql(&p->party, PS_CREATE | PS_ADDMEMBER, 0)) {
+	if(!inter_party->tosql(&p->party, PS_CREATE | PS_ADDMEMBER, 0)) {
 		aFree(p);
 		return NULL;
 	}
@@ -498,27 +523,31 @@ static struct party_data *inter_party_create(const char *name, int item, int ite
  * @param member The member to add.
  * @return true on success, otherwise false.
  *
+ * Acquires inter_party->db_mutex
  **/
 static bool inter_party_add_member(int party_id, const struct party_member *member)
 {
 	nullpo_retr(false, member);
 
-	if (party_id < 1) /// Invalid party ID.
+	if(party_id < 1) /// Invalid party ID.
 		return false;
 
+	mutex->lock(inter_party->db_mutex);
 	struct party_data *p = inter_party->fromsql(party_id);
 
-	if (p == NULL) { /// Party does not exist.
+	if(p == NULL) { /// Party does not exist.
 		inter_party->del_nonexistent_party(party_id);
+		mutex->unlock(inter_party->db_mutex);
 		return false;
 	}
 
 	int i;
 
 	ARR_FIND(0, MAX_PARTY, i, p->party.member[i].account_id == 0);
-
-	if (i == MAX_PARTY) /// Party is full.
+	if(i == MAX_PARTY) { /// Party is full.
+		mutex->unlock(inter_party->db_mutex);
 		return false;
+	}
 
 	memcpy(&p->party.member[i], member, sizeof(struct party_member));
 	p->party.member[i].leader = 0;
@@ -526,18 +555,27 @@ static bool inter_party_add_member(int party_id, const struct party_member *memb
 	mapif->party_info(NULL, p->party.party_id, 0, &p->party);
 	inter_party->tosql(&p->party, PS_ADDMEMBER, i);
 
+	mutex->unlock(inter_party->db_mutex);
 	return true;
 }
 
-//Party setting change request
+/**
+ * Party setting change request
+ *
+ * Acquires inter_party->db_mutex
+ **/
 static bool inter_party_change_option(int party_id, int account_id, int exp, int item, struct socket_data *session)
 {
 	struct party_data *p;
 	int flag = 0;
-	p = inter_party->fromsql(party_id);
 
-	if(!p)
+	mutex->lock(inter_party->db_mutex);
+	p = inter_party->fromsql(party_id);
+	if(!p) {
+		inter_party->del_nonexistent_party(party_id);
+		mutex->unlock(inter_party->db_mutex);
 		return false;
+	}
 
 	p->party.exp=exp;
 	if( exp && !inter_party->check_exp_share(p) ){
@@ -547,6 +585,8 @@ static bool inter_party_change_option(int party_id, int account_id, int exp, int
 	p->party.item = item&0x3; //Filter out invalid values.
 	mapif->party_optionchanged(session, &p->party, account_id, flag);
 	inter_party->tosql(&p->party, PS_BASIC, 0);
+
+	mutex->unlock(inter_party->db_mutex);
 	return true;
 }
 
@@ -558,25 +598,30 @@ static bool inter_party_change_option(int party_id, int account_id, int exp, int
  * @param char_id The char ID of the leaving character.
  * @return true on success, otherwise false.
  *
+ * Acquires inter_party->db_mutex
  **/
 static bool inter_party_leave(int party_id, int account_id, int char_id)
 {
 	if (party_id < 1) /// Invalid party ID.
 		return false;
 
+	mutex->lock(inter_party->db_mutex);
 	struct party_data *p = inter_party->fromsql(party_id);
 
-	if (p == NULL) { /// Party does not exist.
+	if(p == NULL) { /// Party does not exist.
 		inter_party->del_nonexistent_party(party_id);
+		mutex->unlock(inter_party->db_mutex);
 		return false;
 	}
 
 	int i;
-
 	ARR_FIND(0, MAX_PARTY, i, p->party.member[i].account_id == account_id && p->party.member[i].char_id == char_id);
 
-	if (i == MAX_PARTY) /// Character not found in party.
+	if(i == MAX_PARTY) { /// Character not found in party.
+		inter_party->remove_orphaned_member(char_id, party_id);
+		mutex->unlock(inter_party->db_mutex);
 		return false;
+	}
 
 	mapif->party_withdraw(party_id, account_id, char_id);
 
@@ -590,6 +635,7 @@ static bool inter_party_leave(int party_id, int account_id, int char_id)
 	if (inter_party->check_empty(p) == 0)
 		mapif->party_info(NULL, p->party.party_id, 0, &p->party);
 
+	mutex->unlock(inter_party->db_mutex);
 	return true;
 }
 
@@ -604,25 +650,31 @@ static bool inter_party_leave(int party_id, int account_id, int char_id)
  * @param lv The character's level.
  * @return true on success, otherwise false.
  *
+ * Acquires inter_party->db_mutex
  **/
 static bool inter_party_change_map(int party_id, int account_id, int char_id, unsigned short map, int online, int lv)
 {
-	if (party_id < 1) /// Invalid party ID.
+	if(party_id < 1) /// Invalid party ID.
 		return false;
 
+
+	mutex->lock(inter_party->db_mutex);
 	struct party_data *p = inter_party->fromsql(party_id);
 
-	if (p == NULL) { /// Party does not exist.
+	if(p == NULL) { /// Party does not exist.
 		inter_party->del_nonexistent_party(party_id);
+		mutex->unlock(inter_party->db_mutex);
 		return false;
 	}
 
 	int i;
 
 	ARR_FIND(0, MAX_PARTY, i, p->party.member[i].account_id == account_id && p->party.member[i].char_id == char_id);
-
-	if (i == MAX_PARTY) /// Character not found in party.
+	if(i == MAX_PARTY) { /// Character not found in party.
+		inter_party->remove_orphaned_member(char_id, party_id);
+		mutex->unlock(inter_party->db_mutex);
 		return false;
+	}
 
 	if (p->party.member[i].online != online)
 		p->party.member[i].online = online;
@@ -635,43 +687,125 @@ static bool inter_party_change_map(int party_id, int account_id, int char_id, un
 
 	inter_party->calc_state(p); /// Count online/offline members and check family state and even share range.
 	mapif->party_membermoved(&p->party, i); /// Send online/offline update.
+	mutex->unlock(inter_party->db_mutex);
 
 	return true;
 }
 
-//Request party dissolution
+/**
+ * Request party dissolution
+ *
+ * Acquires inter_party->db_mutex
+ **/
 static bool inter_party_disband(int party_id)
 {
 	struct party_data *p;
 
+	mutex->lock(inter_party->db_mutex);
 	p = inter_party->fromsql(party_id);
-
-	if(!p)
+	if(!p) {
+		inter_party->del_nonexistent_party(party_id);
+		mutex->unlock(inter_party->db_mutex);
 		return false;
+	}
 	inter_party->tosql(&p->party,PS_BREAK,0);
 	mapif->party_broken(party_id, 1);
-	return 0;
+	mutex->unlock(inter_party->db_mutex);
+	return true;
 }
 
+/**
+ * Changes party leader
+ *
+ * @param account_id AID of new leader
+ * @param char_id    CID of new leader
+ * Acquires inter_party->db_mutex
+ **/
 static bool inter_party_change_leader(int party_id, int account_id, int char_id)
 {
 	struct party_data *p;
 	int i;
 
+	mutex->lock(inter_party->db_mutex);
 	p = inter_party->fromsql(party_id);
 
-	if(!p)
+	if(!p) {
+		inter_party->del_nonexistent_party(party_id);
+		mutex->unlock(inter_party->db_mutex);
 		return false;
-
-	for (i = 0; i < MAX_PARTY; i++) {
-		if(p->party.member[i].leader)
-			p->party.member[i].leader = 0;
-		if(p->party.member[i].account_id == account_id && p->party.member[i].char_id == char_id) {
-			p->party.member[i].leader = 1;
-			inter_party->tosql(&p->party,PS_LEADER, i);
-		}
 	}
+
+	int leader_idx = -1;
+	int member_idx = -1;
+	for(i = 0; i < MAX_PARTY; i++) {
+		if(p->party.member[i].leader)
+			leader_idx = i;
+		if(p->party.member[i].account_id == account_id
+		&& p->party.member[i].char_id == char_id)
+			member_idx = i;
+	}
+	if(leader_idx == -1) {
+		ShowError("inter_party_change_leader: Party %d with no leader! Deleting...\n");
+		inter_party->del_nonexistent_party(party_id);
+		mutex->unlock(inter_party->db_mutex);
+		return false;
+	}
+	if(member_idx == -1) {
+		ShowError("inter_party_change_leader: Character (CID %d) outside party (PID %d)\n",
+			char_id, party_id);
+		inter_party->remove_orphaned_member(char_id, party_id);
+		mutex->unlock(inter_party->db_mutex);
+	}
+
+	// Update cache
+	p->party.member[leader_idx].leader = 0;
+	p->party.member[member_idx].leader = 1;
+
+	inter_party->tosql(&p->party,PS_LEADER, member_idx);
 	return true;
+}
+
+/**
+ * Sets party_id to 0 of a given char_id
+ *
+ * This is used for players that are not in party_db but have party_ids
+ **/
+static void inter_party_remove_orphaned_member(int char_id, int party_id)
+{
+	ShowDebug("inter_party_removed_orphaned_member: Removing orphaned member (CID %d, PID %d)\n",
+		char_id, party_id);
+	if(SQL_ERROR == SQL->Query(inter->sql_handle,
+	                           "UPDATE `%s` SET party_id = '0' WHERE char_id='%d' AND party_id='%d'",
+	                           char_db, char_id, party_id)
+	)
+		Sql_ShowDebug(inter->sql_handle);
+}
+
+/**
+ * Searches in database for the party_id of given character
+ *
+ * @return party id
+ * @retval 0 Couldn't find party
+ **/
+static int inter_party_find(int char_id)
+{
+	char *data;
+
+	if(SQL_ERROR == SQL->Query(inter->sql_handle,
+	                           "SELECT party_id FROM `%s` WHERE char_id='%d'",
+	                           char_db, char_id)
+	) {
+		Sql_ShowDebug(inter->sql_handle);
+		return 0;
+	}
+
+	if(SQL_SUCCESS != SQL->NextRow(inter->sql_handle))
+		return 0;
+
+	SQL->GetData(inter->sql_handle, 0, &data, NULL);
+	int party_id = atoi(data);
+	SQL->FreeResult(inter->sql_handle);
+	return party_id;
 }
 
 /**
@@ -680,46 +814,35 @@ static bool inter_party_change_leader(int party_id, int account_id, int char_id)
  * @param char_id The character's char ID.
  * @param party_id The ID of the party.
  * @return 1 on success, otherwise 0.
- *
+ * Acquires inter_party->db_mutex
  **/
 static int inter_party_CharOnline(int char_id, int party_id)
 {
-	if (party_id == INDEX_NOT_FOUND) { /// Get party_id from the database.
-		char* data;
+	if(party_id == INDEX_NOT_FOUND) /// Get party_id from the database.
+		party_id = inter_party->find(char_id);
 
-		if (SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT party_id FROM `%s` WHERE char_id='%d'", char_db, char_id)) {
-			Sql_ShowDebug(inter->sql_handle);
-			return 0;
-		}
-
-		if (SQL_SUCCESS != SQL->NextRow(inter->sql_handle))
-			return 0;
-
-		SQL->GetData(inter->sql_handle, 0, &data, NULL);
-		party_id = atoi(data);
-		SQL->FreeResult(inter->sql_handle);
-	}
-
-	if (party_id == 0) /// Character isn't member of a party.
+	if(party_id == 0) /// Character isn't member of a party.
 		return 0;
 
+	mutex->lock(inter_party->db_mutex);
 	struct party_data *p = inter_party->fromsql(party_id);
 
-	if (p == NULL) { /// Party does not exist.
+	if(p == NULL) { /// Party does not exist.
 		inter_party->del_nonexistent_party(party_id);
+		mutex->unlock(inter_party->db_mutex);
 		return 0;
 	}
 
 	int i;
-
 	ARR_FIND(0, MAX_PARTY, i, p->party.member[i].char_id == char_id);
-
-	if (i == MAX_PARTY) /// Character not found in party.
+	if(i == MAX_PARTY) { /// Character not found in party.
+		inter_party->remove_orphaned_member(char_id, party_id);
 		return 0;
+	}
 
 	p->party.member[i].online = 1; /// Set member online.
 	inter_party->calc_state(p); /// Count online/offline members and check family state and even share range.
-
+	mutex->unlock(inter_party->db_mutex);
 	return 1;
 }
 
@@ -729,49 +852,39 @@ static int inter_party_CharOnline(int char_id, int party_id)
  * @param char_id The character's char ID.
  * @param party_id The ID of the party.
  * @return 1 on success, otherwise 0.
- *
+ * Acquires inter_party->db_mutex
  **/
 static int inter_party_CharOffline(int char_id, int party_id)
 {
-	if (party_id == INDEX_NOT_FOUND) { /// Get party_id from the database.
-		char* data;
+	if(party_id == INDEX_NOT_FOUND) /// Get party_id from the database.
+		party_id = inter_party->find(char_id);
 
-		if (SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT party_id FROM `%s` WHERE char_id='%d'", char_db, char_id)) {
-			Sql_ShowDebug(inter->sql_handle);
-			return 0;
-		}
-
-		if (SQL_SUCCESS != SQL->NextRow(inter->sql_handle))
-			return 0;
-
-		SQL->GetData(inter->sql_handle, 0, &data, NULL);
-		party_id = atoi(data);
-		SQL->FreeResult(inter->sql_handle);
-	}
-
-	if (party_id == 0) /// Character isn't member of a party.
+	if(party_id == 0) /// Character isn't member of a party.
 		return 0;
 
+	mutex->lock(inter_party->db_mutex);
 	struct party_data *p = inter_party->fromsql(party_id);
 
-	if (p == NULL) { /// Party does not exist.
+	if(p == NULL) { /// Party does not exist.
 		inter_party->del_nonexistent_party(party_id);
+		mutex->unlock(inter_party->db_mutex);
 		return 0;
 	}
 
 	int i;
-
 	ARR_FIND(0, MAX_PARTY, i, p->party.member[i].char_id == char_id);
-
-	if (i == MAX_PARTY) /// Character not found in party.
+	if(i == MAX_PARTY) { /// Character not found in party.
+		inter_party->remove_orphaned_member(char_id, party_id);
 		return 0;
+	}
 
 	p->party.member[i].online = 0; /// Set member offline.
 	inter_party->calc_state(p); /// Count online/offline members and check family state and even share range.
 
-	if (p->party.count == 0) /// Parties don't have any data that needs be saved at this point... so just remove it from memory.
+	if(p->party.count == 0) /// Parties don't have any data that needs be saved at this point... so just remove it from memory.
 		idb_remove(inter_party->db, party_id);
 
+	mutex->unlock(inter_party->db_mutex);
 	return 1;
 }
 
@@ -779,11 +892,13 @@ void inter_party_defaults(void)
 {
 	inter_party = &inter_party_s;
 
-	inter_party->pt = NULL;
 	inter_party->db = NULL;
+	inter_party->db_mutex = NULL;
 
 	inter_party->sql_init = inter_party_sql_init;
 	inter_party->sql_final = inter_party_sql_final;
+	inter_party->remove_orphaned_member = inter_party_remove_orphaned_member;
+	inter_party->find = inter_party_find;
 	inter_party->check_lv = inter_party_check_lv;
 	inter_party->is_family_party = inter_party_is_family_party;
 	inter_party->calc_state = inter_party_calc_state;

@@ -49,8 +49,18 @@ struct party_data {
  * inter_party interface
  **/
 struct inter_party_interface {
-	struct party_data *pt;
-	struct DBMap *db;  // int party_id -> struct party_data*
+	/**
+	 * Party cache
+	 * All currently loaded parties, when no members are online the party is
+	 * removed from the database. @see CharOffline and CharOnline
+	 *
+	 * int party_id -> struct party_data*
+	 **/
+	struct DBMap *db;
+	struct mutex_data *db_mutex;
+
+	void (*remove_orphaned_member) (int char_id, int party_id);
+	int (*find) (int char_id);
 	int (*check_lv) (struct party_data *p);
 	int (*is_family_party) (struct party_data *p);
 	void (*calc_state) (struct party_data *p);
@@ -59,9 +69,9 @@ struct inter_party_interface {
 	struct party_data* (*fromsql) (int party_id);
 	int (*sql_init) (void);
 	void (*sql_final) (void);
-	struct party_data* (*search_partyname) (const char *str);
+	struct party_data* (*search_partyname) (const char *str, const char *esc);
 	int (*check_exp_share) (struct party_data *p);
-	int (*check_empty) (struct party_data *p);
+	bool (*check_empty) (struct party_data *p);
 	bool (*leave) (int party_id,int account_id, int char_id);
 	int (*CharOnline) (int char_id, int party_id);
 	int (*CharOffline) (int char_id, int party_id);

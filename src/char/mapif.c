@@ -2369,11 +2369,13 @@ static void mapif_parse_CreateParty(struct s_receive_action_data *act, struct mm
 		offsetof(struct PACKET_ZW_PARTY_CREATE, leader),
 		&leader);
 
+	mutex->lock(inter_party->db_mutex);
 	p = inter_party->create(RFIFOP(act, 2),
 		RFIFOB(act, 26), RFIFOB(act, 27),
 		&leader);
 
 	if(p == NULL) {
+		mutex->unlock(inter_party->db_mutex);
 		mapif->party_created(act->session,
 			leader.account_id,
 			leader.char_id, NULL);
@@ -2382,6 +2384,7 @@ static void mapif_parse_CreateParty(struct s_receive_action_data *act, struct mm
 
 	mapif->party_info(act->session, p->party.party_id, 0, &p->party);
 	mapif->party_created(act->session, leader.account_id, leader.char_id, &p->party);
+	mutex->unlock(inter_party->db_mutex);
 }
 
 /**
@@ -2393,8 +2396,10 @@ static void mapif_parse_PartyInfo(struct s_receive_action_data *act, struct mmo_
 	struct party_data *p;
 	int party_id = RFIFOL(act, 2);
 	int char_id  = RFIFOL(act, 6);
+	mutex->lock(inter_party->db_mutex);
 	p = inter_party->fromsql(party_id);
 	mapif->party_info(act->session, party_id, char_id, &p->party);
+	mutex->unlock(inter_party->db_mutex);
 }
 
 /**
