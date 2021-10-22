@@ -54,10 +54,11 @@ static int inter_rodex_fromsql(int char_id, int account_id,
 	int count = 0;
 	struct rodex_message msg = { 0 };
 	struct SqlStmt *stmt;
+	struct Sql *sql_handle = inter->sql_handle_get();
 
 	nullpo_retr(-1, mails);
 
-	stmt = SQL->StmtMalloc(inter->sql_handle);
+	stmt = SQL->StmtMalloc(sql_handle);
 
 	switch (opentype) {
 	case RODEX_OPENTYPE_MAIL:
@@ -144,7 +145,7 @@ static int inter_rodex_fromsql(int char_id, int account_id,
 	{
 		struct item it = { 0 };
 		StringBuf buf;
-		struct SqlStmt *stmt_items = SQL->StmtMalloc(inter->sql_handle);
+		struct SqlStmt *stmt_items = SQL->StmtMalloc(sql_handle);
 		int i;
 
 		if (stmt_items == NULL) {
@@ -255,8 +256,9 @@ static bool inter_rodex_hasnew(int char_id, int account_id)
 {
 	int count = 0;
 	char *data;
+	struct Sql *sql_handle = inter->sql_handle_get();
 
-	if (SQL_ERROR == SQL->Query(inter->sql_handle,
+	if (SQL_ERROR == SQL->Query(sql_handle,
 		"SELECT count(*) FROM `%s` WHERE ("
 		"(`expire_date` > '%d' AND (`receiver_id` = '%d' OR `receiver_accountid` = '%d')) OR"
 		"(`sender_id` = '%d' AND `expire_date` <= '%d' AND `send_date` + '%d' > '%d' AND `is_read` = 0)" // is_read is required in this line because of the OR in next condition
@@ -264,16 +266,16 @@ static bool inter_rodex_hasnew(int char_id, int account_id)
 		rodex_db, (int)time(NULL), char_id, account_id,
 		char_id, (int)time(NULL), 2 * RODEX_EXPIRE, (int)time(NULL))
 		) {
-		Sql_ShowDebug(inter->sql_handle);
+		Sql_ShowDebug(sql_handle);
 		return -1;
 	}
 
-	if (SQL_SUCCESS != SQL->NextRow(inter->sql_handle))
+	if (SQL_SUCCESS != SQL->NextRow(sql_handle))
 		return false;
 
-	SQL->GetData(inter->sql_handle, 0, &data, NULL);
+	SQL->GetData(sql_handle, 0, &data, NULL);
 	count = atoi(data);
-	SQL->FreeResult(inter->sql_handle);
+	SQL->FreeResult(sql_handle);
 
 	return count > 0;
 }
@@ -281,8 +283,9 @@ static bool inter_rodex_hasnew(int char_id, int account_id)
 /// Checks player name and retrieves some data
 static bool inter_rodex_checkname(const char *name, int *target_char_id, int *target_class, int *target_level)
 {
-	char esc_name[NAME_LENGTH * 2 + 1];
+	char esc_name[ESC_NAME_LENGTH];
 	bool found = false;
+	struct Sql *sql_handle = inter->sql_handle_get();
 
 	nullpo_retr(false, name);
 	nullpo_retr(false, target_char_id);
@@ -290,19 +293,19 @@ static bool inter_rodex_checkname(const char *name, int *target_char_id, int *ta
 	nullpo_retr(false, target_level);
 
 	// Try to find the Dest Char by Name
-	SQL->EscapeStringLen(inter->sql_handle, esc_name, name, strnlen(name, NAME_LENGTH));
-	if (SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT `char_id`, `class`, `base_level` FROM `%s` WHERE `name` = '%s'", char_db, esc_name)) {
-		Sql_ShowDebug(inter->sql_handle);
+	SQL->EscapeStringLen(sql_handle, esc_name, name, strnlen(name, NAME_LENGTH));
+	if (SQL_ERROR == SQL->Query(sql_handle, "SELECT `char_id`, `class`, `base_level` FROM `%s` WHERE `name` = '%s'", char_db, esc_name)) {
+		Sql_ShowDebug(sql_handle);
 	} else {
-		if (SQL_SUCCESS == SQL->NextRow(inter->sql_handle)) {
+		if (SQL_SUCCESS == SQL->NextRow(sql_handle)) {
 			char *data;
-			SQL->GetData(inter->sql_handle, 0, &data, NULL); *target_char_id = atoi(data);
-			SQL->GetData(inter->sql_handle, 1, &data, NULL); *target_class = atoi(data);
-			SQL->GetData(inter->sql_handle, 2, &data, NULL); *target_level = atoi(data);
+			SQL->GetData(sql_handle, 0, &data, NULL); *target_char_id = atoi(data);
+			SQL->GetData(sql_handle, 1, &data, NULL); *target_class = atoi(data);
+			SQL->GetData(sql_handle, 2, &data, NULL); *target_level = atoi(data);
 			found = true;
 		}
 	}
-	SQL->FreeResult(inter->sql_handle);
+	SQL->FreeResult(sql_handle);
 
 	return found;
 }
@@ -311,29 +314,30 @@ static bool inter_rodex_checkname(const char *name, int *target_char_id, int *ta
 /// Returns the message's ID if successful (or 0 if it fails).
 static int64 inter_rodex_savemessage(struct rodex_message *msg)
 {
-	char sender_name[NAME_LENGTH * 2 + 1];
-	char receiver_name[NAME_LENGTH * 2 + 1];
+	char sender_name[ESC_NAME_LENGTH];
+	char receiver_name[ESC_NAME_LENGTH];
 	char body[RODEX_BODY_LENGTH * 2 + 1];
 	char title[RODEX_TITLE_LENGTH * 2 + 1];
 	int i;
+	struct Sql *sql_handle = inter->sql_handle_get();
 
 	nullpo_retr(false, msg);
 
-	SQL->EscapeStringLen(inter->sql_handle, sender_name, msg->sender_name, strnlen(msg->sender_name, NAME_LENGTH));
-	SQL->EscapeStringLen(inter->sql_handle, receiver_name, msg->receiver_name, strnlen(msg->receiver_name, NAME_LENGTH));
-	SQL->EscapeStringLen(inter->sql_handle, body, msg->body, strnlen(msg->body, RODEX_BODY_LENGTH));
-	SQL->EscapeStringLen(inter->sql_handle, title, msg->title, strnlen(msg->title, RODEX_TITLE_LENGTH));
+	SQL->EscapeStringLen(sql_handle, sender_name, msg->sender_name, strnlen(msg->sender_name, NAME_LENGTH));
+	SQL->EscapeStringLen(sql_handle, receiver_name, msg->receiver_name, strnlen(msg->receiver_name, NAME_LENGTH));
+	SQL->EscapeStringLen(sql_handle, body, msg->body, strnlen(msg->body, RODEX_BODY_LENGTH));
+	SQL->EscapeStringLen(sql_handle, title, msg->title, strnlen(msg->title, RODEX_TITLE_LENGTH));
 
-	if (SQL_ERROR == SQL->Query(inter->sql_handle, "INSERT INTO `%s` (`sender_name`, `sender_id`, `receiver_name`, `receiver_id`, `receiver_accountid`, `title`, `body`,"
+	if (SQL_ERROR == SQL->Query(sql_handle, "INSERT INTO `%s` (`sender_name`, `sender_id`, `receiver_name`, `receiver_id`, `receiver_accountid`, `title`, `body`,"
 		"`zeny`, `type`, `is_read`, `sender_read`, `send_date`, `expire_date`, `weight`) VALUES "
 		"('%s', '%d', '%s', '%d', '%d', '%s', '%s', '%"PRId64"', '%d', '%d', '%d', '%d', '%d', '%d')",
 		rodex_db, sender_name, msg->sender_id, receiver_name, msg->receiver_id, msg->receiver_accountid,
 		title, body, msg->zeny, msg->type, msg->is_read == true ? 1 : 0, msg->sender_read == true ? 1 : 0, msg->send_date, msg->expire_date, msg->weight)) {
-		Sql_ShowDebug(inter->sql_handle);
+		Sql_ShowDebug(sql_handle);
 		return 0;
 	}
 
-	msg->id = (int64)SQL->LastInsertId(inter->sql_handle);
+	msg->id = (int64)SQL->LastInsertId(sql_handle);
 
 	for (i = 0; i < RODEX_MAX_ITEM; ++i) {
 		// Should we use statement here? [KIRIEZ]
@@ -341,7 +345,7 @@ static int64 inter_rodex_savemessage(struct rodex_message *msg)
 		if (it->nameid == 0)
 			continue;
 
-		if (SQL_ERROR == SQL->Query(inter->sql_handle, "INSERT INTO `%s` (`mail_id`, `nameid`, `amount`, `equip`, `identify`,"
+		if (SQL_ERROR == SQL->Query(sql_handle, "INSERT INTO `%s` (`mail_id`, `nameid`, `amount`, `equip`, `identify`,"
 			"`refine`, `attribute`, `card0`, `card1`, `card2`, `card3`, `opt_idx0`, `opt_val0`, `opt_idx1`, `opt_val1`, `opt_idx2`,"
 			"`opt_val2`, `opt_idx3`, `opt_val3`, `opt_idx4`, `opt_val4`,`expire_time`, `bound`, `unique_id`) VALUES "
 			"('%"PRId64"', '%d', '%d', '%u', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%u', '%u', '%"PRIu64"')",
@@ -349,7 +353,7 @@ static int64 inter_rodex_savemessage(struct rodex_message *msg)
 			it->option[0].index, it->option[0].value, it->option[1].index, it->option[1].value, it->option[2].index, it->option[2].value, it->option[3].index,
 			it->option[3].value, it->option[4].index, it->option[4].value, it->expire_time, it->bound, it->unique_id)
 			) {
-			Sql_ShowDebug(inter->sql_handle);
+			Sql_ShowDebug(sql_handle);
 			continue;
 		}
 	}
@@ -359,46 +363,48 @@ static int64 inter_rodex_savemessage(struct rodex_message *msg)
 
 static int64 inter_rodex_getzeny(int64 mail_id)
 {
+	struct Sql *sql_handle = inter->sql_handle_get();
 	Assert_retr(-1, mail_id > 0);
 
-	if (SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT `zeny`, `type` FROM `%s` WHERE `mail_id` = '%"PRId64"'", rodex_db, mail_id)) {
-		Sql_ShowDebug(inter->sql_handle);
+	if (SQL_ERROR == SQL->Query(sql_handle, "SELECT `zeny`, `type` FROM `%s` WHERE `mail_id` = '%"PRId64"'", rodex_db, mail_id)) {
+		Sql_ShowDebug(sql_handle);
 	} else {
-		if (SQL_SUCCESS == SQL->NextRow(inter->sql_handle)) {
+		if (SQL_SUCCESS == SQL->NextRow(sql_handle)) {
 			char *data;
-			SQL->GetData(inter->sql_handle, 0, &data, NULL);
+			SQL->GetData(sql_handle, 0, &data, NULL);
 			int64 zeny = atoi(data);
-			SQL->GetData(inter->sql_handle, 1, &data, NULL);
+			SQL->GetData(sql_handle, 1, &data, NULL);
 			uint8 type = atoi(data);
-			SQL->FreeResult(inter->sql_handle);
+			SQL->FreeResult(sql_handle);
 			if ((type & MAIL_TYPE_ZENY) == 0)
 				return -1;
 			return zeny;
 		}
 	}
-	SQL->FreeResult(inter->sql_handle);
+	SQL->FreeResult(sql_handle);
 
 	return -1;
 }
 
 static int inter_rodex_getitems(int64 mail_id, struct rodex_item *items)
 {
+	struct Sql *sql_handle = inter->sql_handle_get();
 	Assert_retr(-1, mail_id > 0);
 	nullpo_retr(-1, items);
 
-	if (SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT `type` FROM `%s` WHERE `mail_id` = '%"PRId64"'", rodex_db, mail_id)) {
-		Sql_ShowDebug(inter->sql_handle);
+	if (SQL_ERROR == SQL->Query(sql_handle, "SELECT `type` FROM `%s` WHERE `mail_id` = '%"PRId64"'", rodex_db, mail_id)) {
+		Sql_ShowDebug(sql_handle);
 		return -1;
 	} else {
-		if (SQL_SUCCESS == SQL->NextRow(inter->sql_handle)) {
+		if (SQL_SUCCESS == SQL->NextRow(sql_handle)) {
 			char *data;
-			SQL->GetData(inter->sql_handle, 0, &data, NULL);
+			SQL->GetData(sql_handle, 0, &data, NULL);
 			uint8 type = atoi(data);
-			SQL->FreeResult(inter->sql_handle);
+			SQL->FreeResult(sql_handle);
 			if ((type & MAIL_TYPE_ITEM) == 0)
 				return -1;
 		} else {
-			SQL->FreeResult(inter->sql_handle);
+			SQL->FreeResult(sql_handle);
 			return -1;
 		}
 	}
@@ -406,7 +412,7 @@ static int inter_rodex_getitems(int64 mail_id, struct rodex_item *items)
 
 	int itemsCount = 0;
 
-		struct SqlStmt *stmt_items = SQL->StmtMalloc(inter->sql_handle);
+		struct SqlStmt *stmt_items = SQL->StmtMalloc(sql_handle);
 
 		if (stmt_items == NULL) {
 			return -1;
@@ -485,18 +491,19 @@ static bool inter_rodex_updatemail(struct socket_data *session, int account_id, 
 	Assert_retr(false, char_id > 0);
 	Assert_retr(false, mail_id > 0);
 	Assert_retr(false, flag >= 0 && flag <= 4);
+	struct Sql *sql_handle = inter->sql_handle_get();
 
 	switch (flag) {
 	case RODEX_UPDATEMAIL_RECEIVER_READ:
-		if (SQL_ERROR == SQL->Query(inter->sql_handle, "UPDATE `%s` SET `is_read` = 1 WHERE `mail_id` = '%"PRId64"'", rodex_db, mail_id))
-			Sql_ShowDebug(inter->sql_handle);
+		if (SQL_ERROR == SQL->Query(sql_handle, "UPDATE `%s` SET `is_read` = 1 WHERE `mail_id` = '%"PRId64"'", rodex_db, mail_id))
+			Sql_ShowDebug(sql_handle);
 		break;
 
 	case RODEX_UPDATEMAIL_GET_ZENY:
 	{
 		const int64 zeny = inter_rodex->getzeny(mail_id);
-		if (SQL_ERROR == SQL->Query(inter->sql_handle, "UPDATE `%s` SET `zeny` = 0, `type` = `type` & (~2) WHERE `mail_id` = '%"PRId64"'", rodex_db, mail_id)) {
-			Sql_ShowDebug(inter->sql_handle);
+		if (SQL_ERROR == SQL->Query(sql_handle, "UPDATE `%s` SET `zeny` = 0, `type` = `type` & (~2) WHERE `mail_id` = '%"PRId64"'", rodex_db, mail_id)) {
+			Sql_ShowDebug(sql_handle);
 			break;
 		}
 		mapif->rodex_getzenyack(session, char_id, mail_id, opentype, zeny);
@@ -506,21 +513,21 @@ static bool inter_rodex_updatemail(struct socket_data *session, int account_id, 
 	{
 		struct rodex_item items[RODEX_MAX_ITEM];
 		const int count = inter_rodex->getitems(mail_id, &items[0]);
-		if (SQL_ERROR == SQL->Query(inter->sql_handle, "DELETE FROM `%s` WHERE `mail_id` = '%"PRId64"'", rodex_item_db, mail_id))
-			Sql_ShowDebug(inter->sql_handle);
+		if (SQL_ERROR == SQL->Query(sql_handle, "DELETE FROM `%s` WHERE `mail_id` = '%"PRId64"'", rodex_item_db, mail_id))
+			Sql_ShowDebug(sql_handle);
 		mapif->rodex_getitemsack(session, char_id, mail_id, opentype, count, &items[0]);
 		break;
 	}
 	case RODEX_UPDATEMAIL_DELETE:
-		if (SQL_ERROR == SQL->Query(inter->sql_handle, "DELETE FROM `%s` WHERE `mail_id` = '%"PRId64"'", rodex_db, mail_id))
-			Sql_ShowDebug(inter->sql_handle);
-		if (SQL_ERROR == SQL->Query(inter->sql_handle, "DELETE FROM `%s` WHERE `mail_id` = '%"PRId64"'", rodex_item_db, mail_id))
-			Sql_ShowDebug(inter->sql_handle);
+		if (SQL_ERROR == SQL->Query(sql_handle, "DELETE FROM `%s` WHERE `mail_id` = '%"PRId64"'", rodex_db, mail_id))
+			Sql_ShowDebug(sql_handle);
+		if (SQL_ERROR == SQL->Query(sql_handle, "DELETE FROM `%s` WHERE `mail_id` = '%"PRId64"'", rodex_item_db, mail_id))
+			Sql_ShowDebug(sql_handle);
 		break;
 
 	case RODEX_UPDATEMAIL_SENDER_READ:
-		if (SQL_ERROR == SQL->Query(inter->sql_handle, "UPDATE `%s` SET `sender_read` = 1 WHERE `mail_id` = '%"PRId64"'", rodex_db, mail_id))
-			Sql_ShowDebug(inter->sql_handle);
+		if (SQL_ERROR == SQL->Query(sql_handle, "UPDATE `%s` SET `sender_read` = 1 WHERE `mail_id` = '%"PRId64"'", rodex_db, mail_id))
+			Sql_ShowDebug(sql_handle);
 		break;
 
 	default:

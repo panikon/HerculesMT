@@ -50,12 +50,23 @@
 #include "common/sql.h"
 #include "common/strlib.h"
 #include "common/timer.h"
+#include "common/thread.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 
 static struct inter_interface inter_s;
 struct inter_interface *inter;
+
+/**
+ * Local SQL handle
+ *
+ * Because our threads are long-lived a single connection per thread is optimal
+ * instead of a connection pool or even synchronizing access.
+ * This handle is opened via inter->sql_handle_open, that's called when a queue is created.
+ * @see inter->sql_handle_open
+ **/
+static thread_local struct Sql *local_sql_handle = NULL;
 
 static int char_server_port = 3306;
 static char char_server_ip[32] = "127.0.0.1";
@@ -443,20 +454,21 @@ static void inter_msg_to_fd(int map_id, int u_fd, int aid, char *msg, ...)
  **/
 static uint8 inter_char_rename(int char_id, int guild_id, const char *esc_name)
 {
+	struct Sql *sql_handle = inter->sql_handle_get();
 	/**
 	 * There's no need to check if the name is in use when performing the update, the 
 	 * `name` field is defined as UNIQUE, so the query will simply fail if there's
 	 * a duplicate. This way we avoid possible data-races of multiple simultaneous writes.
 	 **/
 	int sql_result = 
-	SQL->Query(inter->sql_handle,
+	SQL->Query(sql_handle,
 		"UPDATE `%s` SET `name` = '%s', `rename` = rename-1 WHERE `char_id` = '%d' AND `rename` > 0",
 		char_db, esc_name, char_id);
 	if(SQL_ERROR == sql_result) {
-		Sql_ShowDebug(inter->sql_handle);
+		Sql_ShowDebug(sql_handle);
 		return 2; // Duplicate
 	}
-	if(SQL->NumAffectedRows(inter->sql_handle) <= 0)
+	if(SQL->NumAffectedRows(sql_handle) <= 0)
 		return 3; // Already renamed
 
 	// Change character's name into guild_db.
@@ -465,7 +477,7 @@ static uint8 inter_char_rename(int char_id, int guild_id, const char *esc_name)
 
 	// log change
 	if(chr->enable_logs) {
-		if(SQL_ERROR == SQL->Query(inter->sql_handle,
+		if(SQL_ERROR == SQL->Query(sql_handle,
 					"INSERT INTO `%s` ("
 					" `time`, `char_msg`, `char_id`, `name`"
 					") VALUES ("
@@ -474,7 +486,7 @@ static uint8 inter_char_rename(int char_id, int guild_id, const char *esc_name)
 					charlog_db,
 					char_id, esc_name
 					))
-			Sql_ShowDebug(inter->sql_handle);
+			Sql_ShowDebug(sql_handle);
 	}
 
 	return 0;
@@ -500,58 +512,59 @@ static uint8 inter_char_rename(int char_id, int guild_id, const char *esc_name)
  **/
 static void inter_accinfo(int u_fd, int aid, int castergroup, const char *query, int map_id)
 {
-	char query_esq[NAME_LENGTH*2+1];
+	struct Sql *sql_handle = inter->sql_handle_get();
+	char query_esq[ESC_NAME_LENGTH];
 	int account_id;
 	char *data;
 
-	SQL->EscapeString(inter->sql_handle, query_esq, query);
+	SQL->EscapeString(sql_handle, query_esq, query);
 
 	account_id = atoi(query);
 
 	if (account_id < START_ACCOUNT_NUM) {
 		// Search for name
-		if ( SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT `account_id`,`name`,"
+		if ( SQL_ERROR == SQL->Query(sql_handle, "SELECT `account_id`,`name`,"
 			"`class`,`base_level`,`job_level`,`online` FROM `%s` WHERE `name` "
 			"LIKE '%s' LIMIT 10", char_db, query_esq)
-				|| SQL->NumRows(inter->sql_handle) == 0
+				|| SQL->NumRows(sql_handle) == 0
 		) {
-			if( SQL->NumRows(inter->sql_handle) == 0 ) {
+			if( SQL->NumRows(sql_handle) == 0 ) {
 				inter->msg_to_fd(map_id, u_fd, aid, "No matches were found for "
 					"your criteria, '%s'", query);
 			} else {
-				Sql_ShowDebug(inter->sql_handle);
+				Sql_ShowDebug(sql_handle);
 				inter->msg_to_fd(map_id, u_fd, aid, "An error occurred, bother "
 					"your admin about it.");
 			}
-			SQL->FreeResult(inter->sql_handle);
+			SQL->FreeResult(sql_handle);
 			return;
 		}
 		// We found a perfect match
-		if( SQL->NumRows(inter->sql_handle) == 1 ) {
-			SQL->NextRow(inter->sql_handle);
-			SQL->GetData(inter->sql_handle, 0, &data, NULL); account_id = atoi(data);
-			SQL->FreeResult(inter->sql_handle);
+		if( SQL->NumRows(sql_handle) == 1 ) {
+			SQL->NextRow(sql_handle);
+			SQL->GetData(sql_handle, 0, &data, NULL); account_id = atoi(data);
+			SQL->FreeResult(sql_handle);
 		} else {// more than one, listing... [Dekamaster/Nightroad]
 			inter->msg_to_fd(map_id, u_fd, aid, "Your query returned the "
 				"following %d results, please be more specific...",
-				(int)SQL->NumRows(inter->sql_handle));
-			while ( SQL_SUCCESS == SQL->NextRow(inter->sql_handle) ) {
+				(int)SQL->NumRows(sql_handle));
+			while ( SQL_SUCCESS == SQL->NextRow(sql_handle) ) {
 				int class;
 				int base_level, job_level, online;
 				char name[NAME_LENGTH];
 
-				SQL->GetData(inter->sql_handle, 0, &data, NULL); account_id = atoi(data);
-				SQL->GetData(inter->sql_handle, 1, &data, NULL); safestrncpy(name, data, sizeof(name));
-				SQL->GetData(inter->sql_handle, 2, &data, NULL); class = atoi(data);
-				SQL->GetData(inter->sql_handle, 3, &data, NULL); base_level = atoi(data);
-				SQL->GetData(inter->sql_handle, 4, &data, NULL); job_level = atoi(data);
-				SQL->GetData(inter->sql_handle, 5, &data, NULL); online = atoi(data);
+				SQL->GetData(sql_handle, 0, &data, NULL); account_id = atoi(data);
+				SQL->GetData(sql_handle, 1, &data, NULL); safestrncpy(name, data, sizeof(name));
+				SQL->GetData(sql_handle, 2, &data, NULL); class = atoi(data);
+				SQL->GetData(sql_handle, 3, &data, NULL); base_level = atoi(data);
+				SQL->GetData(sql_handle, 4, &data, NULL); job_level = atoi(data);
+				SQL->GetData(sql_handle, 5, &data, NULL); online = atoi(data);
 
 				inter->msg_to_fd(map_id, u_fd, aid, "[AID: %d] %s | %s | "
 					"Level: %d/%d | %s", account_id, name, inter->job_name(class),
 					base_level, job_level, online?"Online":"Offline");
 			}
-			SQL->FreeResult(inter->sql_handle);
+			SQL->FreeResult(sql_handle);
 			return;
 		}
 	}
@@ -586,6 +599,7 @@ static void inter_accinfo_ack(bool success, int map_id, int u_fd, int u_aid, int
 		const char *email, const char *last_ip, const char *lastlogin, const char *birthdate,
 		int group_id, int logincount, int state)
 {
+	struct Sql *sql_handle = inter->sql_handle_get();
 	struct socket_data *map_session = socket_io->session_from_id(map_id);
 	if(!map_session)
 		return; // check if we have a valid fd
@@ -607,39 +621,39 @@ static void inter_accinfo_ack(bool success, int map_id, int u_fd, int u_aid, int
 		"last time were at %s", logincount, lastlogin);
 	inter->msg_to_fd(map_id, u_fd, u_aid, "-- Character Details --");
 
-	if ( SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT `char_id`, `name`, "
+	if ( SQL_ERROR == SQL->Query(sql_handle, "SELECT `char_id`, `name`, "
 		"`char_num`, `class`, `base_level`, `job_level`, `online` "
 	    "FROM `%s` WHERE `account_id` = '%d' ORDER BY `char_num` LIMIT %d",
 		char_db, account_id, MAX_CHARS)
-	  || SQL->NumRows(inter->sql_handle) == 0
+	  || SQL->NumRows(sql_handle) == 0
 	) {
-		if (SQL->NumRows(inter->sql_handle) == 0) {
+		if (SQL->NumRows(sql_handle) == 0) {
 			inter->msg_to_fd(map_id, u_fd, u_aid, "This account doesn't have characters.");
 		} else {
 			inter->msg_to_fd(map_id, u_fd, u_aid, "An error occurred, bother your admin about it.");
-			Sql_ShowDebug(inter->sql_handle);
+			Sql_ShowDebug(sql_handle);
 		}
 	} else {
-		while ( SQL_SUCCESS == SQL->NextRow(inter->sql_handle) ) {
+		while ( SQL_SUCCESS == SQL->NextRow(sql_handle) ) {
 			char *data;
 			int char_id, class;
 			int char_num, base_level, job_level, online;
 			char name[NAME_LENGTH];
 
-			SQL->GetData(inter->sql_handle, 0, &data, NULL); char_id = atoi(data);
-			SQL->GetData(inter->sql_handle, 1, &data, NULL); safestrncpy(name, data, sizeof(name));
-			SQL->GetData(inter->sql_handle, 2, &data, NULL); char_num = atoi(data);
-			SQL->GetData(inter->sql_handle, 3, &data, NULL); class = atoi(data);
-			SQL->GetData(inter->sql_handle, 4, &data, NULL); base_level = atoi(data);
-			SQL->GetData(inter->sql_handle, 5, &data, NULL); job_level = atoi(data);
-			SQL->GetData(inter->sql_handle, 6, &data, NULL); online = atoi(data);
+			SQL->GetData(sql_handle, 0, &data, NULL); char_id = atoi(data);
+			SQL->GetData(sql_handle, 1, &data, NULL); safestrncpy(name, data, sizeof(name));
+			SQL->GetData(sql_handle, 2, &data, NULL); char_num = atoi(data);
+			SQL->GetData(sql_handle, 3, &data, NULL); class = atoi(data);
+			SQL->GetData(sql_handle, 4, &data, NULL); base_level = atoi(data);
+			SQL->GetData(sql_handle, 5, &data, NULL); job_level = atoi(data);
+			SQL->GetData(sql_handle, 6, &data, NULL); online = atoi(data);
 
 			inter->msg_to_fd(map_id, u_fd, u_aid, "[Slot/CID: %d/%d] %s | %s | "
 				"Level: %d/%d | %s", char_num, char_id, name,
 				inter->job_name(class), base_level, job_level, online?"On":"Off");
 		}
 	}
-	SQL->FreeResult(inter->sql_handle);
+	SQL->FreeResult(sql_handle);
 
 	return;
 }
@@ -651,6 +665,7 @@ static void inter_accinfo_ack(bool success, int map_id, int u_fd, int u_aid, int
  **/
 static void inter_savereg(int account_id, int char_id, const char *key, unsigned int index, intptr_t val, bool is_string)
 {
+	struct Sql *sql_handle = inter->sql_handle_get();
 	char val_esq[1000];
 	nullpo_retv(key);
 	/* to login server we go! */
@@ -666,20 +681,20 @@ static void inter_savereg(int account_id, int char_id, const char *key, unsigned
 	if ( key[0] == '#' ) {/* local account reg */
 		if( is_string ) {
 			if( val ) {
-				SQL->EscapeString(inter->sql_handle, val_esq, (char*)val);
-				if( SQL_ERROR == SQL->Query(inter->sql_handle, "REPLACE INTO `%s` (`account_id`,`key`,`index`,`value`) VALUES ('%d','%s','%u','%s')", acc_reg_str_db, account_id, key, index, val_esq) )
-					Sql_ShowDebug(inter->sql_handle);
+				SQL->EscapeString(sql_handle, val_esq, (char*)val);
+				if( SQL_ERROR == SQL->Query(sql_handle, "REPLACE INTO `%s` (`account_id`,`key`,`index`,`value`) VALUES ('%d','%s','%u','%s')", acc_reg_str_db, account_id, key, index, val_esq) )
+					Sql_ShowDebug(sql_handle);
 			} else {
-				if( SQL_ERROR == SQL->Query(inter->sql_handle, "DELETE FROM `%s` WHERE `account_id` = '%d' AND `key` = '%s' AND `index` = '%u' LIMIT 1", acc_reg_str_db, account_id, key, index) )
-					Sql_ShowDebug(inter->sql_handle);
+				if( SQL_ERROR == SQL->Query(sql_handle, "DELETE FROM `%s` WHERE `account_id` = '%d' AND `key` = '%s' AND `index` = '%u' LIMIT 1", acc_reg_str_db, account_id, key, index) )
+					Sql_ShowDebug(sql_handle);
 			}
 		} else {
 			if( val ) {
-				if( SQL_ERROR == SQL->Query(inter->sql_handle, "REPLACE INTO `%s` (`account_id`,`key`,`index`,`value`) VALUES ('%d','%s','%u','%d')", acc_reg_num_db, account_id, key, index, (int)val) )
-					Sql_ShowDebug(inter->sql_handle);
+				if( SQL_ERROR == SQL->Query(sql_handle, "REPLACE INTO `%s` (`account_id`,`key`,`index`,`value`) VALUES ('%d','%s','%u','%d')", acc_reg_num_db, account_id, key, index, (int)val) )
+					Sql_ShowDebug(sql_handle);
 			} else {
-				if( SQL_ERROR == SQL->Query(inter->sql_handle, "DELETE FROM `%s` WHERE `account_id` = '%d' AND `key` = '%s' AND `index` = '%u' LIMIT 1", acc_reg_num_db, account_id, key, index) )
-					Sql_ShowDebug(inter->sql_handle);
+				if( SQL_ERROR == SQL->Query(sql_handle, "DELETE FROM `%s` WHERE `account_id` = '%d' AND `key` = '%s' AND `index` = '%u' LIMIT 1", acc_reg_num_db, account_id, key, index) )
+					Sql_ShowDebug(sql_handle);
 			}
 		}
 		return;
@@ -688,20 +703,20 @@ static void inter_savereg(int account_id, int char_id, const char *key, unsigned
 	/* char reg */
 	if( is_string ) {
 		if( val ) {
-			SQL->EscapeString(inter->sql_handle, val_esq, (char*)val);
-			if( SQL_ERROR == SQL->Query(inter->sql_handle, "REPLACE INTO `%s` (`char_id`,`key`,`index`,`value`) VALUES ('%d','%s','%u','%s')", char_reg_str_db, char_id, key, index, val_esq) )
-				Sql_ShowDebug(inter->sql_handle);
+			SQL->EscapeString(sql_handle, val_esq, (char*)val);
+			if( SQL_ERROR == SQL->Query(sql_handle, "REPLACE INTO `%s` (`char_id`,`key`,`index`,`value`) VALUES ('%d','%s','%u','%s')", char_reg_str_db, char_id, key, index, val_esq) )
+				Sql_ShowDebug(sql_handle);
 		} else {
-			if( SQL_ERROR == SQL->Query(inter->sql_handle, "DELETE FROM `%s` WHERE `char_id` = '%d' AND `key` = '%s' AND `index` = '%u' LIMIT 1", char_reg_str_db, char_id, key, index) )
-				Sql_ShowDebug(inter->sql_handle);
+			if( SQL_ERROR == SQL->Query(sql_handle, "DELETE FROM `%s` WHERE `char_id` = '%d' AND `key` = '%s' AND `index` = '%u' LIMIT 1", char_reg_str_db, char_id, key, index) )
+				Sql_ShowDebug(sql_handle);
 		}
 	} else {
 		if( val ) {
-			if( SQL_ERROR == SQL->Query(inter->sql_handle, "REPLACE INTO `%s` (`char_id`,`key`,`index`,`value`) VALUES ('%d','%s','%u','%d')", char_reg_num_db, char_id, key, index, (int)val) )
-				Sql_ShowDebug(inter->sql_handle);
+			if( SQL_ERROR == SQL->Query(sql_handle, "REPLACE INTO `%s` (`char_id`,`key`,`index`,`value`) VALUES ('%d','%s','%u','%d')", char_reg_num_db, char_id, key, index, (int)val) )
+				Sql_ShowDebug(sql_handle);
 		} else {
-			if( SQL_ERROR == SQL->Query(inter->sql_handle, "DELETE FROM `%s` WHERE `char_id` = '%d' AND `key` = '%s' AND `index` = '%u' LIMIT 1", char_reg_num_db, char_id, key, index) )
-				Sql_ShowDebug(inter->sql_handle);
+			if( SQL_ERROR == SQL->Query(sql_handle, "DELETE FROM `%s` WHERE `char_id` = '%d' AND `key` = '%s' AND `index` = '%u' LIMIT 1", char_reg_num_db, char_id, key, index) )
+				Sql_ShowDebug(sql_handle);
 		}
 	}
 }
@@ -722,15 +737,16 @@ static int inter_accreg_fromsql(int account_id, int char_id, struct socket_data 
 	char* data;
 	size_t len;
 	unsigned int plen = 0;
+	struct Sql *sql_handle = inter->sql_handle_get();
 
 	switch( type ) {
 		case 3: //char reg
-			if( SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT `key`, `index`, `value` FROM `%s` WHERE `char_id`='%d'", char_reg_str_db, char_id) )
-				Sql_ShowDebug(inter->sql_handle);
+			if( SQL_ERROR == SQL->Query(sql_handle, "SELECT `key`, `index`, `value` FROM `%s` WHERE `char_id`='%d'", char_reg_str_db, char_id) )
+				Sql_ShowDebug(sql_handle);
 			break;
 		case 2: //account reg
-			if( SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT `key`, `index`, `value` FROM `%s` WHERE `account_id`='%d'", acc_reg_str_db, account_id) )
-				Sql_ShowDebug(inter->sql_handle);
+			if( SQL_ERROR == SQL->Query(sql_handle, "SELECT `key`, `index`, `value` FROM `%s` WHERE `account_id`='%d'", acc_reg_str_db, account_id) )
+				Sql_ShowDebug(sql_handle);
 			break;
 		case 1: //account2 reg
 			ShowError("inter->accreg_fromsql: Char server shouldn't handle type 1 registry values (##). That is the login server's work!\n");
@@ -756,8 +772,8 @@ static int inter_accreg_fromsql(int account_id, int char_id, struct socket_data 
 	 * str type
 	 * { keyLength(B), key(<keyLength>), index(L), valLength(B), val(<valLength>) }
 	 **/
-	while ( SQL_SUCCESS == SQL->NextRow(inter->sql_handle) ) {
-		SQL->GetData(inter->sql_handle, 0, &data, NULL);
+	while ( SQL_SUCCESS == SQL->NextRow(sql_handle) ) {
+		SQL->GetData(sql_handle, 0, &data, NULL);
 		len = strlen(data)+1;
 
 		WFIFOB(session, plen) = (unsigned char)len;/* won't be higher; the column size is 32 */
@@ -766,12 +782,12 @@ static int inter_accreg_fromsql(int account_id, int char_id, struct socket_data 
 		safestrncpy(WFIFOP(session,plen), data, len);
 		plen += len;
 
-		SQL->GetData(inter->sql_handle, 1, &data, NULL);
+		SQL->GetData(sql_handle, 1, &data, NULL);
 
 		WFIFOL(session, plen) = (unsigned int)atol(data);
 		plen += 4;
 
-		SQL->GetData(inter->sql_handle, 2, &data, NULL);
+		SQL->GetData(sql_handle, 2, &data, NULL);
 		len = strlen(data);
 
 		WFIFOB(session, plen) = (unsigned char)len; // Won't be higher; the column size is 255.
@@ -803,16 +819,16 @@ static int inter_accreg_fromsql(int account_id, int char_id, struct socket_data 
 	WFIFOW(session, 2) = plen;
 	WFIFOSET(session, plen);
 
-	SQL->FreeResult(inter->sql_handle);
+	SQL->FreeResult(sql_handle);
 
 	switch( type ) {
 		case 3: //char reg
-			if( SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT `key`, `index`, `value` FROM `%s` WHERE `char_id`='%d'", char_reg_num_db, char_id) )
-				Sql_ShowDebug(inter->sql_handle);
+			if( SQL_ERROR == SQL->Query(sql_handle, "SELECT `key`, `index`, `value` FROM `%s` WHERE `char_id`='%d'", char_reg_num_db, char_id) )
+				Sql_ShowDebug(sql_handle);
 			break;
 		case 2: //account reg
-			if( SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT `key`, `index`, `value` FROM `%s` WHERE `account_id`='%d'", acc_reg_num_db, account_id) )
-				Sql_ShowDebug(inter->sql_handle);
+			if( SQL_ERROR == SQL->Query(sql_handle, "SELECT `key`, `index`, `value` FROM `%s` WHERE `account_id`='%d'", acc_reg_num_db, account_id) )
+				Sql_ShowDebug(sql_handle);
 			break;
 #if 0 // This is already checked above.
 		case 1: //account2 reg
@@ -837,8 +853,8 @@ static int inter_accreg_fromsql(int account_id, int char_id, struct socket_data 
 	 * int type
 	 * { keyLength(B), key(<keyLength>), index(L), value(L) }
 	 **/
-	while ( SQL_SUCCESS == SQL->NextRow(inter->sql_handle) ) {
-		SQL->GetData(inter->sql_handle, 0, &data, NULL);
+	while ( SQL_SUCCESS == SQL->NextRow(sql_handle) ) {
+		SQL->GetData(sql_handle, 0, &data, NULL);
 		len = strlen(data)+1;
 
 		WFIFOB(session, plen) = (unsigned char)len;/* won't be higher; the column size is 32 */
@@ -847,12 +863,12 @@ static int inter_accreg_fromsql(int account_id, int char_id, struct socket_data 
 		safestrncpy(WFIFOP(session,plen), data, len);
 		plen += len;
 
-		SQL->GetData(inter->sql_handle, 1, &data, NULL);
+		SQL->GetData(sql_handle, 1, &data, NULL);
 
 		WFIFOL(session, plen) = (unsigned int)atol(data);
 		plen += 4;
 
-		SQL->GetData(inter->sql_handle, 2, &data, NULL);
+		SQL->GetData(sql_handle, 2, &data, NULL);
 
 		WFIFOL(session, plen) = atoi(data);
 		plen += 4;
@@ -881,7 +897,7 @@ static int inter_accreg_fromsql(int account_id, int char_id, struct socket_data 
 	WFIFOW(session, 2) = plen;
 	WFIFOSET(session, plen);
 
-	SQL->FreeResult(inter->sql_handle);
+	SQL->FreeResult(sql_handle);
 	return 1;
 }
 
@@ -1009,9 +1025,10 @@ static int inter_vlog(char *fmt, va_list ap)
 	vsnprintf(str, sizeof(str), fmt, apcopy);
 	va_end(apcopy);
 
-	SQL->EscapeStringLen(inter->sql_handle, esc_str, str, strnlen(str, sizeof(str)));
-	if( SQL_ERROR == SQL->Query(inter->sql_handle, "INSERT INTO `%s` (`time`, `log`) VALUES (NOW(),  '%s')", interlog_db, esc_str) )
-		Sql_ShowDebug(inter->sql_handle);
+	struct Sql *sql_handle = inter->sql_handle_get();
+	SQL->EscapeStringLen(sql_handle, esc_str, str, strnlen(str, sizeof(str)));
+	if( SQL_ERROR == SQL->Query(sql_handle, "INSERT INTO `%s` (`time`, `log`) VALUES (NOW(),  '%s')", interlog_db, esc_str) )
+		Sql_ShowDebug(sql_handle);
 
 	return 0;
 }
@@ -1035,28 +1052,63 @@ static int inter_log(char *fmt, ...)
 }
 
 /**
- * Initializes inter SQL connection
+ * Closes local SQL handle, ignores request if there's none active.
  **/
-static int inter_init_sql(const char *file)
-{
-	inter->config_read(file, false);
+void sql_handle_close(void) {
+	if(!local_sql_handle)
+		return;
+	SQL->Free(local_sql_handle);
+}
 
-	//DB connection initialized
-	inter->sql_handle = SQL->Malloc();
-	ShowInfo("Connect Character DB server.... (Character Server)\n");
-	if( SQL_ERROR == SQL->Connect(inter->sql_handle, char_server_id,
-		char_server_pw, char_server_ip, (uint16)char_server_port, char_server_db)
+/**
+ * Opens a new SQL handle for this thread.
+ **/
+void sql_handle_open(void) {
+	Assert(!local_sql_handle);
+
+	// DB connection initialized
+	ShowInfo("[Thread #%d] Connect Character DB server.... (Character Server)\n",
+		thread->get_tid());
+
+	local_sql_handle = SQL->Malloc();
+	if(SQL_ERROR == SQL->Connect(local_sql_handle, char_server_id,
+	   char_server_pw, char_server_ip, (uint16)char_server_port, char_server_db)
 	) {
-		Sql_ShowDebug(inter->sql_handle);
-		SQL->Free(inter->sql_handle);
+		Sql_ShowDebug(local_sql_handle);
+		SQL->Free(local_sql_handle);
+		local_sql_handle = NULL;
 		exit(EXIT_FAILURE);
 	}
-
-	if( *default_codepage ) {
-		if( SQL_ERROR == SQL->SetEncoding(inter->sql_handle, default_codepage) )
-			Sql_ShowDebug(inter->sql_handle);
+	if(*default_codepage) {
+		if(SQL_ERROR == SQL->SetEncoding(local_sql_handle, default_codepage))
+			Sql_ShowDebug(local_sql_handle);
 	}
+}
 
+/**
+ * Gets local SQL handle.
+ *
+ * The returned connection is always valid.
+ **/
+struct Sql *sql_handle_get(void) {
+	Assert(local_sql_handle);
+	return local_sql_handle;
+}
+
+/**
+ * Loads inter-server related configuration files
+ **/
+static void inter_load_config(const char *file)
+{
+	inter->config_read(file, false);
+	inter->msg_config_read("conf/messages.conf", false);
+}
+
+/**
+ * First SQL operations (before action init)
+ **/
+static void inter_init_sql(void)
+{
 	inter_guild->sql_init();
 	inter_storage->sql_init();
 	inter_party->sql_init();
@@ -1070,8 +1122,6 @@ static int inter_init_sql(const char *file)
 	inter_achievement->sql_init();
 
 	geoip->init();
-	inter->msg_config_read("conf/messages.conf", false);
-	return 0;
 }
 
 // finalize
@@ -1110,7 +1160,10 @@ void inter_defaults(void)
 	inter = &inter_s;
 
 	inter->enable_logs = true;
-	inter->sql_handle = NULL;
+
+	inter->sql_handle_get   = sql_handle_get;
+	inter->sql_handle_close = sql_handle_close;
+	inter->sql_handle_open = sql_handle_open;
 
 	inter->msg_txt = inter_msg_txt;
 	inter->msg_config_read = inter_msg_config_read;
@@ -1124,6 +1177,7 @@ void inter_defaults(void)
 	inter->config_read = inter_config_read;
 	inter->vlog = inter_vlog;
 	inter->log = inter_log;
+	inter->load_config = inter_load_config;
 	inter->init_sql = inter_init_sql;
 	inter->mapif_init = inter_mapif_init;
 	inter->final = inter_final;

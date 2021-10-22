@@ -43,7 +43,7 @@ struct action_interface {
 	uint32_t (*queue_get_index)(struct s_action_queue *queue);
 	int32 (*queue_index) (void);
 	void (*queue_destroy)(struct s_action_queue *queue);
-	struct s_action_queue *(*queue_create)(int initial_capacity, struct ers_collection_t *collection);
+	struct s_action_queue *(*queue_create)(int initial_capacity, struct ers_collection_t *collection, void (*init) (void *param), void *init_param, void (*final) (void *param), void *final_param);
 
 	void (*queue_final)(void);
 	void (*queue_init)(void);

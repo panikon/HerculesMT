@@ -61,22 +61,23 @@ static void inter_homunculus_sql_final(void)
  */
 static bool inter_homunculus_create(struct s_homunculus *hd)
 {
-	char esc_name[NAME_LENGTH*2+1];
+	char esc_name[ESC_NAME_LENGTH];
+	struct Sql *sql_handle = inter->sql_handle_get();
 
 	nullpo_retr(false, hd);
 	Assert_retr(false, hd->hom_id == 0);
 
-	SQL->EscapeStringLen(inter->sql_handle, esc_name, hd->name, strnlen(hd->name, NAME_LENGTH));
+	SQL->EscapeStringLen(sql_handle, esc_name, hd->name, strnlen(hd->name, NAME_LENGTH));
 
-	if (SQL_ERROR == SQL->Query(inter->sql_handle, "INSERT INTO `%s` "
+	if (SQL_ERROR == SQL->Query(sql_handle, "INSERT INTO `%s` "
 			"(`char_id`, `class`,`prev_class`,`name`,`level`,`exp`,`intimacy`,`hunger`, `str`, `agi`, `vit`, `int`, `dex`, `luk`, `hp`,`max_hp`,`sp`,`max_sp`,`skill_point`, `rename_flag`, `vaporize`, `autofeed`) "
 			"VALUES ('%d', '%d', '%d', '%s', '%d', '%"PRIu64"', '%u', '%d', '%d', %d, '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d')",
 			homunculus_db, hd->char_id, hd->class_, hd->prev_class, esc_name, hd->level, hd->exp, hd->intimacy, hd->hunger, hd->str, hd->agi, hd->vit, hd->int_, hd->dex, hd->luk,
 			hd->hp, hd->max_hp, hd->sp, hd->max_sp, hd->skillpts, hd->rename_flag, hd->vaporize, hd->autofeed)) {
-		Sql_ShowDebug(inter->sql_handle);
+		Sql_ShowDebug(sql_handle);
 		return false;
 	}
-	hd->hom_id = (int)SQL->LastInsertId(inter->sql_handle);
+	hd->hom_id = (int)SQL->LastInsertId(sql_handle);
 	return true;
 }
 
@@ -89,21 +90,22 @@ static bool inter_homunculus_create(struct s_homunculus *hd)
 static bool inter_homunculus_save(const struct s_homunculus *hd)
 {
 	bool flag = true;
-	char esc_name[NAME_LENGTH*2+1];
+	char esc_name[ESC_NAME_LENGTH];
+	struct Sql *sql_handle = inter->sql_handle_get();
 
 	nullpo_retr(false, hd);
 	Assert_retr(false, hd->hom_id > 0);
 
-	SQL->EscapeStringLen(inter->sql_handle, esc_name, hd->name, strnlen(hd->name, NAME_LENGTH));
+	SQL->EscapeStringLen(sql_handle, esc_name, hd->name, strnlen(hd->name, NAME_LENGTH));
 
-	if (SQL_ERROR == SQL->Query(inter->sql_handle, "UPDATE `%s` SET `char_id`='%d', `class`='%d',`prev_class`='%d',`name`='%s',`level`='%d',`exp`='%"PRIu64"',`intimacy`='%u',`hunger`='%d', `str`='%d', `agi`='%d', `vit`='%d', `int`='%d', `dex`='%d', `luk`='%d', `hp`='%d',`max_hp`='%d',`sp`='%d',`max_sp`='%d',`skill_point`='%d', `rename_flag`='%d', `vaporize`='%d', `autofeed`='%d' WHERE `homun_id`='%d'",
+	if (SQL_ERROR == SQL->Query(sql_handle, "UPDATE `%s` SET `char_id`='%d', `class`='%d',`prev_class`='%d',`name`='%s',`level`='%d',`exp`='%"PRIu64"',`intimacy`='%u',`hunger`='%d', `str`='%d', `agi`='%d', `vit`='%d', `int`='%d', `dex`='%d', `luk`='%d', `hp`='%d',`max_hp`='%d',`sp`='%d',`max_sp`='%d',`skill_point`='%d', `rename_flag`='%d', `vaporize`='%d', `autofeed`='%d' WHERE `homun_id`='%d'",
 			homunculus_db, hd->char_id, hd->class_, hd->prev_class, esc_name, hd->level, hd->exp, hd->intimacy, hd->hunger, hd->str, hd->agi, hd->vit, hd->int_, hd->dex, hd->luk,
 			hd->hp, hd->max_hp, hd->sp, hd->max_sp, hd->skillpts, hd->rename_flag, hd->vaporize, hd->autofeed, hd->hom_id)) {
-		Sql_ShowDebug(inter->sql_handle);
+		Sql_ShowDebug(sql_handle);
 		flag = false;
 	} else {
 		int i;
-		struct SqlStmt *stmt = SQL->StmtMalloc(inter->sql_handle);
+		struct SqlStmt *stmt = SQL->StmtMalloc(sql_handle);
 
 		if (SQL_ERROR == SQL->StmtPrepare(stmt, "REPLACE INTO `%s` (`homun_id`, `id`, `lv`) VALUES (%d, ?, ?)", skill_homunculus_db, hd->hom_id)) {
 			SqlStmt_ShowDebug(stmt);
@@ -132,65 +134,66 @@ static bool inter_homunculus_load(int homun_id, struct s_homunculus *hd)
 {
 	char* data;
 	size_t len;
+	struct Sql *sql_handle = inter->sql_handle_get();
 
 	nullpo_ret(hd);
 	memset(hd, 0, sizeof(*hd));
 
-	if (SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT `homun_id`,`char_id`,`class`,`prev_class`,`name`,`level`,`exp`,`intimacy`,`hunger`, `str`, `agi`, `vit`, `int`, `dex`, `luk`, `hp`,`max_hp`,`sp`,`max_sp`,`skill_point`,`rename_flag`, `vaporize`, `autofeed` FROM `%s` WHERE `homun_id`='%d'", homunculus_db, homun_id))
+	if (SQL_ERROR == SQL->Query(sql_handle, "SELECT `homun_id`,`char_id`,`class`,`prev_class`,`name`,`level`,`exp`,`intimacy`,`hunger`, `str`, `agi`, `vit`, `int`, `dex`, `luk`, `hp`,`max_hp`,`sp`,`max_sp`,`skill_point`,`rename_flag`, `vaporize`, `autofeed` FROM `%s` WHERE `homun_id`='%d'", homunculus_db, homun_id))
 	{
-		Sql_ShowDebug(inter->sql_handle);
+		Sql_ShowDebug(sql_handle);
 		return false;
 	}
 
-	if (!SQL->NumRows(inter->sql_handle)) {
+	if (!SQL->NumRows(sql_handle)) {
 		//No homunculus found.
-		SQL->FreeResult(inter->sql_handle);
+		SQL->FreeResult(sql_handle);
 		return false;
 	}
-	if( SQL_SUCCESS != SQL->NextRow(inter->sql_handle) )
+	if( SQL_SUCCESS != SQL->NextRow(sql_handle) )
 	{
-		Sql_ShowDebug(inter->sql_handle);
-		SQL->FreeResult(inter->sql_handle);
+		Sql_ShowDebug(sql_handle);
+		SQL->FreeResult(sql_handle);
 		return false;
 	}
 
 	hd->hom_id = homun_id;
-	SQL->GetData(inter->sql_handle,  1, &data, NULL); hd->char_id = atoi(data);
-	SQL->GetData(inter->sql_handle,  2, &data, NULL); hd->class_ = atoi(data);
-	SQL->GetData(inter->sql_handle,  3, &data, NULL); hd->prev_class = atoi(data);
-	SQL->GetData(inter->sql_handle,  4, &data, &len); safestrncpy(hd->name, data, sizeof(hd->name));
-	SQL->GetData(inter->sql_handle,  5, &data, NULL); hd->level = atoi(data);
-	SQL->GetData(inter->sql_handle,  6, &data, NULL); hd->exp = atol(data);
-	SQL->GetData(inter->sql_handle,  7, &data, NULL); hd->intimacy = (unsigned int)strtoul(data, NULL, 10);
-	SQL->GetData(inter->sql_handle,  8, &data, NULL); hd->hunger = atoi(data);
-	SQL->GetData(inter->sql_handle,  9, &data, NULL); hd->str = atoi(data);
-	SQL->GetData(inter->sql_handle, 10, &data, NULL); hd->agi = atoi(data);
-	SQL->GetData(inter->sql_handle, 11, &data, NULL); hd->vit = atoi(data);
-	SQL->GetData(inter->sql_handle, 12, &data, NULL); hd->int_ = atoi(data);
-	SQL->GetData(inter->sql_handle, 13, &data, NULL); hd->dex = atoi(data);
-	SQL->GetData(inter->sql_handle, 14, &data, NULL); hd->luk = atoi(data);
-	SQL->GetData(inter->sql_handle, 15, &data, NULL); hd->hp = atoi(data);
-	SQL->GetData(inter->sql_handle, 16, &data, NULL); hd->max_hp = atoi(data);
-	SQL->GetData(inter->sql_handle, 17, &data, NULL); hd->sp = atoi(data);
-	SQL->GetData(inter->sql_handle, 18, &data, NULL); hd->max_sp = atoi(data);
-	SQL->GetData(inter->sql_handle, 19, &data, NULL); hd->skillpts = atoi(data);
-	SQL->GetData(inter->sql_handle, 20, &data, NULL); hd->rename_flag = atoi(data);
-	SQL->GetData(inter->sql_handle, 21, &data, NULL); hd->vaporize = atoi(data);
-	SQL->GetData(inter->sql_handle, 22, &data, NULL); hd->autofeed = atoi(data);
-	SQL->FreeResult(inter->sql_handle);
+	SQL->GetData(sql_handle,  1, &data, NULL); hd->char_id = atoi(data);
+	SQL->GetData(sql_handle,  2, &data, NULL); hd->class_ = atoi(data);
+	SQL->GetData(sql_handle,  3, &data, NULL); hd->prev_class = atoi(data);
+	SQL->GetData(sql_handle,  4, &data, &len); safestrncpy(hd->name, data, sizeof(hd->name));
+	SQL->GetData(sql_handle,  5, &data, NULL); hd->level = atoi(data);
+	SQL->GetData(sql_handle,  6, &data, NULL); hd->exp = atol(data);
+	SQL->GetData(sql_handle,  7, &data, NULL); hd->intimacy = (unsigned int)strtoul(data, NULL, 10);
+	SQL->GetData(sql_handle,  8, &data, NULL); hd->hunger = atoi(data);
+	SQL->GetData(sql_handle,  9, &data, NULL); hd->str = atoi(data);
+	SQL->GetData(sql_handle, 10, &data, NULL); hd->agi = atoi(data);
+	SQL->GetData(sql_handle, 11, &data, NULL); hd->vit = atoi(data);
+	SQL->GetData(sql_handle, 12, &data, NULL); hd->int_ = atoi(data);
+	SQL->GetData(sql_handle, 13, &data, NULL); hd->dex = atoi(data);
+	SQL->GetData(sql_handle, 14, &data, NULL); hd->luk = atoi(data);
+	SQL->GetData(sql_handle, 15, &data, NULL); hd->hp = atoi(data);
+	SQL->GetData(sql_handle, 16, &data, NULL); hd->max_hp = atoi(data);
+	SQL->GetData(sql_handle, 17, &data, NULL); hd->sp = atoi(data);
+	SQL->GetData(sql_handle, 18, &data, NULL); hd->max_sp = atoi(data);
+	SQL->GetData(sql_handle, 19, &data, NULL); hd->skillpts = atoi(data);
+	SQL->GetData(sql_handle, 20, &data, NULL); hd->rename_flag = atoi(data);
+	SQL->GetData(sql_handle, 21, &data, NULL); hd->vaporize = atoi(data);
+	SQL->GetData(sql_handle, 22, &data, NULL); hd->autofeed = atoi(data);
+	SQL->FreeResult(sql_handle);
 
 	hd->intimacy = cap_value(hd->intimacy, 0, 100000);
 	hd->hunger = cap_value(hd->hunger, 0, 100);
 
 	// Load Homunculus Skill
-	if (SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT `id`,`lv` FROM `%s` WHERE `homun_id`=%d", skill_homunculus_db, homun_id)) {
-		Sql_ShowDebug(inter->sql_handle);
+	if (SQL_ERROR == SQL->Query(sql_handle, "SELECT `id`,`lv` FROM `%s` WHERE `homun_id`=%d", skill_homunculus_db, homun_id)) {
+		Sql_ShowDebug(sql_handle);
 		return false;
 	}
-	while (SQL_SUCCESS == SQL->NextRow(inter->sql_handle)) {
+	while (SQL_SUCCESS == SQL->NextRow(sql_handle)) {
 		int idx;
 		// id
-		SQL->GetData(inter->sql_handle, 0, &data, NULL);
+		SQL->GetData(sql_handle, 0, &data, NULL);
 		idx = atoi(data);
 		if (idx < HM_SKILLBASE || idx >= HM_SKILLBASE + MAX_HOMUNSKILL)
 			continue;// invalid skill id
@@ -198,10 +201,10 @@ static bool inter_homunculus_load(int homun_id, struct s_homunculus *hd)
 		hd->hskill[idx].id = (unsigned short)atoi(data);
 
 		// lv
-		SQL->GetData(inter->sql_handle, 1, &data, NULL);
+		SQL->GetData(sql_handle, 1, &data, NULL);
 		hd->hskill[idx].lv = (unsigned char)atoi(data);
 	}
-	SQL->FreeResult(inter->sql_handle);
+	SQL->FreeResult(sql_handle);
 
 	if (chr->show_save_log)
 		ShowInfo("Homunculus loaded (%d - %s).\n", hd->hom_id, hd->name);
@@ -211,10 +214,11 @@ static bool inter_homunculus_load(int homun_id, struct s_homunculus *hd)
 
 static bool inter_homunculus_delete(int homun_id)
 {
-	if (SQL_ERROR == SQL->Query(inter->sql_handle, "DELETE FROM `%s` WHERE `homun_id` = '%d'", homunculus_db, homun_id)
-	 || SQL_ERROR == SQL->Query(inter->sql_handle, "DELETE FROM `%s` WHERE `homun_id` = '%d'", skill_homunculus_db, homun_id)
+	struct Sql *sql_handle = inter->sql_handle_get();
+	if (SQL_ERROR == SQL->Query(sql_handle, "DELETE FROM `%s` WHERE `homun_id` = '%d'", homunculus_db, homun_id)
+	 || SQL_ERROR == SQL->Query(sql_handle, "DELETE FROM `%s` WHERE `homun_id` = '%d'", skill_homunculus_db, homun_id)
 	) {
-		Sql_ShowDebug(inter->sql_handle);
+		Sql_ShowDebug(sql_handle);
 		return false;
 	}
 	return true;
@@ -231,15 +235,16 @@ static bool inter_homunculus_delete(int homun_id)
  **/
 static uint8 inter_homunculus_rename(int homun_id, const char *esc_name)
 {
+	struct Sql *sql_handle = inter->sql_handle_get();
 	int sql_result = 
-	SQL->Query(inter->sql_handle,
+	SQL->Query(sql_handle,
 		"UPDATE `%s` SET `name` = '%s', `rename_flag`='1' WHERE `homun_id` = '%d' AND `rename_flag`='0'",
 		homunculus_db, esc_name, homun_id);
 	if(SQL_ERROR == sql_result) {
-		Sql_ShowDebug(inter->sql_handle);
+		Sql_ShowDebug(sql_handle);
 		return 4;
 	}
-	if(SQL->NumAffectedRows(inter->sql_handle) <= 0)
+	if(SQL->NumAffectedRows(sql_handle) <= 0)
 		return 3;
 
 	return 0;

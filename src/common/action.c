@@ -66,6 +66,11 @@ struct s_action_queue {
 
 	struct thread_handle *thread;//< Action worker thread (_only_ for waiting)
 	uint32_t list_index;         //< Position in action_queue_list
+
+	void (*init) (void *param);  //< First function to be executed by action thread
+	void *init_param;            //< Parameter to init
+	void (*final) (void *param); //< Last function to be executed by action thread
+	void *final_param;           //< Parameter to final
 };
 
 /**
@@ -246,6 +251,9 @@ static void *action_worker(void *param)
 	VECTOR_DECL(struct s_action_data *) action_vector = VECTOR_STATIC_INITIALIZER;
 	VECTOR_ENSURE_LOCAL(action_vector, QUEUE_CAPACITY(queue->data), 1);
 
+	if(queue->init)
+		queue->init(queue->init_param);
+
 	while(queue->running) {
 		struct s_action_data *act = NULL;
 		mutex->lock(queue->mutex);
@@ -287,6 +295,8 @@ static void *action_worker(void *param)
 
 		VECTOR_TRUNCATE(action_vector);
 	}
+	if(queue->final)
+		queue->final(queue->final_param);
 
 	VECTOR_CLEAR_LOCAL(action_vector);
 	InterlockedDecrement(&action_ready);
@@ -333,14 +343,20 @@ void action_queue_destroy(struct s_action_queue *queue)
  * Creates a new action queue.
  *
  * @param initial_capacity Initial queue length
- * @param collection ERS collection to be used when generating action caches
+ * @param collection       ERS collection to be used when generating action caches
+ * @param init             First function to be executed by action thread (can be NULL)
+ * @param init_param       Parameter to init
+ * @param final            Last function to be executed by action thread (can be NULL)
+ * @param final_param      Parameter to final
  * @return New queue
  * @retval NULL Failed to create new queue
  * Acquires collection lock
  * The collection must remain valid until thread shutdown
  **/
-struct s_action_queue *action_queue_create(int initial_capacity, struct ers_collection_t *collection)
-{
+struct s_action_queue *action_queue_create(int initial_capacity,
+	struct ers_collection_t *collection, void (*init) (void *param),
+	void *init_param, void (*final) (void *param), void *final_param
+) {
 	struct s_action_queue *queue = aCalloc(1,sizeof(*queue));
 	QUEUE_INIT_CAPACITY_SHARED(queue->data, initial_capacity);
 	queue->mutex = mutex->create();
@@ -366,6 +382,10 @@ struct s_action_queue *action_queue_create(int initial_capacity, struct ers_coll
 	mutex->unlock(action_queue_list_mutex);
 	l_list_index = queue->list_index;
 	queue->running = true;
+	queue->init = init;
+	queue->init_param = init_param;
+	queue->final = final;
+	queue->final_param = final_param;
 	queue->thread = thread->create("Action worker", action_worker, queue);
 	if(!queue->thread) {
 		ShowError("action_queue_create: Failed to create new thread\n");

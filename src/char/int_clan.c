@@ -63,12 +63,14 @@ static int inter_clan_kick_inactive_members(int clan_id, int kick_interval)
 		return 0;
 	}
 
+	struct Sql *sql_handle = inter->sql_handle_get();
+
 	// Kick Inactive members
-	if (SQL_ERROR == SQL->Query(inter->sql_handle, "UPDATE `%s` SET "
+	if (SQL_ERROR == SQL->Query(sql_handle, "UPDATE `%s` SET "
 		"`clan_id` = 0 WHERE `clan_id` = '%d' AND `online` = 0 AND `last_login` < %"PRId64,
 		char_db, clan_id, (int64)(time(NULL) - kick_interval)))
 	{
-		Sql_ShowDebug(inter->sql_handle);
+		Sql_ShowDebug(sql_handle);
 		return 0;
 	}
 
@@ -96,7 +98,8 @@ static int inter_clan_count_members(int clan_id, int kick_interval)
 		return 0;
 	}
 
-	stmt = SQL->StmtMalloc(inter->sql_handle);
+	struct Sql *sql_handle = inter->sql_handle_get();
+	stmt = SQL->StmtMalloc(sql_handle);
 	if (stmt == NULL) {
 		SqlStmt_ShowDebug(stmt);
 		return 0;

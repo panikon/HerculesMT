@@ -71,7 +71,7 @@ struct char_session_data {
 		 * still desired.
 		 * @see chclif_parse_rename
 		 **/
-		char new_name[NAME_LENGTH*2+1];
+		char new_name[ESC_NAME_LENGTH];
 		int char_id;
 	} *rename;
 };
@@ -293,6 +293,9 @@ struct char_interface {
 	bool enable_logs;   ///< Whether to log char server operations.
 
 	char db_path[256]; //< Database directory (db)
+
+	void (*action_init) (void *param);
+	void (*action_final) (void *param);
 
 	struct DBData (*create_online_char_data) (const struct DBKey_s *key, va_list args);
 	int (*db_setoffline) (const struct DBKey_s *key, struct DBData *data, va_list args);

@@ -142,6 +142,7 @@
     <ClInclude Include="..\src\char\int_rodex.h" />
     <ClInclude Include="..\src\char\packets_ch_struct.h" />
     <ClInclude Include="..\src\char\packets_hc_struct.h" />
+    <ClInclude Include="..\src\common\action.h" />
     <ClInclude Include="..\src\common\atomic.h" />
     <ClInclude Include="..\src\common\cbasetypes.h" />
     <ClInclude Include="..\src\common\conf.h" />
@@ -212,6 +213,7 @@
     <ClCompile Include="..\3rdparty\mt19937ar\mt19937ar.c" />
     <ClCompile Include="..\src\char\chclif.c" />
     <ClCompile Include="..\src\char\int_rodex.c" />
+    <ClCompile Include="..\src\common\action.c" />
     <ClCompile Include="..\src\common\conf.c" />
     <ClCompile Include="..\src\common\core.c" />
     <ClCompile Include="..\src\common\packets.c" />

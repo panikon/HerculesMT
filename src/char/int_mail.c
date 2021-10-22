@@ -52,6 +52,7 @@ static void inter_mail_fromsql(int char_id, struct mail_data *md)
 	struct mail_message *msg;
 	char *data;
 	StringBuf buf;
+	struct Sql *sql_handle = inter->sql_handle_get();
 
 	nullpo_retv(md);
 	md->amount = 0;
@@ -70,52 +71,52 @@ static void inter_mail_fromsql(int char_id, struct mail_data *md)
 	StrBuf->Printf(&buf, " FROM `%s` WHERE `dest_id`='%d' AND `status` < 3 ORDER BY `id` LIMIT %d",
 		mail_db, char_id, MAIL_MAX_INBOX + 1);
 
-	if (SQL_ERROR == SQL->QueryStr(inter->sql_handle, StrBuf->Value(&buf)))
-		Sql_ShowDebug(inter->sql_handle);
+	if (SQL_ERROR == SQL->QueryStr(sql_handle, StrBuf->Value(&buf)))
+		Sql_ShowDebug(sql_handle);
 
 	StrBuf->Destroy(&buf);
 
-	for (i = 0; i < MAIL_MAX_INBOX && SQL_SUCCESS == SQL->NextRow(inter->sql_handle); ++i )
+	for (i = 0; i < MAIL_MAX_INBOX && SQL_SUCCESS == SQL->NextRow(sql_handle); ++i )
 	{
 		struct item *item;
 		msg = &md->msg[i];
-		SQL->GetData(inter->sql_handle, 0, &data, NULL); msg->id = atoi(data);
-		SQL->GetData(inter->sql_handle, 1, &data, NULL); safestrncpy(msg->send_name, data, NAME_LENGTH);
-		SQL->GetData(inter->sql_handle, 2, &data, NULL); msg->send_id = atoi(data);
-		SQL->GetData(inter->sql_handle, 3, &data, NULL); safestrncpy(msg->dest_name, data, NAME_LENGTH);
-		SQL->GetData(inter->sql_handle, 4, &data, NULL); msg->dest_id = atoi(data);
-		SQL->GetData(inter->sql_handle, 5, &data, NULL); safestrncpy(msg->title, data, MAIL_TITLE_LENGTH);
-		SQL->GetData(inter->sql_handle, 6, &data, NULL); safestrncpy(msg->body, data, MAIL_BODY_LENGTH);
-		SQL->GetData(inter->sql_handle, 7, &data, NULL); msg->timestamp = atoi(data);
-		SQL->GetData(inter->sql_handle, 8, &data, NULL); msg->status = (mail_status)atoi(data);
-		SQL->GetData(inter->sql_handle, 9, &data, NULL); msg->zeny = atoi(data);
+		SQL->GetData(sql_handle, 0, &data, NULL); msg->id = atoi(data);
+		SQL->GetData(sql_handle, 1, &data, NULL); safestrncpy(msg->send_name, data, NAME_LENGTH);
+		SQL->GetData(sql_handle, 2, &data, NULL); msg->send_id = atoi(data);
+		SQL->GetData(sql_handle, 3, &data, NULL); safestrncpy(msg->dest_name, data, NAME_LENGTH);
+		SQL->GetData(sql_handle, 4, &data, NULL); msg->dest_id = atoi(data);
+		SQL->GetData(sql_handle, 5, &data, NULL); safestrncpy(msg->title, data, MAIL_TITLE_LENGTH);
+		SQL->GetData(sql_handle, 6, &data, NULL); safestrncpy(msg->body, data, MAIL_BODY_LENGTH);
+		SQL->GetData(sql_handle, 7, &data, NULL); msg->timestamp = atoi(data);
+		SQL->GetData(sql_handle, 8, &data, NULL); msg->status = (mail_status)atoi(data);
+		SQL->GetData(sql_handle, 9, &data, NULL); msg->zeny = atoi(data);
 		item = &msg->item;
-		SQL->GetData(inter->sql_handle,10, &data, NULL); item->amount = (short)atoi(data);
-		SQL->GetData(inter->sql_handle,11, &data, NULL); item->nameid = atoi(data);
-		SQL->GetData(inter->sql_handle,12, &data, NULL); item->refine = atoi(data);
-		SQL->GetData(inter->sql_handle,13, &data, NULL); item->attribute = atoi(data);
-		SQL->GetData(inter->sql_handle,14, &data, NULL); item->identify = atoi(data);
-		SQL->GetData(inter->sql_handle,15, &data, NULL); item->unique_id = strtoull(data, NULL, 10);
+		SQL->GetData(sql_handle,10, &data, NULL); item->amount = (short)atoi(data);
+		SQL->GetData(sql_handle,11, &data, NULL); item->nameid = atoi(data);
+		SQL->GetData(sql_handle,12, &data, NULL); item->refine = atoi(data);
+		SQL->GetData(sql_handle,13, &data, NULL); item->attribute = atoi(data);
+		SQL->GetData(sql_handle,14, &data, NULL); item->identify = atoi(data);
+		SQL->GetData(sql_handle,15, &data, NULL); item->unique_id = strtoull(data, NULL, 10);
 		item->expire_time = 0;
 		item->bound = 0;
 		/* Card Slots */
 		for (j = 0; j < MAX_SLOTS; j++) {
-			SQL->GetData(inter->sql_handle, 16 + j, &data, NULL);
+			SQL->GetData(sql_handle, 16 + j, &data, NULL);
 			item->card[j] = atoi(data);
 		}
 		/* Item Options */
 		for (j = 0; j < MAX_ITEM_OPTIONS; j++) {
-			SQL->GetData(inter->sql_handle, 16 + MAX_SLOTS + j * 2, &data, NULL);
+			SQL->GetData(sql_handle, 16 + MAX_SLOTS + j * 2, &data, NULL);
 			item->option[j].index = atoi(data);
-			SQL->GetData(inter->sql_handle, 17 + MAX_SLOTS + j * 2, &data, NULL);
+			SQL->GetData(sql_handle, 17 + MAX_SLOTS + j * 2, &data, NULL);
 			item->option[j].value = atoi(data);
 		}
 	}
 
-	md->full = ( SQL->NumRows(inter->sql_handle) > MAIL_MAX_INBOX );
+	md->full = ( SQL->NumRows(sql_handle) > MAIL_MAX_INBOX );
 
 	md->amount = i;
-	SQL->FreeResult(inter->sql_handle);
+	SQL->FreeResult(sql_handle);
 
 	md->unchecked = 0;
 	md->unread = 0;
@@ -124,8 +125,8 @@ static void inter_mail_fromsql(int char_id, struct mail_data *md)
 		msg = &md->msg[i];
 		if( msg->status == MAIL_NEW )
 		{
-			if ( SQL_ERROR == SQL->Query(inter->sql_handle, "UPDATE `%s` SET `status` = '%d' WHERE `id` = '%d'", mail_db, MAIL_UNREAD, msg->id) )
-				Sql_ShowDebug(inter->sql_handle);
+			if ( SQL_ERROR == SQL->Query(sql_handle, "UPDATE `%s` SET `status` = '%d' WHERE `id` = '%d'", mail_db, MAIL_UNREAD, msg->id) )
+				Sql_ShowDebug(sql_handle);
 
 			msg->status = MAIL_UNREAD;
 			md->unchecked++;
@@ -144,6 +145,7 @@ static int inter_mail_savemessage(struct mail_message *msg)
 	StringBuf buf;
 	struct SqlStmt *stmt;
 	int j;
+	struct Sql *sql_handle = inter->sql_handle_get();
 
 	nullpo_ret(msg);
 	// build message save query
@@ -162,7 +164,7 @@ static int inter_mail_savemessage(struct mail_message *msg)
 	StrBuf->AppendStr(&buf, ")");
 
 	// prepare and execute query
-	stmt = SQL->StmtMalloc(inter->sql_handle);
+	stmt = SQL->StmtMalloc(sql_handle);
 	if (SQL_SUCCESS != SQL->StmtPrepareStr(stmt, StrBuf->Value(&buf))
 	||  SQL_SUCCESS != SQL->StmtBindParam(stmt, 0, SQLDT_STRING, msg->send_name, strnlen(msg->send_name, NAME_LENGTH))
 	||  SQL_SUCCESS != SQL->StmtBindParam(stmt, 1, SQLDT_STRING, msg->dest_name, strnlen(msg->dest_name, NAME_LENGTH))
@@ -190,6 +192,7 @@ static bool inter_mail_loadmessage(int mail_id, struct mail_message *msg)
 {
 	int j;
 	StringBuf buf;
+	struct Sql *sql_handle = inter->sql_handle_get();
 	nullpo_ret(msg);
 	memset(msg, 0, sizeof(struct mail_message)); // Initialize data
 
@@ -202,49 +205,49 @@ static bool inter_mail_loadmessage(int mail_id, struct mail_message *msg)
 		StrBuf->Printf(&buf, ",`opt_idx%d`,`opt_val%d`", j, j);
 	StrBuf->Printf(&buf, " FROM `%s` WHERE `id` = '%d'", mail_db, mail_id);
 
-	if (SQL_ERROR == SQL->QueryStr(inter->sql_handle, StrBuf->Value(&buf))
-	 || SQL_SUCCESS != SQL->NextRow(inter->sql_handle)) {
-		Sql_ShowDebug(inter->sql_handle);
-		SQL->FreeResult(inter->sql_handle);
+	if (SQL_ERROR == SQL->QueryStr(sql_handle, StrBuf->Value(&buf))
+	 || SQL_SUCCESS != SQL->NextRow(sql_handle)) {
+		Sql_ShowDebug(sql_handle);
+		SQL->FreeResult(sql_handle);
 		StrBuf->Destroy(&buf);
 		return false;
 	} else {
 		char* data;
 
-		SQL->GetData(inter->sql_handle, 0, &data, NULL); msg->id = atoi(data);
-		SQL->GetData(inter->sql_handle, 1, &data, NULL); safestrncpy(msg->send_name, data, NAME_LENGTH);
-		SQL->GetData(inter->sql_handle, 2, &data, NULL); msg->send_id = atoi(data);
-		SQL->GetData(inter->sql_handle, 3, &data, NULL); safestrncpy(msg->dest_name, data, NAME_LENGTH);
-		SQL->GetData(inter->sql_handle, 4, &data, NULL); msg->dest_id = atoi(data);
-		SQL->GetData(inter->sql_handle, 5, &data, NULL); safestrncpy(msg->title, data, MAIL_TITLE_LENGTH);
-		SQL->GetData(inter->sql_handle, 6, &data, NULL); safestrncpy(msg->body, data, MAIL_BODY_LENGTH);
-		SQL->GetData(inter->sql_handle, 7, &data, NULL); msg->timestamp = atoi(data);
-		SQL->GetData(inter->sql_handle, 8, &data, NULL); msg->status = (mail_status)atoi(data);
-		SQL->GetData(inter->sql_handle, 9, &data, NULL); msg->zeny = atoi(data);
-		SQL->GetData(inter->sql_handle,10, &data, NULL); msg->item.amount = (short)atoi(data);
-		SQL->GetData(inter->sql_handle,11, &data, NULL); msg->item.nameid = atoi(data);
-		SQL->GetData(inter->sql_handle,12, &data, NULL); msg->item.refine = atoi(data);
-		SQL->GetData(inter->sql_handle,13, &data, NULL); msg->item.attribute = atoi(data);
-		SQL->GetData(inter->sql_handle,14, &data, NULL); msg->item.identify = atoi(data);
-		SQL->GetData(inter->sql_handle,15, &data, NULL); msg->item.unique_id = strtoull(data, NULL, 10);
+		SQL->GetData(sql_handle, 0, &data, NULL); msg->id = atoi(data);
+		SQL->GetData(sql_handle, 1, &data, NULL); safestrncpy(msg->send_name, data, NAME_LENGTH);
+		SQL->GetData(sql_handle, 2, &data, NULL); msg->send_id = atoi(data);
+		SQL->GetData(sql_handle, 3, &data, NULL); safestrncpy(msg->dest_name, data, NAME_LENGTH);
+		SQL->GetData(sql_handle, 4, &data, NULL); msg->dest_id = atoi(data);
+		SQL->GetData(sql_handle, 5, &data, NULL); safestrncpy(msg->title, data, MAIL_TITLE_LENGTH);
+		SQL->GetData(sql_handle, 6, &data, NULL); safestrncpy(msg->body, data, MAIL_BODY_LENGTH);
+		SQL->GetData(sql_handle, 7, &data, NULL); msg->timestamp = atoi(data);
+		SQL->GetData(sql_handle, 8, &data, NULL); msg->status = (mail_status)atoi(data);
+		SQL->GetData(sql_handle, 9, &data, NULL); msg->zeny = atoi(data);
+		SQL->GetData(sql_handle,10, &data, NULL); msg->item.amount = (short)atoi(data);
+		SQL->GetData(sql_handle,11, &data, NULL); msg->item.nameid = atoi(data);
+		SQL->GetData(sql_handle,12, &data, NULL); msg->item.refine = atoi(data);
+		SQL->GetData(sql_handle,13, &data, NULL); msg->item.attribute = atoi(data);
+		SQL->GetData(sql_handle,14, &data, NULL); msg->item.identify = atoi(data);
+		SQL->GetData(sql_handle,15, &data, NULL); msg->item.unique_id = strtoull(data, NULL, 10);
 		msg->item.expire_time = 0;
 		msg->item.bound = 0;
 		/* Card Slots */
 		for (j = 0; j < MAX_SLOTS; j++) {
-			SQL->GetData(inter->sql_handle,16 + j, &data, NULL);
+			SQL->GetData(sql_handle,16 + j, &data, NULL);
 			msg->item.card[j] = atoi(data);
 		}
 		/* Item Options */
 		for (j = 0 ; j < MAX_ITEM_OPTIONS; j++) {
-			SQL->GetData(inter->sql_handle, 16 + MAX_SLOTS + j * 2, &data, NULL);
+			SQL->GetData(sql_handle, 16 + MAX_SLOTS + j * 2, &data, NULL);
 			msg->item.option[j].index = atoi(data);
-			SQL->GetData(inter->sql_handle, 17 + MAX_SLOTS + j * 2, &data, NULL);
+			SQL->GetData(sql_handle, 17 + MAX_SLOTS + j * 2, &data, NULL);
 			msg->item.option[j].value = atoi(data);
 		}
 	}
 
 	StrBuf->Destroy(&buf);
-	SQL->FreeResult(inter->sql_handle);
+	SQL->FreeResult(sql_handle);
 
 	return true;
 }
@@ -254,8 +257,9 @@ static bool inter_mail_loadmessage(int mail_id, struct mail_message *msg)
  **/
 static bool inter_mail_mark_read(int mail_id)
 {
-	if (SQL_ERROR == SQL->Query(inter->sql_handle, "UPDATE `%s` SET `status` = '%d' WHERE `id` = '%d'", mail_db, MAIL_READ, mail_id)) {
-		Sql_ShowDebug(inter->sql_handle);
+	struct Sql *sql_handle = inter->sql_handle_get();
+	if (SQL_ERROR == SQL->Query(sql_handle, "UPDATE `%s` SET `status` = '%d' WHERE `id` = '%d'", mail_db, MAIL_READ, mail_id)) {
+		Sql_ShowDebug(sql_handle);
 		return false;
 	}
 	return true;
@@ -268,6 +272,7 @@ static bool inter_mail_DeleteAttach(int mail_id)
 {
 	StringBuf buf;
 	int i;
+	struct Sql *sql_handle = inter->sql_handle_get();
 
 	StrBuf->Init(&buf);
 	StrBuf->Printf(&buf, "UPDATE `%s` SET `zeny` = '0', `nameid` = '0', `amount` = '0', `refine` = '0', `attribute` = '0', `identify` = '0'", mail_db);
@@ -277,8 +282,8 @@ static bool inter_mail_DeleteAttach(int mail_id)
 		StrBuf->Printf(&buf, ", `opt_idx%d` = '0', `opt_val%d` = '0'", i, i);
 	StrBuf->Printf(&buf, " WHERE `id` = '%d'", mail_id);
 
-	if (SQL_ERROR == SQL->QueryStr(inter->sql_handle, StrBuf->Value(&buf))) {
-		Sql_ShowDebug(inter->sql_handle);
+	if (SQL_ERROR == SQL->QueryStr(sql_handle, StrBuf->Value(&buf))) {
+		Sql_ShowDebug(sql_handle);
 		StrBuf->Destroy(&buf);
 
 		return false;
@@ -326,11 +331,12 @@ static bool inter_mail_get_attachment(int char_id, int mail_id, struct mail_mess
  **/
 static bool inter_mail_delete(int char_id, int mail_id)
 {
-	if(SQL_ERROR == SQL->Query(inter->sql_handle,
+	struct Sql *sql_handle = inter->sql_handle_get();
+	if(SQL_ERROR == SQL->Query(sql_handle,
 		"DELETE FROM `%s` WHERE `id` = '%d' AND `dest_id` = '%d'",
 		mail_db, mail_id, char_id)
 	) {
-		Sql_ShowDebug(inter->sql_handle);
+		Sql_ShowDebug(sql_handle);
 		return false;
 	}
 	return true;
@@ -344,6 +350,7 @@ static bool inter_mail_delete(int char_id, int mail_id)
 static bool inter_mail_return_message(int char_id, int mail_id, int *new_mail)
 {
 	struct mail_message msg;
+	struct Sql *sql_handle = inter->sql_handle_get();
 	nullpo_retr(false, new_mail);
 
 	if (!inter_mail->loadmessage(mail_id, &msg))
@@ -352,8 +359,8 @@ static bool inter_mail_return_message(int char_id, int mail_id, int *new_mail)
 	if (msg.dest_id != char_id)
 		return false;
 
-	if (SQL_ERROR == SQL->Query(inter->sql_handle, "DELETE FROM `%s` WHERE `id` = '%d'", mail_db, mail_id)) {
-		Sql_ShowDebug(inter->sql_handle);
+	if (SQL_ERROR == SQL->Query(sql_handle, "DELETE FROM `%s` WHERE `id` = '%d'", mail_db, mail_id)) {
+		Sql_ShowDebug(sql_handle);
 	} else {
 		char temp_[MAIL_TITLE_LENGTH];
 
@@ -380,24 +387,25 @@ static bool inter_mail_return_message(int char_id, int mail_id, int *new_mail)
 
 static bool inter_mail_send(int account_id, struct mail_message *msg)
 {
-	char esc_name[NAME_LENGTH*2+1];
+	char esc_name[ESC_NAME_LENGTH];
+	struct Sql *sql_handle = inter->sql_handle_get();
 
 	nullpo_retr(false, msg);
 
 	// Try to find the Dest Char by Name
-	SQL->EscapeStringLen(inter->sql_handle, esc_name, msg->dest_name, strnlen(msg->dest_name, NAME_LENGTH));
-	if (SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT `account_id`, `char_id` FROM `%s` WHERE `name` = '%s'", char_db, esc_name)) {
-		Sql_ShowDebug(inter->sql_handle);
-	} else if (SQL_SUCCESS == SQL->NextRow(inter->sql_handle)) {
+	SQL->EscapeStringLen(sql_handle, esc_name, msg->dest_name, strnlen(msg->dest_name, NAME_LENGTH));
+	if (SQL_ERROR == SQL->Query(sql_handle, "SELECT `account_id`, `char_id` FROM `%s` WHERE `name` = '%s'", char_db, esc_name)) {
+		Sql_ShowDebug(sql_handle);
+	} else if (SQL_SUCCESS == SQL->NextRow(sql_handle)) {
 		char *data;
-		SQL->GetData(inter->sql_handle, 0, &data, NULL);
+		SQL->GetData(sql_handle, 0, &data, NULL);
 		if (atoi(data) != account_id) {
 			// Cannot send mail to char in the same account
-			SQL->GetData(inter->sql_handle, 1, &data, NULL);
+			SQL->GetData(sql_handle, 1, &data, NULL);
 			msg->dest_id = atoi(data);
 		}
 	}
-	SQL->FreeResult(inter->sql_handle);
+	SQL->FreeResult(sql_handle);
 	msg->status = MAIL_NEW;
 
 	if (msg->dest_id > 0)

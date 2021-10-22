@@ -46,7 +46,11 @@ static int mysql_reconnect_count = 1;
 static struct sql_interface sql_s;
 struct sql_interface *SQL;
 
-/// Sql handle
+/**
+ * Sql handle
+ *
+ * Multiple thread access must be synchronized.
+ **/
 struct Sql {
 	StringBuf buf;
 	MYSQL handle;
@@ -232,6 +236,7 @@ static int Sql_P_Keepalive(struct Sql *self)
  * @param self     Current sql connection (can be NULL)
  * @param out_to   Buffer of the encoded string, the size of this buffer must be from_len*2+1
  * @param from     Buffer to be encoded
+ * @link https://mariadb.com/kb/en/mysql_real_escape_string/
  **/
 static size_t Sql_EscapeString(struct Sql *self, char *out_to, const char *from)
 {
@@ -248,6 +253,7 @@ static size_t Sql_EscapeString(struct Sql *self, char *out_to, const char *from)
  * @param out_to   Buffer of the encoded string, the size of this buffer must be from_len*2+1
  * @param from     Buffer to be encoded
  * @param from_len Length of from
+ * @link https://mariadb.com/kb/en/mysql_real_escape_string/
  **/
 static size_t Sql_EscapeStringLen(struct Sql *self, char *out_to, const char *from, size_t from_len)
 {

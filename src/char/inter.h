@@ -35,7 +35,11 @@ struct config_t; // common/conf.h
  **/
 struct inter_interface {
 	bool enable_logs; ///< Whether to log inter-server operations.
-	struct Sql *sql_handle;
+
+	struct Sql *(*sql_handle_get) (void);
+	void (*sql_handle_close) (void);
+	void (*sql_handle_open) (void);
+
 	const char* (*msg_txt) (int msg_number);
 	bool (*msg_config_read) (const char *cfg_name, bool allow_override);
 	void (*do_final_msg) (void);
@@ -47,7 +51,8 @@ struct inter_interface {
 	int (*accreg_fromsql) (int account_id,int char_id, struct socket_data *session, int type);
 	int (*vlog) (char* fmt, va_list ap);
 	int (*log) (char* fmt, ...);
-	int (*init_sql) (const char *file);
+	void (*load_config) (const char *file);
+	void (*init_sql) (void);
 	int (*mapif_init) (struct socket_data *session);
 	void (*final) (void);
 	bool (*config_read) (const char *filename, bool imported);

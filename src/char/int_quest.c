@@ -57,11 +57,12 @@ static struct quest *inter_quest_fromsql(int char_id, int *count)
 	int i;
 	int sqlerror = SQL_SUCCESS;
 	int quest_state = 0;
+	struct Sql *sql_handle = inter->sql_handle_get();
 
 	if (!count)
 		return NULL;
 
-	stmt = SQL->StmtMalloc(inter->sql_handle);
+	stmt = SQL->StmtMalloc(sql_handle);
 	if (stmt == NULL) {
 		SqlStmt_ShowDebug(stmt);
 		*count = 0;
@@ -131,8 +132,9 @@ static struct quest *inter_quest_fromsql(int char_id, int *count)
  */
 static bool inter_quest_delete(int char_id, int quest_id)
 {
-	if (SQL_ERROR == SQL->Query(inter->sql_handle, "DELETE FROM `%s` WHERE `quest_id` = '%d' AND `char_id` = '%d'", quest_db, quest_id, char_id)) {
-		Sql_ShowDebug(inter->sql_handle);
+	struct Sql *sql_handle = inter->sql_handle_get();
+	if (SQL_ERROR == SQL->Query(sql_handle, "DELETE FROM `%s` WHERE `quest_id` = '%d' AND `char_id` = '%d'", quest_db, quest_id, char_id)) {
+		Sql_ShowDebug(sql_handle);
 		return false;
 	}
 
@@ -150,6 +152,7 @@ static bool inter_quest_add(int char_id, struct quest qd)
 {
 	StringBuf buf;
 	int i;
+	struct Sql *sql_handle = inter->sql_handle_get();
 
 	StrBuf->Init(&buf);
 	StrBuf->Printf(&buf, "INSERT INTO `%s`(`quest_id`, `char_id`, `state`, `time`", quest_db);
@@ -161,8 +164,8 @@ static bool inter_quest_add(int char_id, struct quest qd)
 		StrBuf->Printf(&buf, ", '%d'", qd.count[i]);
 	}
 	StrBuf->AppendStr(&buf, ")");
-	if (SQL_ERROR == SQL->QueryStr(inter->sql_handle, StrBuf->Value(&buf))) {
-		Sql_ShowDebug(inter->sql_handle);
+	if (SQL_ERROR == SQL->QueryStr(sql_handle, StrBuf->Value(&buf))) {
+		Sql_ShowDebug(sql_handle);
 		StrBuf->Destroy(&buf);
 		return false;
 	}
@@ -182,6 +185,7 @@ static bool inter_quest_update(int char_id, struct quest qd)
 {
 	StringBuf buf;
 	int i;
+	struct Sql *sql_handle = inter->sql_handle_get();
 
 	StrBuf->Init(&buf);
 	StrBuf->Printf(&buf, "UPDATE `%s` SET `state`='%u', `time`='%u'", quest_db, qd.state, qd.time);
@@ -190,8 +194,8 @@ static bool inter_quest_update(int char_id, struct quest qd)
 	}
 	StrBuf->Printf(&buf, " WHERE `quest_id` = '%d' AND `char_id` = '%d'", qd.quest_id, char_id);
 
-	if (SQL_ERROR == SQL->QueryStr(inter->sql_handle, StrBuf->Value(&buf))) {
-		Sql_ShowDebug(inter->sql_handle);
+	if (SQL_ERROR == SQL->QueryStr(sql_handle, StrBuf->Value(&buf))) {
+		Sql_ShowDebug(sql_handle);
 		StrBuf->Destroy(&buf);
 		return false;
 	}

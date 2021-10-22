@@ -54,6 +54,7 @@ static int inter_achievement_tosql(int char_id, struct char_achievements *cp, co
 {
 	StringBuf buf;
 	int i = 0, rows = 0;
+	struct Sql *sql_handle = inter->sql_handle_get();
 
 	nullpo_ret(cp);
 	nullpo_ret(p);
@@ -89,8 +90,8 @@ static int inter_achievement_tosql(int char_id, struct char_achievements *cp, co
 		}
 	}
 
-	if (rows > 0 && SQL_ERROR == SQL->QueryStr(inter->sql_handle, StrBuf->Value(&buf))) {
-		Sql_ShowDebug(inter->sql_handle);
+	if (rows > 0 && SQL_ERROR == SQL->QueryStr(sql_handle, StrBuf->Value(&buf))) {
+		Sql_ShowDebug(sql_handle);
 		StrBuf->Destroy(&buf); // Destroy the buffer.
 		return 0;
 	}
@@ -120,6 +121,7 @@ static bool inter_achievement_fromsql(int char_id, struct char_achievements *cp)
 	StringBuf buf;
 	char *data;
 	int i = 0, num_rows = 0;
+	struct Sql *sql_handle = inter->sql_handle_get();
 
 	nullpo_ret(cp);
 
@@ -132,27 +134,27 @@ static bool inter_achievement_fromsql(int char_id, struct char_achievements *cp)
 		StrBuf->Printf(&buf, ", `obj_%d`", i);
 	StrBuf->Printf(&buf, " FROM `%s` WHERE `char_id` = '%d' ORDER BY `ach_id`", char_achievement_db, char_id);
 
-	if (SQL_ERROR == SQL->QueryStr(inter->sql_handle, StrBuf->Value(&buf))) {
-		Sql_ShowDebug(inter->sql_handle);
+	if (SQL_ERROR == SQL->QueryStr(sql_handle, StrBuf->Value(&buf))) {
+		Sql_ShowDebug(sql_handle);
 		StrBuf->Destroy(&buf);
 		return false;
 	}
 
 	VECTOR_CLEAR(*cp);
 
-	if ((num_rows = (int) SQL->NumRows(inter->sql_handle)) != 0) {
+	if ((num_rows = (int) SQL->NumRows(sql_handle)) != 0) {
 		int j = 0;
 
 		VECTOR_ENSURE(*cp, num_rows, 1);
 
-		for (i = 0; i < num_rows && SQL_SUCCESS == SQL->NextRow(inter->sql_handle); i++) {
+		for (i = 0; i < num_rows && SQL_SUCCESS == SQL->NextRow(sql_handle); i++) {
 			struct achievement t_ach = { 0 };
-			SQL->GetData(inter->sql_handle, 0, &data, NULL); t_ach.id = atoi(data);
-			SQL->GetData(inter->sql_handle, 1, &data, NULL); t_ach.completed_at = atoi(data);
-			SQL->GetData(inter->sql_handle, 2, &data, NULL); t_ach.rewarded_at = atoi(data);
+			SQL->GetData(sql_handle, 0, &data, NULL); t_ach.id = atoi(data);
+			SQL->GetData(sql_handle, 1, &data, NULL); t_ach.completed_at = atoi(data);
+			SQL->GetData(sql_handle, 2, &data, NULL); t_ach.rewarded_at = atoi(data);
 			/* Objectives */
 			for (j = 0; j < MAX_ACHIEVEMENT_OBJECTIVES; j++) {
-				SQL->GetData(inter->sql_handle, j + 3, &data, NULL);
+				SQL->GetData(sql_handle, j + 3, &data, NULL);
 				t_ach.objective[j] = atoi(data);
 			}
 			/* Add Entry */
@@ -160,7 +162,7 @@ static bool inter_achievement_fromsql(int char_id, struct char_achievements *cp)
 		}
 	}
 
-	SQL->FreeResult(inter->sql_handle);
+	SQL->FreeResult(sql_handle);
 
 	StrBuf->Destroy(&buf);
 

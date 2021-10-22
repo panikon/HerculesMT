@@ -150,10 +150,11 @@ static void mapif_server_reset(struct mmo_map_server *server)
 		WBUFW(buf, 2) = j * 4 + 10;
 		mapif->sendallwos(server, buf, WBUFW(buf, 2));
 	}
-	if (SQL_ERROR == SQL->Query(inter->sql_handle, "DELETE FROM `%s` WHERE `index`='%d'",
+	struct Sql *sql_handle = inter->sql_handle_get();
+	if (SQL_ERROR == SQL->Query(sql_handle, "DELETE FROM `%s` WHERE `index`='%d'",
 		ragsrvinfo_db, server->session->id)
 	)
-		Sql_ShowDebug(inter->sql_handle);
+		Sql_ShowDebug(sql_handle);
 	/**
 	 * When setting these chars to disconnected in our database the login server will
 	 * be notified via 0x272d WA_ACCOUNT_LIST (loginif->account_list)
@@ -197,7 +198,9 @@ static struct mmo_map_server *mapif_on_connect(struct socket_data *session, uint
 	mutex->lock(chr->action_information_mutex);
 	struct s_action_information *data = linkdb_search(&chr->action_information, NULL);
 	if(!data) { // Create a new action queue
-		struct s_action_queue *queue = action->queue_create(10, chr->ers_collection);
+		struct s_action_queue *queue = action->queue_create(10, chr->ers_collection,
+			chr->action_init, NULL, chr->action_final, NULL);
+
 		data = aMalloc(sizeof(*data));
 		data->index = action->queue_get_index(queue);
 		data->server = server;
@@ -3470,7 +3473,7 @@ static void mapif_parse_NameChangeRequest(struct s_receive_action_data *act, str
 	const char *name_  = RFIFOP(act, 15);
 
 	char name[NAME_LENGTH];
-	char esc_name[NAME_LENGTH*2+1];
+	char esc_name[ESC_NAME_LENGTH];
 	uint8 result;
 
 	safestrncpy(name, name_, NAME_LENGTH);

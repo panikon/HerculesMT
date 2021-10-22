@@ -51,15 +51,16 @@ struct inter_pet_interface *inter_pet;
  **/
 static uint8 inter_pet_rename(int pet_id, const char *esc_name)
 {
+	struct Sql *sql_handle = inter->sql_handle_get();
 	int sql_result = 
-	SQL->Query(inter->sql_handle,
+	SQL->Query(sql_handle,
 		"UPDATE `%s` SET `name` = '%s', `rename_flag`='1' WHERE `pet_id` = '%d' AND `rename_flag` = '0'",
 		pet_db, esc_name, pet_id);
 	if(SQL_ERROR == sql_result) {
-		Sql_ShowDebug(inter->sql_handle);
+		Sql_ShowDebug(sql_handle);
 		return 4; // Not found
 	}
-	if(SQL->NumAffectedRows(inter->sql_handle) <= 0)
+	if(SQL->NumAffectedRows(sql_handle) <= 0)
 		return 3; // Already renamed
 
 	return 0;
@@ -80,8 +81,9 @@ static uint8 inter_pet_rename(int pet_id, const char *esc_name)
 static int inter_pet_tosql(const struct s_pet *p)
 {
 	nullpo_ret(p);
+	struct Sql *sql_handle = inter->sql_handle_get();
 
-	struct SqlStmt *stmt = SQL->StmtMalloc(inter->sql_handle);
+	struct SqlStmt *stmt = SQL->StmtMalloc(sql_handle);
 
 	if (stmt == NULL) {
 		SqlStmt_ShowDebug(stmt);
@@ -115,7 +117,7 @@ static int inter_pet_tosql(const struct s_pet *p)
 			return 0;
 		}
 
-		pet_id = (int)SQL->LastInsertId(inter->sql_handle);
+		pet_id = (int)SQL->LastInsertId(sql_handle);
 	} else { // Update pet.
 		const char *query = "UPDATE `%s` SET "
 			"`class`=?, `name`=?, `account_id`=?, `char_id`=?, `level`=?, `egg_id`=?, `equip`=?, "
@@ -166,7 +168,8 @@ static int inter_pet_tosql(const struct s_pet *p)
  **/
 static bool inter_pet_fromsql(int pet_id, struct s_pet *p)
 {
-	struct SqlStmt *stmt = SQL->StmtMalloc(inter->sql_handle);
+	struct Sql *sql_handle = inter->sql_handle_get();
+	struct SqlStmt *stmt = SQL->StmtMalloc(sql_handle);
 
 	if (stmt == NULL) {
 		SqlStmt_ShowDebug(stmt);
@@ -240,12 +243,13 @@ static void inter_pet_sql_final(void)
  **/
 static bool inter_pet_delete(int pet_id)
 {
+	struct Sql *sql_handle = inter->sql_handle_get();
 	ShowInfo("delete pet request: %d...\n",pet_id);
 
-	if(SQL_ERROR == SQL->Query(inter->sql_handle,
+	if(SQL_ERROR == SQL->Query(sql_handle,
 		"DELETE FROM `%s` WHERE `pet_id`='%d'", pet_db, pet_id)
 	) {
-		Sql_ShowDebug(inter->sql_handle);
+		Sql_ShowDebug(sql_handle);
 		return false;
 	}
 	return true;

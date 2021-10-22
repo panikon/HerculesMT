@@ -72,7 +72,7 @@ static unsigned long loginlog_failedattempts(uint32 ip, unsigned int minutes)
 // TODO: add an enum of rcode values
 static void loginlog_log(uint32 ip, const char *username, int rcode, const char *message)
 {
-	char esc_username[NAME_LENGTH*2+1];
+	char esc_username[ESC_NAME_LENGTH];
 	char esc_message[255*2+1];
 	int retcode;
 

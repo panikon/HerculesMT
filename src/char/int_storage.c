@@ -50,6 +50,7 @@ static int inter_storage_tosql(int account_id, const struct storage_data *p)
 	int total_changes = 0;
 	struct storage_data cp = { 0 };
 	StringBuf buf;
+	struct Sql *sql_handle = inter->sql_handle_get();
 
 	nullpo_ret(p);
 
@@ -102,8 +103,8 @@ static int inter_storage_tosql(int account_id, const struct storage_data *p)
 			}
 		}
 
-		if (total_updates > 0 && SQL_ERROR == SQL->QueryStr(inter->sql_handle, StrBuf->Value(&buf)))
-			Sql_ShowDebug(inter->sql_handle);
+		if (total_updates > 0 && SQL_ERROR == SQL->QueryStr(sql_handle, StrBuf->Value(&buf)))
+			Sql_ShowDebug(sql_handle);
 
 		/**
 		 * Handle deletions, if any.
@@ -116,8 +117,8 @@ static int inter_storage_tosql(int account_id, const struct storage_data *p)
 			}
 			StrBuf->AppendStr(&buf, ");");
 
-			if (SQL_ERROR == SQL->QueryStr(inter->sql_handle, StrBuf->Value(&buf)))
-				Sql_ShowDebug(inter->sql_handle);
+			if (SQL_ERROR == SQL->QueryStr(sql_handle, StrBuf->Value(&buf)))
+				Sql_ShowDebug(sql_handle);
 		}
 	}
 
@@ -153,8 +154,8 @@ static int inter_storage_tosql(int account_id, const struct storage_data *p)
 		total_inserts++;
 	}
 
-	if (total_inserts > 0 && SQL_ERROR == SQL->QueryStr(inter->sql_handle, StrBuf->Value(&buf)))
-		Sql_ShowDebug(inter->sql_handle);
+	if (total_inserts > 0 && SQL_ERROR == SQL->QueryStr(sql_handle, StrBuf->Value(&buf)))
+		Sql_ShowDebug(sql_handle);
 
 	StrBuf->Destroy(&buf);
 	VECTOR_CLEAR(cp.item);
@@ -172,6 +173,7 @@ static int inter_storage_fromsql(int account_id, struct storage_data *p)
 	int i;
 	int j;
 	int num_rows = 0;
+	struct Sql *sql_handle = inter->sql_handle_get();
 
 	nullpo_ret(p);
 
@@ -187,39 +189,39 @@ static int inter_storage_fromsql(int account_id, struct storage_data *p)
 		StrBuf->Printf(&buf, ",`opt_idx%d`,`opt_val%d`", j, j);
 	StrBuf->Printf(&buf, " FROM `%s` WHERE `account_id`='%d' ORDER BY `nameid`", storage_db, account_id);
 
-	if (SQL_ERROR == SQL->QueryStr(inter->sql_handle, StrBuf->Value(&buf)))
-		Sql_ShowDebug(inter->sql_handle);
+	if (SQL_ERROR == SQL->QueryStr(sql_handle, StrBuf->Value(&buf)))
+		Sql_ShowDebug(sql_handle);
 
 	StrBuf->Destroy(&buf);
 
-	if ((num_rows = (int)SQL->NumRows(inter->sql_handle)) != 0) {
+	if ((num_rows = (int)SQL->NumRows(sql_handle)) != 0) {
 
 		VECTOR_ENSURE(p->item, num_rows > MAX_STORAGE ? MAX_STORAGE : num_rows, 1);
 
-		for (i = 0; i < MAX_STORAGE && SQL_SUCCESS == SQL->NextRow(inter->sql_handle); ++i) {
+		for (i = 0; i < MAX_STORAGE && SQL_SUCCESS == SQL->NextRow(sql_handle); ++i) {
 			struct item item = { 0 };
-			SQL->GetData(inter->sql_handle, 0, &data, NULL); item.id = atoi(data);
-			SQL->GetData(inter->sql_handle, 1, &data, NULL); item.nameid = atoi(data);
-			SQL->GetData(inter->sql_handle, 2, &data, NULL); item.amount = atoi(data);
-			SQL->GetData(inter->sql_handle, 3, &data, NULL); item.equip = atoi(data);
-			SQL->GetData(inter->sql_handle, 4, &data, NULL); item.identify = atoi(data);
-			SQL->GetData(inter->sql_handle, 5, &data, NULL); item.refine = atoi(data);
-			SQL->GetData(inter->sql_handle, 6, &data, NULL); item.attribute = atoi(data);
-			SQL->GetData(inter->sql_handle, 7, &data, NULL); item.expire_time = (unsigned int)atoi(data);
-			SQL->GetData(inter->sql_handle, 8, &data, NULL); item.bound = atoi(data);
-			SQL->GetData(inter->sql_handle, 9, &data, NULL); item.unique_id = strtoull(data, NULL, 10);
+			SQL->GetData(sql_handle, 0, &data, NULL); item.id = atoi(data);
+			SQL->GetData(sql_handle, 1, &data, NULL); item.nameid = atoi(data);
+			SQL->GetData(sql_handle, 2, &data, NULL); item.amount = atoi(data);
+			SQL->GetData(sql_handle, 3, &data, NULL); item.equip = atoi(data);
+			SQL->GetData(sql_handle, 4, &data, NULL); item.identify = atoi(data);
+			SQL->GetData(sql_handle, 5, &data, NULL); item.refine = atoi(data);
+			SQL->GetData(sql_handle, 6, &data, NULL); item.attribute = atoi(data);
+			SQL->GetData(sql_handle, 7, &data, NULL); item.expire_time = (unsigned int)atoi(data);
+			SQL->GetData(sql_handle, 8, &data, NULL); item.bound = atoi(data);
+			SQL->GetData(sql_handle, 9, &data, NULL); item.unique_id = strtoull(data, NULL, 10);
 
 			/* Card Slots */
 			for (j = 0; j < MAX_SLOTS; ++j) {
-				SQL->GetData(inter->sql_handle, 10 + j, &data, NULL);
+				SQL->GetData(sql_handle, 10 + j, &data, NULL);
 				item.card[j] = atoi(data);
 			}
 
 			/* Item Options */
 			for (j = 0; j < MAX_ITEM_OPTIONS; ++j) {
-				SQL->GetData(inter->sql_handle, 10 + MAX_SLOTS + j * 2, &data, NULL);
+				SQL->GetData(sql_handle, 10 + MAX_SLOTS + j * 2, &data, NULL);
 				item.option[j].index = atoi(data);
-				SQL->GetData(inter->sql_handle, 11 + MAX_SLOTS + j * 2, &data, NULL);
+				SQL->GetData(sql_handle, 11 + MAX_SLOTS + j * 2, &data, NULL);
 				item.option[j].value = atoi(data);
 			}
 
@@ -227,7 +229,7 @@ static int inter_storage_fromsql(int account_id, struct storage_data *p)
 		}
 	}
 
-	SQL->FreeResult(inter->sql_handle);
+	SQL->FreeResult(sql_handle);
 
 	ShowInfo("storage load complete from DB - id: %d (total: %d)\n", account_id, VECTOR_LENGTH(p->item));
 
@@ -249,16 +251,17 @@ static bool inter_storage_guild_storage_tosql(int guild_id, const struct guild_s
 {
 	nullpo_retr(1, gstor);
 	Assert_retr(1, guild_id == gstor->guild_id);
+	struct Sql *sql_handle = inter->sql_handle_get();
 
-	if (SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT `guild_id` FROM `%s` WHERE `guild_id`='%d'", guild_db, guild_id)) {
-		Sql_ShowDebug(inter->sql_handle);
+	if (SQL_ERROR == SQL->Query(sql_handle, "SELECT `guild_id` FROM `%s` WHERE `guild_id`='%d'", guild_db, guild_id)) {
+		Sql_ShowDebug(sql_handle);
 		return false;
-	} else if (SQL->NumRows(inter->sql_handle) < 1) {
+	} else if (SQL->NumRows(sql_handle) < 1) {
 		// guild doesn't exist
-		SQL->FreeResult(inter->sql_handle);
+		SQL->FreeResult(sql_handle);
 		return false;
 	}
-	SQL->FreeResult(inter->sql_handle);
+	SQL->FreeResult(sql_handle);
 
 	int err_count = chr->memitemdata_to_sql(gstor->items.data, gstor->items.capacity, gstor->guild_id, TABLE_GUILD_STORAGE);
 	if (err_count != 0) {
@@ -287,14 +290,15 @@ static int inter_storage_guild_storage_fromsql(int guild_id, struct guild_storag
 	StringBuf buf;
 	char *data;
 	int i, j;
+	struct Sql *sql_handle = inter->sql_handle_get();
 
 	gstor->guild_id = guild_id;
 
-	if (SQL_ERROR == SQL->Query(inter->sql_handle, "SELECT `guild_id` FROM `%s` WHERE `guild_id`='%d'", guild_db, guild_id)) {
-		Sql_ShowDebug(inter->sql_handle);
+	if (SQL_ERROR == SQL->Query(sql_handle, "SELECT `guild_id` FROM `%s` WHERE `guild_id`='%d'", guild_db, guild_id)) {
+		Sql_ShowDebug(sql_handle);
 		return 1;
 	}
-	SQL->FreeResult(inter->sql_handle);
+	SQL->FreeResult(sql_handle);
 
 	// storage {`guild_id`/`id`/`nameid`/`amount`/`equip`/`identify`/`refine`/`attribute`/`card0`/`card1`/`card2`/`card3`}
 	StrBuf->Init(&buf);
@@ -305,43 +309,43 @@ static int inter_storage_guild_storage_fromsql(int guild_id, struct guild_storag
 		StrBuf->Printf(&buf, ", `opt_idx%d`, `opt_val%d`", j, j);
 	StrBuf->Printf(&buf, " FROM `%s` WHERE `guild_id`='%d' ORDER BY `nameid`", guild_storage_db, guild_id);
 
-	if( SQL_ERROR == SQL->QueryStr(inter->sql_handle, StrBuf->Value(&buf)))
-		Sql_ShowDebug(inter->sql_handle);
+	if( SQL_ERROR == SQL->QueryStr(sql_handle, StrBuf->Value(&buf)))
+		Sql_ShowDebug(sql_handle);
 
 	StrBuf->Destroy(&buf);
-	gstor->items.capacity = (int)SQL->NumRows(inter->sql_handle);
+	gstor->items.capacity = (int)SQL->NumRows(sql_handle);
 	if (gstor->items.capacity > 0)
 		CREATE(gstor->items.data, struct item, gstor->items.capacity);
 	else
 		gstor->items.data = NULL;
 
-	for (i = 0; i < gstor->items.capacity && SQL_SUCCESS == SQL->NextRow(inter->sql_handle); ++i) {
+	for (i = 0; i < gstor->items.capacity && SQL_SUCCESS == SQL->NextRow(sql_handle); ++i) {
 		struct item *item = &gstor->items.data[i];
-		SQL->GetData(inter->sql_handle, 0, &data, NULL); item->id = atoi(data);
-		SQL->GetData(inter->sql_handle, 1, &data, NULL); item->nameid = atoi(data);
-		SQL->GetData(inter->sql_handle, 2, &data, NULL); item->amount = atoi(data);
-		SQL->GetData(inter->sql_handle, 3, &data, NULL); item->equip = atoi(data);
-		SQL->GetData(inter->sql_handle, 4, &data, NULL); item->identify = atoi(data);
-		SQL->GetData(inter->sql_handle, 5, &data, NULL); item->refine = atoi(data);
-		SQL->GetData(inter->sql_handle, 6, &data, NULL); item->attribute = atoi(data);
-		SQL->GetData(inter->sql_handle, 7, &data, NULL); item->bound = atoi(data);
-		SQL->GetData(inter->sql_handle, 8, &data, NULL); item->unique_id = strtoull(data, NULL, 10);
+		SQL->GetData(sql_handle, 0, &data, NULL); item->id = atoi(data);
+		SQL->GetData(sql_handle, 1, &data, NULL); item->nameid = atoi(data);
+		SQL->GetData(sql_handle, 2, &data, NULL); item->amount = atoi(data);
+		SQL->GetData(sql_handle, 3, &data, NULL); item->equip = atoi(data);
+		SQL->GetData(sql_handle, 4, &data, NULL); item->identify = atoi(data);
+		SQL->GetData(sql_handle, 5, &data, NULL); item->refine = atoi(data);
+		SQL->GetData(sql_handle, 6, &data, NULL); item->attribute = atoi(data);
+		SQL->GetData(sql_handle, 7, &data, NULL); item->bound = atoi(data);
+		SQL->GetData(sql_handle, 8, &data, NULL); item->unique_id = strtoull(data, NULL, 10);
 		item->expire_time = 0;
 		/* Card Slots */
 		for (j = 0; j < MAX_SLOTS; ++j) {
-			SQL->GetData(inter->sql_handle, 9 + j, &data, NULL);
+			SQL->GetData(sql_handle, 9 + j, &data, NULL);
 			item->card[j] = atoi(data);
 		}
 		/* Item Options */
 		for (j = 0; j < MAX_ITEM_OPTIONS; ++j) {
-			SQL->GetData(inter->sql_handle, 9 + MAX_SLOTS + j * 2, &data, NULL);
+			SQL->GetData(sql_handle, 9 + MAX_SLOTS + j * 2, &data, NULL);
 			item->option[j].index = atoi(data);
-			SQL->GetData(inter->sql_handle, 10 + MAX_SLOTS + j * 2, &data, NULL);
+			SQL->GetData(sql_handle, 10 + MAX_SLOTS + j * 2, &data, NULL);
 			item->option[j].value = atoi(data);
 		}
 	}
 	gstor->items.amount = i;
-	SQL->FreeResult(inter->sql_handle);
+	SQL->FreeResult(sql_handle);
 
 	if (gstor->items.amount < gstor->items.capacity) {
 		if (gstor->items.amount > 0) {
@@ -374,14 +378,16 @@ static void inter_storage_sql_final(void)
 // q?f[^?
 static int inter_storage_delete(int account_id)
 {
-	if( SQL_ERROR == SQL->Query(inter->sql_handle, "DELETE FROM `%s` WHERE `account_id`='%d'", storage_db, account_id) )
-		Sql_ShowDebug(inter->sql_handle);
+	struct Sql *sql_handle = inter->sql_handle_get();
+	if( SQL_ERROR == SQL->Query(sql_handle, "DELETE FROM `%s` WHERE `account_id`='%d'", storage_db, account_id) )
+		Sql_ShowDebug(sql_handle);
 	return 0;
 }
 static int inter_storage_guild_storage_delete(int guild_id)
 {
-	if( SQL_ERROR == SQL->Query(inter->sql_handle, "DELETE FROM `%s` WHERE `guild_id`='%d'", guild_storage_db, guild_id) )
-		Sql_ShowDebug(inter->sql_handle);
+	struct Sql *sql_handle = inter->sql_handle_get();
+	if( SQL_ERROR == SQL->Query(sql_handle, "DELETE FROM `%s` WHERE `guild_id`='%d'", guild_storage_db, guild_id) )
+		Sql_ShowDebug(sql_handle);
 	return 0;
 }
 
@@ -398,6 +404,7 @@ static bool inter_storage_retrieve_bound_items(int char_id, int account_id, int 
 	int j, i=0, s=0, bound_qt=0;
 	struct item items[MAX_INVENTORY];
 	unsigned int bound_item[MAX_INVENTORY] = {0};
+	struct Sql *sql_handle = inter->sql_handle_get();
 
 	StrBuf->Init(&buf);
 	StrBuf->AppendStr(&buf, "SELECT `id`, `nameid`, `amount`, `equip`, `identify`, `refine`, `attribute`, `expire_time`, `bound`, `unique_id`");
@@ -407,11 +414,11 @@ static bool inter_storage_retrieve_bound_items(int char_id, int account_id, int 
 		StrBuf->Printf(&buf, ", `opt_idx%d`, `opt_val%d`", j, j);
 	StrBuf->Printf(&buf, " FROM `%s` WHERE `char_id`='%d' AND `bound` = '%d'",inventory_db,char_id,IBT_GUILD);
 
-	stmt = SQL->StmtMalloc(inter->sql_handle);
+	stmt = SQL->StmtMalloc(sql_handle);
 	if( SQL_ERROR == SQL->StmtPrepareStr(stmt, StrBuf->Value(&buf))
 	||  SQL_ERROR == SQL->StmtExecute(stmt) )
 	{
-		Sql_ShowDebug(inter->sql_handle);
+		Sql_ShowDebug(sql_handle);
 		SQL->StmtFree(stmt);
 		StrBuf->Destroy(&buf);
 		return false;
@@ -441,7 +448,7 @@ static bool inter_storage_retrieve_bound_items(int char_id, int account_id, int 
 		memcpy(&items[i],&item,sizeof(struct item));
 		i++;
 	}
-	SQL->FreeResult(inter->sql_handle);
+	SQL->FreeResult(sql_handle);
 
 	if (i == 0) { //No items found - No need to continue
 		StrBuf->Destroy(&buf);
@@ -476,7 +483,7 @@ static bool inter_storage_retrieve_bound_items(int char_id, int account_id, int 
 	if( SQL_ERROR == SQL->StmtPrepareStr(stmt, StrBuf->Value(&buf))
 	||  SQL_ERROR == SQL->StmtExecute(stmt) )
 	{
-		Sql_ShowDebug(inter->sql_handle);
+		Sql_ShowDebug(sql_handle);
 		SQL->StmtFree(stmt);
 		StrBuf->Destroy(&buf);
 		return false;
@@ -510,7 +517,7 @@ static bool inter_storage_retrieve_bound_items(int char_id, int account_id, int 
 		if( SQL_ERROR == SQL->StmtPrepareStr(stmt, StrBuf->Value(&buf))
 		||  SQL_ERROR == SQL->StmtExecute(stmt) )
 		{
-			Sql_ShowDebug(inter->sql_handle);
+			Sql_ShowDebug(sql_handle);
 			SQL->StmtFree(stmt);
 			StrBuf->Destroy(&buf);
 			return false;
@@ -551,7 +558,7 @@ static bool inter_storage_retrieve_bound_items(int char_id, int account_id, int 
 	if (SQL_ERROR == SQL->StmtPrepareStr(stmt, StrBuf->Value(&buf))
 	||  SQL_ERROR == SQL->StmtExecute(stmt))
 	{
-		Sql_ShowDebug(inter->sql_handle);
+		Sql_ShowDebug(sql_handle);
 		SQL->StmtFree(stmt);
 		StrBuf->Destroy(&buf);
 		return false;
