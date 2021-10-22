@@ -1929,7 +1929,7 @@ static void login_parse_request_connection(struct s_receive_action_data *act, st
 	mutex->lock(action_information_mutex);
 	struct s_action_information *data = linkdb_search(&action_information, NULL);
 	if(!data) { // Create a new action queue for this server
-		struct s_action_queue *queue = action->queue_create(10, login->ers_collection);
+		struct s_action_queue *queue = action->queue_create(10, login->ers_collection, NULL, NULL, NULL, NULL);
 		data = aMalloc(sizeof(*data));
 		data->index = action->queue_get_index(queue);
 		data->server = server;
@@ -2666,7 +2666,7 @@ int do_init(int argc, char **argv)
 	}
 
 	// Create login queue
-	struct s_action_queue *queue = action->queue_create(10, login->ers_collection);
+	struct s_action_queue *queue = action->queue_create(10, login->ers_collection, NULL, NULL, NULL, NULL);
 
 	struct s_action_information *ainfo = aMalloc(sizeof(*ainfo));
 	ainfo->index = action->queue_get_index(queue);

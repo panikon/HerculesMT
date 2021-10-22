@@ -78,56 +78,6 @@ struct login_session_data {
 	struct socket_data *session;
 };
 
-/**
- * SC_NOTIFY_BAN Error code list
- * @see lclif_connection_error
- * @see login_auth_ok
- **/
-enum notify_ban_errorcode {
-	NBE_SUCCESS = -1,		// Internal use, success
-	NBE_DISCONNECTED,		// "Disconnected from server"
-	NBE_SERVER_CLOSED,		// "Server closed"
-	NBE_DUPLICATE_ID,		// "Someone has logged in with this ID"
-	NBE_TIME_GAP,			// "You've been disconected due to a time gap between you and the server."
-	NBE_JAMMED_SHORTLY,		// "Server is jammed due to overpopulation. Please try again shortly."
-	NBE_UNDERAGED,			// "You are underaged and cannot join this server"
-	NBE_NO_PAY,				// "You didn't pay for this ID. Would you like to pay for it now? Opens window"
-	NBE_JAMMED_MINUTES,		// "Server is jammed due to overpopulation. Please try again in a few minutes."
-	NBE_RECOGNIZES,			// "Server still recognizes your last log-in. Please try again after a few minutes."
-	NBE_IC_FULL,			// "IP capacity of this Internet Cafe is full. Would you like to pay the personal base?"
-	NBE_NO_PAYING_TIME,		// "You are out of available paying time. Game will be shutdown automatically."
-	NBE_ACCOUNT_POSTPONED,	// "Your account was postponed"
-	NBE_POLICY_CHANGE,		// "Will be disconnected temporarily due to a change in payment policy. Please connect again."
-	NBE_IP_MISMATCH,		// "Will be terminated because do not match between your IP address and approved IP in Account server."
-	NBE_IC_OVERPAYMENT,		// "Will be terminated to prevent overpayment of meter-rate system in Internet Cafe.
-							// Please connect with unaproved IP to use personal meter-rate system."
-	//15 - Disconnected from server
-	NBE_JPN_REJOIN = 16,	// "A message to the BETA users in Japan -> Let's rejoin kung-ho"
-	NBE_JPN_BILLS,			// "A message to users terminated in Japan -> Pay bills, Pay twice"
-	NBE_ALREADY_ON,			// "You already have been connected to another account server."
-	//18-99 - Disconnected
-	NBE_IC_2_ACCOUNTS = 100,// "There are more than 2 account connected to PC cafe payment system.
-							// Please check this matter"
-	NBE_30_PLAYERS_SAME_IP,	// "More than 30 players sharing the same IP have logged into the game for an hour.
-							// Please check this matter."
-	NBE_10_PLAYERS_SAME_IP,	// "More than 10 connections sharing the same IP have logged into the game for an hour.
-							// Please check this matter."
-	NBE_PRIVACY_POLICY,		// "You need to accept the Privacy Policy from gravity in order to use the service."
-	NBE_USER_AGREEMENT,		// "You need to accept User Agreement in order to use the service."
-	NBE_NONEXISTENT_ID,		// "Incorrect or nonexitent ID."
-	//106 - DISCONNECTED
-	NBE_IP_BLOCKED = 107,	// "Unavailable to access in your connected IP"
-	NBE_IP_BLOCKED2,		// "Unavailable to access in your connected IP"
-	NBE_BRUTE_FORCE,		// "Unable to access for a while due to errors on password 6 times"
-	NBE_INVALID_TEST_CHAR,	// "Sorry. Do not access selected character for the test."
-	//111 - 112 - DISCONNECTED
-	NBE_KRN_LAW,			// "By the korean law, the under 16 age users will be limited to play games
-							// until 0~6am and game will be closed."
-	NBE_NO_MSG,				// "NO MSG"
-	//115 - 225 - DISCONNECTED
-	NBE_LAST = 255
-};
-
 struct client_hash_node {
 	int group_id;
 	uint8 hash[16];

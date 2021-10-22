@@ -26,6 +26,7 @@
 #include "login/loginlog.h"
 #include "login/packets_ac_struct.h"
 #include "login/packets_ca_struct.h"
+#include "common/packets_wa_struct.h"
 #include "common/HPM.h"
 #include "common/cbasetypes.h"
 #include "common/db.h"
