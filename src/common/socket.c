@@ -1280,17 +1280,32 @@ static void action_receive(void *data)
 	}
 	// Prepend incomplete packet to received data
 	if(session->incomplete_packet.data) {
+		char temp_buffer[FIFO_SIZE];
+		ShowDebug("(sid %d) Begin processing incomplete packet 0x%04x\n",
+			session->id, RBUFW(session->incomplete_packet.data, 0));
 		size_t expected_length = session->incomplete_packet.length + act->rdata_size;
 		if(expected_length >= act->max_rdata) {
 			uint8_t *buffer = aMalloc(expected_length);
 			memcpy(buffer, act->rdata, act->rdata_size);
 			act->max_rdata = expected_length;
+			/**
+			 * rdata can be replaced safely because it's pointing to
+			 * act->read_buffer->wsa_buffer[0].buf and will be handled
+			 * after this action is performed anyway.
+			 * buffer will then be freed because max_rdata is different than
+			 * FIFO_SIZE (this is always the size of any receive buffer).
+			 **/
 			act->rdata = buffer;
 		}
-		memcpy(&act->rdata[act->rdata_size],
+		Assert(act->rdata_size <= FIFO_SIZE);
+		memcpy(temp_buffer, act->rdata, act->rdata_size);
+		memcpy(act->rdata,
 			session->incomplete_packet.data,
 			session->incomplete_packet.length);
-		act->rdata_size += session->incomplete_packet.length;
+		memcpy(&act->rdata[session->incomplete_packet.length],
+			temp_buffer,
+			act->rdata_size);
+		act->rdata_size = expected_length;
 
 		aFree(session->incomplete_packet.data);
 		session->incomplete_packet.data = NULL;
@@ -1304,12 +1319,13 @@ static void action_receive(void *data)
 
 	mutex->lock(session->mutex);
 	if(retcode == PACKET_INCOMPLETE) {
-		ShowDebug("incomplete packet\n");
-		size_t expected_length = act->rdata_size - act->rdata_pos;
-		session->incomplete_packet.data = aMalloc(expected_length);
-		session->incomplete_packet.length = expected_length;
+		size_t received_length = act->rdata_size - act->rdata_pos;
+		session->incomplete_packet.data = aMalloc(received_length);
+		session->incomplete_packet.length = received_length;
 		memcpy(session->incomplete_packet.data,
-			&act->rdata[act->rdata_pos], expected_length);
+			&act->rdata[act->rdata_pos], received_length);
+		ShowDebug("(sid %d) Incomplete packet 0x%04x (received len: %zd)\n",
+			session->id, RBUFW(&act->rdata[act->rdata_pos], 0), received_length);
 	}
 	if(act->read_buffer) {
 		// Clear and reinsert into available list
@@ -1686,6 +1702,7 @@ static void socket_operation_process(struct socket_data *session,
 		recv_action->session = session;
 		recv_action->rdata = buffer_data->wsa_buffer[0].buf;
 		recv_action->rdata_size = bytes_transferred;
+		// If max_rdata is changed action_receive should be updated as well
 		recv_action->max_rdata = FIFO_SIZE;
 		recv_action->rdata_pos = 0;
 		recv_action->read_buffer = buffer_data;

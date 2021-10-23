@@ -4196,7 +4196,7 @@ static enum parsefunc_rcode char_parse_frommap(struct s_receive_action_data *act
 			packet_len = packet_data->len;
 
 		if(RFIFOREST(act) < packet_len)
-			return PACKET_INCOMPLETE;
+			goto unlock_list_return_incomplete;
 
 		packet_data->pFunc(act, server);
 		RFIFOSKIP(act, packet_len);

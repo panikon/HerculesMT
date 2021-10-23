@@ -354,23 +354,23 @@ size_t mapif_fame_list_sub(uint8 *buf, struct fame_list *list, int len)
  *
  * @param session When set, sends list to only this server
  **/
-static int mapif_fame_list(struct mmo_map_server *server,
+static void mapif_fame_list(struct mmo_map_server *server,
 	struct fame_list *smith, int smith_len,
 	struct fame_list *chemist, int chemist_len,
 	struct fame_list *taekwon, int taekwon_len
 ) {
 	size_t len = sizeof(struct PACKET_WZ_FAME_LIST)-3*sizeof(intptr); // 3 dynamic lists
 
-	size_t expected_len = len; 
-	expected_len += sizeof(struct fame_list_packet_data)*smith_len;
-	expected_len += sizeof(struct fame_list_packet_data)*chemist_len;
-	expected_len += sizeof(struct fame_list_packet_data)*taekwon_len;
+	size_t maximum_len = len; 
+	maximum_len += sizeof(struct fame_list_packet_data)*smith_len;
+	maximum_len += sizeof(struct fame_list_packet_data)*chemist_len;
+	maximum_len += sizeof(struct fame_list_packet_data)*taekwon_len;
 	/**
 	 * The expected size of this packet when all lists are of the default
 	 * length is 968 bytes, there's no need to use the stack to allocate
 	 * 32000bytes as it was being done.
 	 **/
-	CREATE_BUFFER(buf, uint8, expected_len);
+	CREATE_BUFFER(buf, uint8, maximum_len);
 
 	WBUFW(buf,0) = HEADER_WZ_FAME_LIST;
 	len += mapif_fame_list_sub(&buf[len], smith, smith_len);
@@ -382,7 +382,7 @@ static int mapif_fame_list(struct mmo_map_server *server,
 	len += mapif_fame_list_sub(&buf[len], taekwon, taekwon_len);
 	// add total packet length
 	WBUFW(buf, 2) = (uint16)len;
-	assert(len == expected_len && "Buffer overflow");
+	assert(len <= maximum_len && "Buffer overflow");
 
 	if(server)
 		mapif->send(server, buf, len);
@@ -426,7 +426,7 @@ static void mapif_map_received(struct socket_data *session, char *wisp_server_na
  * @param server New server
  * @readlock map_server_list_lock
  **/
-static void mapif_send_maps(struct mmo_map_server *server, int16 *map_list)
+static void mapif_send_maps(struct mmo_map_server *server, const uint16 *map_list)
 {
 	int k,i;
 
@@ -655,7 +655,7 @@ static void mapif_auth_ok(struct socket_data *session, int account_id, struct ch
 /**
  * Notifies map-server of the failed authentication
  **/
-static void char_auth_failed(struct socket_data *session, int account_id, int char_id, int login_id1, char sex, uint32 ip)
+static void mapif_auth_failed(struct socket_data *session, int account_id, int char_id, int login_id1, char sex, uint32 ip)
 {
 	WFIFOHEAD(session,sizeof(struct PACKET_WZ_AUTH_FAILED),true);
 	WFIFOW(session,0) = HEADER_WZ_AUTH_FAILED;
@@ -3838,6 +3838,22 @@ void mapif_defaults(void)
 	mapif->sendallwos = mapif_sendallwos;
 	mapif->send = mapif_send;
 
+	mapif->scdata_head = mapif_scdata_head;
+	mapif->scdata_data = mapif_scdata_data;
+	mapif->scdata_send = mapif_scdata_send;
+	mapif->save_character_ack = mapif_save_character_ack;
+	mapif->char_select_ack = mapif_char_select_ack;
+	mapif->change_map_server_ack = mapif_change_map_server_ack;
+	mapif->char_name_ack = mapif_char_name_ack;
+	mapif->change_account_ack = mapif_change_account_ack;
+	mapif->pong = mapif_pong;
+	mapif->auth_ok = mapif_auth_ok;
+	mapif->auth_failed = mapif_auth_failed;
+	mapif->change_sex = mapif_change_sex;
+	mapif->fame_list_update = mapif_fame_list_update;
+	mapif->send_maps = mapif_send_maps;
+	mapif->fame_list = mapif_fame_list;
+	mapif->map_received = mapif_map_received;
 	mapif->login_map_server_ack = mapif_login_map_server_ack;
 	mapif->parse_item_data = mapif_parse_item_data;
 	mapif->send_item_data = mapif_send_item_data;

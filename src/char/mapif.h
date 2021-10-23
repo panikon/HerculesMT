@@ -67,7 +67,6 @@ struct mapif_interface {
 	int (*sendallwos) (struct mmo_map_server *server, const unsigned char *buf, unsigned int len);
 	int (*send) (struct mmo_map_server *server, unsigned char *buf, unsigned int len);
 
-	void (*accinfo_request) (int account_id, int u_fd, int u_aid, int u_group, int map_id);
 	void (*update_state) (int id, unsigned char flag, unsigned int state);
 	void (*char_ban) (int char_id, time_t timestamp);
 	void (*change_sex) (int account_id, int sex);
