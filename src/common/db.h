@@ -1338,18 +1338,24 @@ HPShared struct db_interface *DB;
  * @param _ma  Malloc function.
  * @param _re  Realloc function.
  * @param _fr  Free function.
+ * @param _ca  Calloc function.
  * @param _zero Should the new data be zeroed?
  */
-#define VECTOR_RESIZE_SUB(_vec, _n, _ma, _re, _fr, _zero) \
+#define VECTOR_RESIZE_SUB(_vec, _n, _ma, _re, _fr, _ca, _zero) \
 	do { \
 		if ((_n) > VECTOR_CAPACITY(_vec)) { \
 			/* increase size */ \
-			if (VECTOR_CAPACITY(_vec) == 0) \
-				VECTOR_DATA(_vec) = _ma((_n)*sizeof(VECTOR_FIRST(_vec))); /* allocate new */ \
-			else \
+			if (VECTOR_CAPACITY(_vec) == 0) { \
+				/* allocate new */ \
+				if ((_zero)) \
+					VECTOR_DATA(_vec) = _ca((_n), sizeof(VECTOR_FIRST(_vec)));\
+				else \
+					VECTOR_DATA(_vec) = _ma((_n)*sizeof(VECTOR_FIRST(_vec))); \
+			} else { \
 				VECTOR_DATA(_vec) = _re(VECTOR_DATA(_vec), (_n)*sizeof(VECTOR_FIRST(_vec))); /* reallocate */ \
-			if((_zero))\
-				memset(VECTOR_DATA(_vec)+VECTOR_LENGTH(_vec), 0, (VECTOR_CAPACITY(_vec)-VECTOR_LENGTH(_vec))*sizeof(VECTOR_FIRST(_vec))); /* clear new data */ \
+				if((_zero))\
+					memset(VECTOR_DATA(_vec)+VECTOR_LENGTH(_vec), 0, (VECTOR_CAPACITY(_vec)-VECTOR_LENGTH(_vec))*sizeof(VECTOR_FIRST(_vec))); /* clear new data */ \
+			} \
 			VECTOR_CAPACITY(_vec) = (_n); /* update capacity */ \
 		} else if ((_n) == 0 && VECTOR_CAPACITY(_vec) > 0) { \
 			/* clear vector */ \
@@ -1377,8 +1383,8 @@ HPShared struct db_interface *DB;
  * @param _zero Should the new data be zeroed?
  * @see VECTOR_RESIZE_SUB
  */
-#define VECTOR_RESIZE_SHARED(_vec, _n, _zero) VECTOR_RESIZE_SUB(_vec, _n, aMalloc, aRealloc, aFree, _zero)
-#define VECTOR_RESIZE_LOCAL(_vec, _n, _zero) VECTOR_RESIZE_SUB(_vec, _n, alMalloc, alRealloc, alFree, _zero)
+#define VECTOR_RESIZE_SHARED(_vec, _n, _zero) VECTOR_RESIZE_SUB(_vec, _n, aMalloc, aRealloc, aFree, aCalloc, _zero)
+#define VECTOR_RESIZE_LOCAL(_vec, _n, _zero) VECTOR_RESIZE_SUB(_vec, _n, alMalloc, alRealloc, alFree, alCalloc, _zero)
 #define VECTOR_RESIZE(_vec, _n) VECTOR_RESIZE_SHARED(_vec, _n, true)
 
 /**

@@ -1424,8 +1424,7 @@ static void db_release_both(struct DBKey_s *key, struct DBData data, enum DBRele
  *
  * @param self Database.
  * @param node Node.
- * @readlock db->nodes->collection_lock
- * @mutex db->nodes->cache_mutex
+ * Acquires collection_lock (read) and cache_mutex
  * @private
  **/
 static void db_rehash_node(struct DBMap *self, struct DBNode *node)
@@ -1437,7 +1436,18 @@ static void db_rehash_node(struct DBMap *self, struct DBNode *node)
 		db_rehash_node(self, node->left);
 	if(node->right)
 		db_rehash_node(self, node->right);
+
+	/**
+	 * The node is freed here instead of being put in a list to be freed
+	 * later because otherwise the memory usage of this DBMap would double
+	 * while a rehash operation was being done. Also even after freeing all
+	 * the memory would continue to be allocated in the ERS.
+	 **/
+	rwlock->read_lock(db->nodes->collection_lock);
+	mutex->lock(db->nodes->cache_mutex);
 	ers_free(db->nodes, node);
+	rwlock->read_unlock(db->nodes->collection_lock);
+	mutex->unlock(db->nodes->cache_mutex);
 }
 
 /**
@@ -1470,15 +1480,18 @@ static bool db_rehash(struct DBMap *self, size_t new_count)
 	db->options &= ~DB_OPT_DUP_KEY;
 
 	struct DBNode *node = NULL;
-	rwlock->read_lock(db->nodes->collection_lock);
-	mutex->lock(db->nodes->cache_mutex);
+	/**
+	 * collection_lock and cache_mutex can't be acquired before calling
+	 * db_rehash_node because obj_put and rehash_node both acquire those
+	 * locks.
+	 * This makes this operation more expensive because there are several
+	 * lock acquirals (at least two per iteration).
+	 **/
 	for(size_t i = 0; i < previous_count; i++) {
 		node = ht_old[i];
 		if(node)
 			db_rehash_node(self, node);
 	}
-	mutex->unlock(db->nodes->cache_mutex);
-	rwlock->read_unlock(db->nodes->collection_lock);
 
 	db->options = options;
 	aFree(ht_old);

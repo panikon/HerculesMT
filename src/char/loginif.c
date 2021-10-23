@@ -559,7 +559,7 @@ static void loginif_send_users_count(int users)
 static void loginif_connect_to_server(void)
 {
 	Assert_retv(chr->login_session);
-	WFIFOHEAD(chr->login_session, sizeof(struct PACKET_CA_CHARSERVERCONNECT), true);
+	WFIFOHEAD(chr->login_session, sizeof(struct PACKET_CA_CHARSERVERCONNECT), false);
 	WFIFOW(chr->login_session,0) = HEADER_CA_CHARSERVERCONNECT;
 	memcpy(WFIFOP(chr->login_session,2), chr->userid, NAME_LENGTH);
 	memcpy(WFIFOP(chr->login_session,26), chr->passwd, NAME_LENGTH);

@@ -374,7 +374,7 @@ static int session_timeout(struct timer_interface *tm, int tid, int64 tick, int 
 {
 	struct socket_data *session = (struct socket_data*)data;
 	mutex->lock(session->mutex);
-	if(DIFF_TICK(timer->get_server_tick(), session->rdata_tick) > socket_io->stall_time) {
+	if(DIFF_TICK(tm->get_server_tick(), session->rdata_tick) > socket_io->stall_time) {
 		// Server doesn't timeout
 		if(session->flag.server) {
 			if(session->flag.ping != 2) // Only update if necessary, otherwise

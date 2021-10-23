@@ -283,6 +283,7 @@ static int mapindex_init(void)
 		expected_length++;
 	}
 	VECTOR_ENSURE(mapindex->list, expected_length, 1);
+	fseek(fp, 0, SEEK_SET);
 
 	while(fgets(line, sizeof(line), fp)) {
 		if(line[0] == '/' && line[1] == '/')

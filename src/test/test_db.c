@@ -697,8 +697,8 @@ bool db_unit_strkey(void *not_used) {
  **/
 bool db_unit_init(void *not_used) {
 	bool retval = true;
-	DB->final(); // Turn previous instance off
-	DB->init();
+//	DB->final(); // Turn previous instance off
+//	DB->init();
 	FILE *fp;
 	fp = fopen("words.txt"/*"Tutte_le_parole_inglesi_no_dup.txt"*/, "r");
 	if(!fp) {

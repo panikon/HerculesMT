@@ -5730,6 +5730,7 @@ int do_final(void)
 	HPM_char_do_final();
 
 	mapindex->final();
+	inter->sql_handle_close();
 
 	VECTOR_CLEAR(start_items);
 
@@ -5891,6 +5892,7 @@ int do_init(int argc, char **argv)
 	 * chr->action_init can rely in loaded information.
 	 **/
 	inter->load_config(chr->INTER_CONF_NAME);
+	inter->sql_handle_open();
 
 	// Create first queue, the other queues are created upon map-server connections at mapif.c
 	struct s_action_queue *queue = action->queue_create(10, chr->ers_collection,
