@@ -5690,7 +5690,7 @@ int do_final(void)
 
 	inter->final();
 
-	socket_io->flush_fifos();
+	socket_io->wfifoflush_all();
 
 	rwlock->write_lock(chr->map_server_list_lock);
 	INDEX_MAP_ITER_DECL(iter);
@@ -5768,7 +5768,7 @@ static void do_shutdown(void)
 		int i;
 		core->runflag = CHARSERVER_ST_SHUTDOWN;
 		ShowStatus("Shutting down...\n");
-		// TODO proper shutdown procedure; wait for acks?, kick all characters, ... [FlavoJS]
+		// TODO proper shutdown procedure; wait for acks?, kick all characters, ... [FlavioJS]
 		INDEX_MAP_ITER_DECL(iter);
 		INDEX_MAP_ITER(chr->map_server_list, iter);
 		while((i = INDEX_MAP_NEXT(chr->map_server_list, iter)) != -1) {
@@ -5780,7 +5780,7 @@ static void do_shutdown(void)
 		INDEX_MAP_ITER_FREE(iter);
 
 		loginif->check_shutdown();
-		socket_io->flush_fifos();
+		socket_io->wfifoflush_all();
 		core->runflag = CORE_ST_STOP;
 	}
 }
@@ -6093,6 +6093,7 @@ void char_defaults(void)
 	chr->show_save_log = true;
 	chr->enable_logs = true;
 
+	chr->parse_entry = char_parse_entry;
 	chr->action_init  = char_action_init;
 	chr->action_final = char_action_final;
 	chr->escape_normalize_name = char_escape_normalize_name;

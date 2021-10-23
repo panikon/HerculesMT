@@ -571,6 +571,12 @@ static void loginif_connect_to_server(void)
 	WFIFOW(chr->login_session,82) = chr->server_type;
 	WFIFOW(chr->login_session,84) = chr->new_display; //only display (New) if they want to [Kevin]
 	WFIFOSET(chr->login_session, sizeof(struct PACKET_CA_CHARSERVERCONNECT));
+
+	/**
+	 * Force a flush, this function is being executed from a timer thread so there
+	 * won't be any send calls after this is performed.
+	 **/
+	socket_io->wfifoflush(chr->login_session);
 }
 
 /*======================================

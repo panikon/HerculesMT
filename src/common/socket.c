@@ -317,6 +317,7 @@ static ActionParseFunc default_func_parse = null_parse;
 
 static void set_defaultparse(ActionParseFunc defaultparse)
 {
+	Assert(defaultparse && "ActionParseFunc can't be NULL!");
 	default_func_parse = defaultparse;
 }
 
@@ -1591,6 +1592,7 @@ static struct socket_data *make_connection(uint32 ip, uint16 port, struct hSockO
  **/
 static void session_update_parse(struct socket_data *session, ActionParseFunc parse)
 {
+	Assert(parse && "ActionParseFunc can't be NULL!");
 	session->parse = parse;
 }
 

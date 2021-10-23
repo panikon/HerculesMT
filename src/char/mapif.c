@@ -3838,6 +3838,7 @@ void mapif_defaults(void)
 	mapif->sendallwos = mapif_sendallwos;
 	mapif->send = mapif_send;
 
+	mapif->login_map_server_ack = mapif_login_map_server_ack;
 	mapif->parse_item_data = mapif_parse_item_data;
 	mapif->send_item_data = mapif_send_item_data;
 	mapif->send_users_count = mapif_users_count;

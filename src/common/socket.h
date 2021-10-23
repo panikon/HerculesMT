@@ -416,7 +416,6 @@ struct socket_io_interface {
 
 	/* */
 	void (*flush) (struct socket_data *session);
-	void (*flush_fifos) (void);
 
 	void (*set_defaultparse) (ActionParseFunc defaultparse);
 
