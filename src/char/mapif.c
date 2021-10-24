@@ -435,7 +435,7 @@ static void mapif_send_maps(struct mmo_map_server *server, const uint16 *map_lis
 	} else {
 		// Transmitting maps information to the other map-servers
 		size_t expected_len = sizeof(struct PACKET_WZ_SEND_MAP)-sizeof(intptr);
-		size_t list_len = VECTOR_LENGTH(server->maps) * sizeof(int16);
+		size_t list_len = VECTOR_LENGTH(server->maps) * sizeof(uint16);
 		expected_len += list_len;
 		CREATE_BUFFER(buf, uint8, expected_len);
 
@@ -1420,6 +1420,7 @@ static int mapif_guild_castle_dataload(struct socket_data *session, const int *c
 		}
 	}
 	mutex->unlock(inter_guild->castle_db_mutex);
+	assert(pos == len);
 	WFIFOSET(session, len);
 	return 0;
 }

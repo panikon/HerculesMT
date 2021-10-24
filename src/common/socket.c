@@ -302,6 +302,7 @@ void action_receive(void *data);
 void socket_iocp_buffer_grow(struct s_iocp_buffer_data *buffer_data);
 void socket_iocp_buffer_clear(struct s_iocp_buffer_data *buffer_data);
 void socket_iocp_buffer_free(struct s_iocp_buffer_data *buffer_data);
+struct s_iocp_buffer_data *socket_iocp_buffer_create(void);
 static int socket_getips(uint32 *ips, int max);
 
 /*======================================
@@ -407,11 +408,8 @@ static void session_buffer_available_grow(struct socket_data *session)
 	VECTOR_ENSURE(session->iocp_available_buffer,
 		IOCP_INITIAL_BUFFER_COUNT, IOCP_INITIAL_BUFFER_COUNT);
 	for(int i = 0; i < IOCP_INITIAL_BUFFER_COUNT; i++) {
-		buffer = aCalloc(1, sizeof(*buffer));
-		CREATE(buffer->wsa_buffer, WSABUF, 1);
-		buffer->wsa_buffer->buf = ers_alloc(ers_buffer_instance);
-		assert(buffer->wsa_buffer->buf);
-		VECTOR_PUSH(session->iocp_available_buffer, buffer);
+		VECTOR_PUSH(session->iocp_available_buffer,
+		            socket_iocp_buffer_create());
 	}
 	mutex->unlock(ers_buffer_instance->cache_mutex);
 	rwlock->read_unlock(ers_collection_lock(ers_socket_collection));
@@ -684,8 +682,17 @@ static bool socket_iocp_post_send(struct socket_data *session,
 	buffer_data->status = QT_WAITING_DEQUEUE;
 	buffer_data->operation = IO_SEND;
 
-	//for(size_t i = 0; i < buffer_count; i++)
-	//	ShowDump(buffer_data->wsa_buffer[i].buf, buffer_data->wsa_buffer[i].len);
+	// for(size_t i = 0; i < buffer_count; i++)
+	// 	ShowDump(buffer_data->wsa_buffer[i].buf, buffer_data->wsa_buffer[i].len);
+
+	if(buffer_count > buffer_data->buffer_count) {
+		ShowError("socket_iocp_post_send: Trying to send more buffers than currently "
+			"available (%d vs %d). Session #%d, first dropped packet 0x%4x\n",
+			buffer_count, buffer_data->buffer_count,
+			session->id, RBUFW(buffer_data->wsa_buffer[0].buf, 0));
+		// Force WSASend to fail (WSAEINVAL)
+		buffer_count = 0;
+	}
 
 	session->operations_remaining++;
 	retval = WSASend(session->socket,
@@ -1019,8 +1026,9 @@ static void wfifohead(struct socket_data *session, size_t len, bool get_mutex)
 
 	act->last_head_size = len;
 	if(act->wdata_size + len >= act->max_wdata) {
+		// Currently mapif_guild_castle_dataload in char-server triggers buffer growth
 		act->write_buffer->wsa_buffer[act->write_buffer_pos].len = act->wdata_size;
-		if(++act->write_buffer_pos > act->write_buffer->buffer_count)
+		if(++act->write_buffer_pos >= act->write_buffer->buffer_count)
 			socket_iocp_buffer_grow(act->write_buffer);
 
 		act->wdata = act->write_buffer->wsa_buffer[act->write_buffer_pos].buf;
@@ -1383,6 +1391,7 @@ static void socket_iocp_buffer_grow(struct s_iocp_buffer_data *buffer_data)
 	buffer_data->wsa_buffer[buffer_data->buffer_count].len = 0;
 	mutex->unlock(ers_buffer_instance->cache_mutex);
 	rwlock->read_unlock(ers_buffer_instance->collection_lock);
+
 	buffer_data->buffer_count++;
 	aFree(old_buffer);
 }
@@ -1438,6 +1447,28 @@ static void socket_iocp_buffer_free_guard(struct s_iocp_buffer_data *buffer_data
 	socket_iocp_buffer_free(buffer_data);
 	mutex->unlock(ers_buffer_instance->cache_mutex);
 	rwlock->read_unlock(ers_collection_lock(ers_socket_collection));
+}
+
+/**
+ * Creates and initializes a new buffer data object
+ * All created objects must be freed via socket_iocp_buffer_free
+ *
+ * @readlock ers_collection_lock(ers_socket_collection)
+ * @mutex ers_buffer_instance->cache_mutex
+ **/
+static struct s_iocp_buffer_data *socket_iocp_buffer_create(void)
+{
+	struct s_iocp_buffer_data *buffer;
+	buffer = aCalloc(1, sizeof(*buffer));
+	buffer->status = QT_OUTSIDE;
+	buffer->operation = IO_NONE;
+	buffer->buffer_count = 1;
+
+	CREATE(buffer->wsa_buffer, WSABUF, 1);
+	buffer->wsa_buffer->buf = ers_alloc(ers_buffer_instance);
+	assert(buffer->wsa_buffer->buf);
+
+	return buffer;
 }
 
 /*======================================

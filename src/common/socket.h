@@ -189,6 +189,9 @@ enum e_buffer_operation {
  * "For a Winsock application, once the WSASend function is called, the system owns these
  *  buffers and the application may not access them. This array must remain valid for the
  *  duration of the send operation."
+ *
+ * @see socket_iocp_buffer_create
+ * @see socket_iocp_buffer_free
  **/
 struct s_iocp_buffer_data {
 	/**
@@ -209,7 +212,7 @@ struct s_iocp_buffer_data {
 	 * wsa_buffer.buf is allocated via ers_alloc in multiples of FIFO_SIZE
 	 **/
 	WSABUF *wsa_buffer;
-	int buffer_count; // Count of WSABUF (0 indexed)
+	int buffer_count; // Count of WSABUF
 
 	enum e_queue_type status;
 	enum e_buffer_operation operation;

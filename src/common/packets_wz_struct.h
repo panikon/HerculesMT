@@ -105,7 +105,7 @@ struct PACKET_WZ_SEND_MAP {
 	int16 packet_len;
 	int32 ip;
 	int16 port;
-	int16 map_id[];
+	int16 *map_id;
 } __attribute__((packed));
 DEFINE_PACKET_ID(WZ_SEND_MAP, 0x2b04);
 

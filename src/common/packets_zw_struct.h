@@ -429,7 +429,7 @@ struct PACKET_ZW_STATUS_CHANGE_SAVE {
 	int32 account_id;
 	int32 character_id;
 	int16 count;
-	struct status_change_data *status[];
+	struct status_change_data *status;
 } __attribute__ ((packed));
 
 /**
