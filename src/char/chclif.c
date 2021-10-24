@@ -400,7 +400,7 @@ void chclif_parse_make_char(struct s_receive_action_data *act, struct char_sessi
 		sex, &char_id);
 #elif PACKETVER >= 20120307
 	result = chr->make_new_char_sql(sd, RFIFOP(act, 2), 1, 1, 1, 1, 1, 1,
-		RFIFOB(fd, 26), RFIFOW(fd, 27), RFIFOW(fd, 29), JOB_NOVICE, 'U',
+		RFIFOB(act, 26), RFIFOW(act, 27), RFIFOW(act, 29), JOB_NOVICE, 'U',
 		&char_id);
 #else
 	result = chr->make_new_char_sql(sd, RFIFOP(act, 2), RFIFOB(act, 26),

@@ -69,12 +69,16 @@ struct mapif_interface *mapif;
  **/
 static struct mmo_map_server *mapif_server_find(struct socket_data *session)
 {
-	if(!session->session_data)
+	if(!session->flag.server)
 		return NULL;
 	struct mmo_map_server *server;
-	int32 server_pos = *(uint32*)session->session_data;
+	/**
+	 * session_data is the position of the server in map_server_list
+	 * @see char_parse_char_login_map_server
+	 **/
+	int32 server_pos = (int32)session->session_data;
 
-	if(server_pos >= INDEX_MAP_LENGTH(chr->map_server_list))
+	if(server_pos >= INDEX_MAP_LENGTH(chr->map_server_list) || server_pos < 0)
 		return NULL;
 
 	server = INDEX_MAP_INDEX(chr->map_server_list, server_pos);

@@ -4162,7 +4162,8 @@ static enum parsefunc_rcode char_parse_frommap(struct s_receive_action_data *act
 	if( socket_io->session_marked_removal(act->session) )
 	{
 		rwlock->read_unlock(chr->map_server_list_lock);
-		aFree(act->session->session_data);
+		// session_data is an integer
+		//aFree(act->session->session_data);
 		mutex->unlock(act->session->mutex);
 		mapif->on_disconnect(server);
 		return PACKET_VALID;
@@ -4761,6 +4762,13 @@ static void char_captcha_notsupported(struct socket_data *session)
 	WFIFOSET(session,5);
 }
 
+STATIC_ASSERT(sizeof(int32) >= sizeof(void*),
+	"Map-server id is defined in session->session_data without allocating any "
+	"memory via a direct assignment and this relies in the sizeof(void*) being "
+	"at least the same as sizeof(int32), if your compiler doesn't support it "
+	"then an allocation should be made. See char_parse_char_login_map_server "
+	"and mapif_server_find.");
+
 /**
  * 0x2af8 ZW_MAP_AUTH
  * Parses map-server authentication request
@@ -4796,7 +4804,8 @@ static void char_parse_char_login_map_server(struct s_receive_action_data *act, 
 	action->queue_set(act->session, server->queue_index);
 
 	act->session->session_data = aMalloc(sizeof(server->pos));
-	*(uint32*)act->session->session_data = server->pos;
+
+	act->session->session_data = (void*)server->pos;
 
 	mutex->unlock(act->session->mutex);
 

@@ -401,8 +401,6 @@ static int session_timeout(struct timer_interface *tm, int tid, int64 tick, int 
  **/
 static void session_buffer_available_grow(struct socket_data *session)
 {
-	struct s_iocp_buffer_data *buffer;
-
 	rwlock->read_lock(ers_collection_lock(ers_socket_collection));
 	mutex->lock(ers_buffer_instance->cache_mutex);
 	VECTOR_ENSURE(session->iocp_available_buffer,
