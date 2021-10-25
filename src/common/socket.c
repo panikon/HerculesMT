@@ -612,6 +612,7 @@ static void socket_connection_lost(struct socket_data *session)
 
 	session->operations_remaining++;
 
+	session->actions_remaining++;
 	action->enqueue(action->queue_get(session),
 		action_receive, recv_action);
 }
@@ -1339,6 +1340,7 @@ static void action_receive(void *data)
 		VECTOR_PUSH(session->iocp_available_buffer, act->read_buffer);
 	}
 	session->session_counter--;
+	session->actions_remaining--;
 	mutex->unlock(session->mutex);
 
 	// Dynamic rdata because of a previous incomplete packet
@@ -1674,6 +1676,7 @@ static bool session_references_remaining(struct socket_data *session)
 	return (session->operations_remaining > 0
 	     || session->writes_remaining > 0
 	     || session->session_counter > 0
+	     || session->actions_remaining > 0
 	);
 }
 
@@ -1746,6 +1749,7 @@ static void socket_operation_process(struct socket_data *session,
 		// send requests made by the client. Each of these requests now
 		// uses a whole buffer of FIFO_SIZE (2*1024), so if there are
 		// several requests they could lead to a huge memory waste.
+		session->actions_remaining++;
 		action->enqueue(action->queue_get(session), action_receive, recv_action);
 		socket_iocp_post_recv(session, session_buffer_available(session));
 	} else {

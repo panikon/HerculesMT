@@ -226,6 +226,13 @@ typedef int (*SendFunc)(int fd);
 typedef int (*ParseFunc)(int fd);
 typedef enum parsefunc_rcode (*ActionParseFunc)(struct s_receive_action_data *act); 
 
+/**
+ * Session information
+ * Each session has a socket_data object.
+ *
+ * @see create_session
+ * @see delete_session
+ **/
 struct socket_data {
 	struct {
 		unsigned char eof : 1;
@@ -289,6 +296,15 @@ struct socket_data {
 	 * @see wfifohead
 	 **/
 	int writes_remaining;
+
+	/**
+	 * Action reference counter
+	 * Number of actions related to this session currently waiting for execution.
+	 * @see socket_operation_process (enqueue)
+	 * @see socket_connection_lost (enqueue)
+	 * @see action_receive (dequeue)
+	 **/
+	int actions_remaining;
 
 	/**
 	 * session_data usage counter
