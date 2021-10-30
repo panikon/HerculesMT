@@ -1092,7 +1092,7 @@ static void HPM_datacheck_init(const struct s_HPMDataCheck *src, unsigned int le
 	/**
 	 * Populates datacheck_db for easy lookup later on
 	 **/
-	datacheck_db = strdb_alloc(DB_OPT_BASE,0);
+	datacheck_db = strdb_alloc(DB_OPT_BASE|DB_OPT_DISABLE_LOCK,0);
 
 	for(i = 0; i < length; i++) {
 		strdb_uiput(datacheck_db, src[i].name, 0, i);
@@ -1101,6 +1101,7 @@ static void HPM_datacheck_init(const struct s_HPMDataCheck *src, unsigned int le
 
 static void HPM_datacheck_final(void)
 {
+	db_lock(datacheck_db, WRITE_LOCK);
 	db_destroy(datacheck_db);
 }
 

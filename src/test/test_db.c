@@ -590,7 +590,9 @@ double db_unit_strkey_do(int iteration_count,
 	DBHasher hash) {
 	struct s_dictionary_info *info = VECTOR_DATA(dictionary_vector);
 	struct DBMap *strdb = DB->alloc(__FILE__, __func__, __LINE__,
-		DB_STRING, DB_OPT_BASE, 0, capacity, load_factor);
+		DB_STRING, DB_OPT_BASE|DB_OPT_DISABLE_LOCK, 0, capacity, load_factor);
+	// Change to READ_LOCK to force the system to use CAS lock
+	db_lock(strdb, WRITE_LOCK/*READ_LOCK*/);
 	int error_count = 0;
 	int64_t tick_begin, tick_end, tick_total;
 	ShowMessage("Performance type:\t%s\n"
@@ -603,9 +605,11 @@ double db_unit_strkey_do(int iteration_count,
 		        iteration_count);
 
 	strdb->set_hash(strdb, hash);
+	db_unlock(strdb);
 
 	tick_begin = timer->gettick_nocache();
 	for(int j = 0; j < iteration_count; j++) {
+		db_lock(strdb, WRITE_LOCK);
 		for(int i = 0; i < VECTOR_LENGTH(dictionary_vector); i++) {
 			if(!info[i].len)
 				continue;
@@ -615,6 +619,8 @@ double db_unit_strkey_do(int iteration_count,
 				error_count++;
 			}
 		}
+		db_unlock(strdb);
+		db_lock(strdb, READ_LOCK);
 		for(int i = 0; i < VECTOR_LENGTH(dictionary_vector); i++) {
 			if(!info[i].len)
 				continue;
@@ -630,13 +636,16 @@ double db_unit_strkey_do(int iteration_count,
 				error_count++;
 			}
 		}
+
 		db_clear(strdb);
+		db_unlock(strdb);
 	} // iteration_count
 	tick_end = timer->gettick_nocache();
 	tick_total = tick_end-tick_begin;
 	double time = (double)tick_total/iteration_count;
 	ShowMessage("Estimated time:  \t%lfms\n\n", time);
-	db_destroy(strdb);
+	db_lock(strdb, WRITE_LOCK);
+	db_destroy(strdb); // Unlocks
 	return (error_count)?0.f:time;
 }
 

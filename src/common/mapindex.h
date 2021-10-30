@@ -80,7 +80,6 @@
  **/
 struct mapindex_interface {
 	char config_file[80];
-	struct rwlock_data *lock;
 
 	/* mapname (str) -> index (int) */
 	struct DBMap *db;
@@ -95,6 +94,10 @@ struct mapindex_interface {
 
 	// Map index list (ids are sequential)
 	VECTOR_DECL(struct { char name[MAP_NAME_LENGTH]; }) list;
+
+	/* */
+	void (*lock) (enum lock_type type);
+	void (*unlock) (enum lock_type type);
 
 	/* */
 	bool (*config_read_dbpath) (const char *filename, const struct config_t *config);

@@ -132,6 +132,8 @@ static void rwlock_destroy(struct rwlock_data *lock) {
 
 /**
  * Creates a new read-write lock
+ *
+ * Never fails.
  **/
 static struct rwlock_data *rwlock_create(void) {
 	struct rwlock_data *lock = aCalloc(1, sizeof(*lock));

@@ -252,7 +252,6 @@ struct socket_io_interface *socket_io;
  * Members are of struct socket_data* type
  **/
 static struct DBMap *session_db = NULL;
-static struct mutex_data *session_db_mutex = NULL;
 
 static struct ers_collection_t *ers_socket_collection = NULL;
 static ERS *ers_session_instance = NULL;
@@ -468,9 +467,9 @@ static void delete_session(struct socket_data *session, bool remove_db)
 	mutex->destroy(session->mutex);
 
 	if(remove_db) {
-		mutex->lock(session_db_mutex);
+		db_lock(session_db, WRITE_LOCK);
 		idb_remove(session_db, session->id);
-		mutex->unlock(session_db_mutex);
+		db_unlock(session_db);
 	}
 
 	rwlock->read_lock(ers_collection_lock(ers_socket_collection));
@@ -535,12 +534,12 @@ static struct socket_data *create_session(SOCKET socket)
 	 **/
 	mutex->lock(session->mutex);
 
-	mutex->lock(session_db_mutex);
+	db_lock(session_db, WRITE_LOCK);
 	do {
 		session->id = rnd->value(1, INT32_MAX);
 	} while(idb_exists(session_db, session->id));
 	idb_put(session_db, session->id, session);
-	mutex->unlock(session_db_mutex);
+	db_unlock(session_db);
 
 	session->timeout_id = timer->add_sub(timer->gettick_nocache(),
 		socket_io->session_timeout,
@@ -1652,9 +1651,9 @@ static void session_update_parse(struct socket_data *session, ActionParseFunc pa
 struct socket_data *session_from_id(int32_t id)
 {
 	struct socket_data *session = NULL;
-	mutex->lock(session_db_mutex);
+	db_lock(session_db, READ_LOCK);
 	session = idb_get(session_db, id);
-	mutex->unlock(session_db_mutex);
+	db_unlock(session_db);
 	return session;
 }
 
@@ -1981,11 +1980,8 @@ static void socket_final_thread_pool(void)
 	CloseHandle(io_completion_port);
 	WSACloseEvent(io_accept_event);
 
-	mutex->lock(session_db_mutex);
+	db_lock(session_db, WRITE_LOCK);
 	session_db->clear(session_db, socket_final_clear);
-	mutex->unlock(session_db_mutex);
-	mutex->destroy(session_db_mutex);
-	session_db_mutex = NULL;
 	session_db = NULL;
 
 	rwlock->write_lock(ers_collection_lock(ers_socket_collection));
@@ -2042,11 +2038,6 @@ static void socket_init_wsa(void)
 #endif // SOCKET_IOCP
 
 	session_db = idb_alloc(DB_OPT_BASE);
-	session_db_mutex = mutex->create();
-	if(!session_db_mutex) {
-		ShowFatalError("socket_init: Failed to set up session db mutex\n");
-		exit(EXIT_FAILURE);
-	}
 
 	ers_socket_collection = ers_collection_create(MEMORYTYPE_SHARED);
 	ers_session_instance = ers_new(ers_socket_collection, sizeof(struct socket_data),
@@ -2180,20 +2171,25 @@ static int connect_check_(uint32 ip)
 	}
 
 	// Inspect connection history
+	db_lock(connect_history, WRITE_LOCK);
 	if( ( hist = uidb_get(connect_history, ip)) ) { //IP found
 		if( hist->ddos ) {// flagged as DDoS
+			db_unlock(connect_history);
 			return (connect_ok == 2 ? 1 : 0);
 		} else if( DIFF_TICK(timer->gettick(),hist->tick) < ddos_interval ) {// connection within ddos_interval
 				hist->tick = timer->gettick();
 				if( ++hist->count >= ddos_count ) {// DDoS attack detected
 					hist->ddos = 1;
+					db_unlock(connect_history);
 					ShowWarning("connect_check: DDoS Attack detected from %u.%u.%u.%u!\n", CONVIP(ip));
 					return (connect_ok == 2 ? 1 : 0);
 				}
+				db_unlock(connect_history);
 				return connect_ok;
 		} else {// not within ddos_interval, clear data
 			hist->tick  = timer->gettick();
 			hist->count = 0;
+			db_unlock(connect_history);
 			return connect_ok;
 		}
 	}
@@ -2202,6 +2198,8 @@ static int connect_check_(uint32 ip)
 	hist->ip   = ip;
 	hist->tick = timer->gettick();
 	uidb_put(connect_history, ip, hist);
+	db_unlock(connect_history);
+
 	return connect_ok;
 }
 
@@ -2217,6 +2215,7 @@ static int connect_check_clear(struct timer_interface *td, int tid, int64 tick, 
 	if( !db_size(connect_history) )
 		return 0;
 
+	db_lock(connect_history, READ_LOCK);
 	iter = db_iterator(connect_history);
 
 	for( hist = dbi_first(iter); dbi_exists(iter); hist = dbi_next(iter) ){
@@ -2229,6 +2228,7 @@ static int connect_check_clear(struct timer_interface *td, int tid, int64 tick, 
 		list++;
 	}
 	dbi_destroy(iter);
+	db_unlock(connect_history);
 
 	if( access_debug ){
 		ShowInfo("connect_check_clear: Cleared %d of %d from IP list.\n", clear, list);
@@ -2580,8 +2580,10 @@ static void socket_final(void)
 {
 	socket_final_thread_pool();
 
-	if( connect_history )
+	if( connect_history ) {
+		db_lock(connect_history, WRITE_LOCK);
 		db_destroy(connect_history);
+	}
 	VECTOR_CLEAR(access_allow);
 	VECTOR_CLEAR(access_deny);
 

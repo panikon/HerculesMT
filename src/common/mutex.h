@@ -28,7 +28,10 @@
  */
 
 /**
- * Enable debug functionality in order to identify common deadlocks
+ * Enable debug functionality in order to identify common deadlocks.
+ *
+ * Enabling this can lead to an overhead of about 17% ms when executing mutex heavy
+ * tasks. 
  **/
 //#define MUTEX_DEBUG
 

@@ -158,7 +158,7 @@ static int mapindex_name2id(const char *name)
 
 	mapindex->getmapname(name, map_name);
 
-	if( (i = strdb_iget_safe(mapindex->db, map_name, 0)) )
+	if( (i = strdb_iget(mapindex->db, map_name, 0)) )
 		return i;
 
 	ShowDebug("mapindex_name2id: Map \"%s\" not found in index list!\n", map_name);
@@ -171,7 +171,7 @@ static int mapindex_name2id(const char *name)
  **/
 static int mapindex_default_id(void)
 {
-	return strdb_iget_safe(mapindex->db,
+	return strdb_iget(mapindex->db,
 			mapindex->default_map, mapindex->default_map_len);
 }
 
@@ -243,6 +243,32 @@ static bool mapindex_config_read(void)
 	return true;
 }
 
+struct rwlock_data *lock = NULL;
+
+/**
+ * Locks mapindex
+ **/
+static void mapindex_lock(enum lock_type type)
+{
+	if(type == READ_LOCK)
+		rwlock->read_lock(lock);
+	else
+		rwlock->write_lock(lock);
+	db_lock(mapindex->db, type);
+}
+
+/**
+ * Unlocks mapindex
+ **/
+static void mapindex_unlock(enum lock_type type)
+{
+	if(type == READ_LOCK)
+		rwlock->read_unlock(lock);
+	else
+		rwlock->write_unlock(lock);
+	db_unlock(mapindex->db);
+}
+
 /**
  * Does initial configuration parsing and then initializes the map index.
  *
@@ -250,13 +276,9 @@ static bool mapindex_config_read(void)
  **/
 static int mapindex_init(void)
 {
-	mapindex->lock = rwlock->create();
-	if(!mapindex->lock) {
-		ShowError("mapindex_init: Failed to create mapindex lock!\n");
-		exit(EXIT_FAILURE);
-	}
+	lock = rwlock->create();
 
-	if (!mapindex_config_read())
+	if(!mapindex_config_read())
 		ShowError("Failed to load map_index configuration. Continuing with default values...\n");
 
 	FILE *fp;
@@ -311,7 +333,7 @@ static int mapindex_init(void)
 
 static bool mapindex_check_default(void)
 {
-	if(!strdb_iget_safe(mapindex->db, mapindex->default_map, mapindex->default_map_len)) {
+	if(!strdb_iget(mapindex->db, mapindex->default_map, mapindex->default_map_len)) {
 		ShowError("mapindex_init: MAP_DEFAULT '%s' not found in cache! "
 			"Update mapindex.h MAP_DEFAULT var!!!\n", mapindex->default_map);
 		return false;
@@ -330,7 +352,7 @@ static void mapindex_final(void)
 {
 	db_destroy(mapindex->db);
 	VECTOR_CLEAR(mapindex->list);
-	rwlock->destroy(mapindex->lock);
+	rwlock->destroy(lock);
 }
 
 void mapindex_defaults(void)
@@ -347,6 +369,9 @@ void mapindex_defaults(void)
 	mapindex->default_y = MAP_DEFAULT_Y;
 	VECTOR_INIT(mapindex->list);
 
+	/* */
+	mapindex->lock = mapindex_lock;
+	mapindex->unlock = mapindex_unlock;
 	/* */
 	mapindex->config_read = mapindex_config_read;
 	mapindex->config_read_dbpath = mapindex_config_read_dbpath;

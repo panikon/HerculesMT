@@ -121,16 +121,20 @@ static struct online_login_data* login_add_online_user(int char_server, int acco
 {
 	struct online_login_data* p;
 
-	mutex->lock(login->online_db_mutex);
+	db_lock(login->online_db, WRITE_LOCK);
 	p = idb_ensure(login->online_db, account_id, login->create_online_user);
-	mutex->unlock(login->online_db_mutex);
+	if(p) {
+		p->char_server = char_server;
+		if( p->waiting_disconnect != INVALID_TIMER )
+		{
+			timer->delete(p->waiting_disconnect, login->waiting_disconnect_timer);
+			p->waiting_disconnect = INVALID_TIMER;
+		}
+	} else
+		ShowError("login_add_online_user: login->online_db database failure "
+			"(char_server %d, aid %d)\n", char_server, account_id);
 
-	p->char_server = char_server;
-	if( p->waiting_disconnect != INVALID_TIMER )
-	{
-		timer->delete(p->waiting_disconnect, login->waiting_disconnect_timer);
-		p->waiting_disconnect = INVALID_TIMER;
-	}
+	db_unlock(login->online_db);
 	return p;
 }
 
@@ -142,9 +146,9 @@ static void login_remove_online_user(int account_id)
 {
 	struct online_login_data* p;
 
-	mutex->lock(login->online_db_mutex);
+	db_lock(login->online_db, WRITE_LOCK);
 
-	p = (struct online_login_data*)idb_get(login->online_db, account_id);
+	p = idb_get(login->online_db, account_id);
 	if(p) {
 		if( p->waiting_disconnect != INVALID_TIMER )
 			timer->delete(p->waiting_disconnect, login->waiting_disconnect_timer);
@@ -152,7 +156,7 @@ static void login_remove_online_user(int account_id)
 		idb_remove(login->online_db, account_id);
 	}
 
-	mutex->unlock(login->online_db_mutex);
+	db_unlock(login->online_db);
 }
 
 /**
@@ -161,25 +165,30 @@ static void login_remove_online_user(int account_id)
  **/
 static int login_waiting_disconnect_timer(struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data)
 {
-	mutex->lock(login->online_db_mutex);
-	struct online_login_data* p = (struct online_login_data*)idb_get(login->online_db, id);
-	mutex->unlock(login->online_db_mutex);
+	struct online_login_data* p;
 
-	if( p != NULL && p->waiting_disconnect == tid && p->account_id == id )
-	{
-		p->waiting_disconnect = INVALID_TIMER;
-		login->remove_online_user(id);
+	db_lock(login->online_db, READ_LOCK);
 
-		mutex->lock(login->auth_db_mutex);
-		idb_remove(login->auth_db, id);
-		mutex->unlock(login->auth_db_mutex);
+	if((p = idb_get(login->online_db, id)) != NULL) {
+		// Sanity check
+		if(p->waiting_disconnect == tid && p->account_id == id) {
+			idb_remove(login->online_db, id);
+			//login->remove_online_user(id);
+
+			db_lock(login->auth_db, WRITE_LOCK);
+			idb_remove(login->auth_db, id);
+			db_unlock(login->auth_db);
+		}
 	}
+
+	db_unlock(login->online_db);
+
 	return 0;
 }
 
 /**
  * @see DBApply
- * @mutex login->online_db_mutex
+ * @lock db_lock(login->online_db)
  */
 static int login_online_db_setoffline(const struct DBKey_s *key, struct DBData *data, va_list ap)
 {
@@ -204,7 +213,7 @@ static int login_online_db_setoffline(const struct DBKey_s *key, struct DBData *
  * Removes all online users that have an invalid char_server (ACC_DISCONNECTED)
  * @see DBApply (online_db)
  * @see login_online_data_cleanup
- * @mutex login->online_db_mutex
+ * @lock db_lock(login->online_db)
  */
 static int login_online_data_cleanup_sub(const struct DBKey_s *key, struct DBData *data, va_list ap)
 {
@@ -233,9 +242,9 @@ static int login_online_data_cleanup_sub(const struct DBKey_s *key, struct DBDat
  **/
 static int login_online_data_cleanup(struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data)
 {
-	mutex->lock(login->online_db_mutex);
+	db_lock(login->online_db, READ_LOCK);
 	login->online_db->foreach(login->online_db, login->online_data_cleanup_sub, tm);
-	mutex->unlock(login->online_db_mutex);
+	db_unlock(login->online_db);
 	return 0;
 }
 
@@ -339,9 +348,9 @@ static void lchrif_server_reset(struct mmo_char_server *server)
 {
 	struct login_session_data *sd = server->session->session_data;
 
-	mutex->lock(login->online_db_mutex);
+	db_lock(login->online_db, WRITE_LOCK);
 	login->online_db->foreach(login->online_db, login->online_db_setoffline, sd->account_id);
-	mutex->unlock(login->online_db_mutex);
+	db_unlock(login->online_db);
 
 	lchrif->server_destroy(server);
 }
@@ -366,6 +375,7 @@ static void lchrif_on_disconnect(struct mmo_char_server *server)
  **/
 static void lchrif_final(void)
 {
+	db_lock(lchrif->packet_db, WRITE_LOCK);
 	db_clear(lchrif->packet_db);
 	aFree(lchrif->packet_list);
 }
@@ -408,7 +418,11 @@ static void lchrif_init(void)
 	size_t length = ARRAYLENGTH(inter_packet);
 
 	lchrif->packet_list = aMalloc(sizeof(*lchrif->packet_list)*length);
-	lchrif->packet_db = idb_alloc(DB_OPT_BASE);
+	/**
+	 * Packet database is read-only, there's no need to use locking mechanisms other than
+	 * the internal ones.
+	 **/
+	lchrif->packet_db = idb_alloc(DB_OPT_BASE|DB_OPT_DISABLE_LOCK);
 
 	for(size_t i = 0; i < length; i++) {
 		int exists;
@@ -546,9 +560,8 @@ static void login_fromchar_parse_auth(struct s_receive_action_data *act, struct 
 	uint32 ipl = ntohl(RFIFOL(act,15));
 	int request_id = RFIFOL(act,19);
 
-	mutex->lock(login->auth_db_mutex);
-	node = (struct login_auth_node*)idb_get(login->auth_db, account_id);
-	mutex->unlock(login->auth_db_mutex);
+	db_lock(login->auth_db, READ_LOCK);
+	node = idb_get(login->auth_db, account_id);
 
 	if( core->runflag == LOGINSERVER_ST_RUNNING &&
 		node != NULL &&
@@ -564,9 +577,7 @@ static void login_fromchar_parse_auth(struct s_receive_action_data *act, struct 
 		// send ack
 		login->fromchar_auth_ack(act->session, account_id, login_id1, login_id2, sex, request_id, node);
 		// each auth entry can only be used once
-		mutex->lock(login->auth_db_mutex);
 		idb_remove(login->auth_db, account_id);
-		mutex->unlock(login->auth_db_mutex);
 	}
 	else
 	{// authentication not found
@@ -574,6 +585,7 @@ static void login_fromchar_parse_auth(struct s_receive_action_data *act, struct 
 			server->name, account_id, socket_io->ip2str(ipl, NULL));
 		login->fromchar_auth_ack(act->session, account_id, login_id1, login_id2, sex, request_id, NULL);
 	}
+	db_unlock(login->auth_db);
 }
 
 /**
@@ -1049,7 +1061,7 @@ static void login_fromchar_parse_online_accounts(struct s_receive_action_data *a
 	struct login_session_data *sd = server->session->session_data;
 	int id = sd->account_id;
 
-	mutex->lock(login->online_db_mutex);
+	db_lock(login->online_db, WRITE_LOCK);
 
 	//Set all chars from this char-server offline first
 	login->online_db->foreach(login->online_db, login->online_db_setoffline, id);
@@ -1057,15 +1069,19 @@ static void login_fromchar_parse_online_accounts(struct s_receive_action_data *a
 	for (i = 0; i < users; i++) {
 		int aid = RFIFOL(act,6+i*4);
 		struct online_login_data *p = idb_ensure(login->online_db, aid, login->create_online_user);
-		p->char_server = id;
-		if (p->waiting_disconnect != INVALID_TIMER)
-		{
-			timer->delete(p->waiting_disconnect, login->waiting_disconnect_timer);
-			p->waiting_disconnect = INVALID_TIMER;
-		}
+		if(p) {
+			p->char_server = id;
+			if (p->waiting_disconnect != INVALID_TIMER)
+			{
+				timer->delete(p->waiting_disconnect, login->waiting_disconnect_timer);
+				p->waiting_disconnect = INVALID_TIMER;
+			}
+		} else
+			ShowError("login_fromchar_parse_online_accounts: login->online_db database failure "
+				"(char_server %d, aid %d)\n", server->pos, aid);
 	}
 
-	mutex->unlock(login->online_db_mutex);
+	db_unlock(login->online_db);
 }
 
 /**
@@ -1111,10 +1127,10 @@ static void login_fromchar_parse_all_offline(struct s_receive_action_data *act,
 	struct login_session_data *sd = server->session->session_data;
 	ShowInfo("Setting accounts from char-server %d offline.\n", server->pos);
 
-	mutex->lock(login->online_db_mutex);
+	db_lock(login->online_db, WRITE_LOCK);
 	login->online_db->foreach(login->online_db, login->online_db_setoffline,
 		sd->account_id);
-	mutex->unlock(login->online_db_mutex);
+	db_unlock(login->online_db);
 }
 
 /**
@@ -1145,11 +1161,12 @@ static void login_fromchar_parse_wrong_pincode(struct s_receive_action_data *act
 	struct mmo_account acc;
 
 	if( login->account_load(RFIFOL(act,2), &acc) ) {
-		mutex->lock(login->online_db_mutex);
-		struct online_login_data* ld = (struct online_login_data*)idb_get(login->online_db,acc.account_id);
-		mutex->unlock(login->online_db_mutex);
+		bool exists;
+		db_lock(login->online_db, READ_LOCK);
+		exists = idb_exists(login->online_db, acc.account_id);
+		db_unlock(login->online_db);
 
-		if (ld == NULL)
+		if (!exists)
 			return;
 
 		loginlog->log(socket_io->host2ip(acc.last_ip), acc.userid, 100, "PIN Code check failed");
@@ -1270,7 +1287,7 @@ static enum parsefunc_rcode login_parse_fromchar(struct s_receive_action_data *a
 		}
 
 		struct login_inter_packet_entry *packet_data;
-		packet_data = DB->data2ptr(lchrif->packet_db->get_safe(lchrif->packet_db, DB->i2key(command)));
+		packet_data = DB->data2ptr(lchrif->packet_db->get(lchrif->packet_db, DB->i2key(command)));
 		if(!packet_data) {
 			ShowError("login_parse_fromchar: Unknown packet 0x%x from a char-server! Disconnecting!\n", command);
 			socket_io->session_disconnect_guard(act->session);
@@ -1606,14 +1623,14 @@ static void login_auth_ok(struct login_session_data *sd)
 		return;
 	}
 
-	mutex->lock(login->online_db_mutex);
-	struct online_login_data* data = (struct online_login_data*)idb_get(login->online_db, sd->account_id);
+	db_lock(login->online_db, WRITE_LOCK);
+	struct online_login_data* data = idb_get(login->online_db, sd->account_id);
 	if( data )
 	{// account is already marked as online!
 		switch(data->char_server) {
 			// Client already authenticated but did not access char-server yet
 			case ACC_WAIT_TIMEOUT:
-				mutex->unlock(login->online_db_mutex);
+				db_unlock(login->online_db);
 				// Do not let a new connection until auth_db timeout, this could be an attack.
 				ShowNotice("User '%s' still waiting authentication timeout - Rejected\n",
 					sd->userid);
@@ -1621,9 +1638,9 @@ static void login_auth_ok(struct login_session_data *sd)
 				return;
 #if 0
 				// wipe previous session
-				mutex->lock(login->auth_db_mutex);
+				db_lock(login->auth_db, WRITE_LOCK);
 				idb_remove(login->auth_db, sd->account_id);
-				mutex->unlock(login->auth_db_mutex);
+				db_unlock(login->auth_db);
 
 				login->remove_online_user(sd->account_id);
 				data = NULL;
@@ -1632,18 +1649,18 @@ static void login_auth_ok(struct login_session_data *sd)
 			case ACC_DISCONNECTED:
 			case ACC_CHAR_VALID:
 			default: // Request char servers to kick this account out. [Skotlex]
-				mutex->unlock(login->online_db_mutex);
 				ShowNotice("User '%s' is already online - Rejected.\n", sd->userid);
 				login->kick(sd);
 				if( data->waiting_disconnect == INVALID_TIMER )
 					data->waiting_disconnect = timer->add(timer->gettick()+AUTH_TIMEOUT,
 						login->waiting_disconnect_timer, sd->account_id, 0);
 
+				db_unlock(login->online_db);
 				lclif->connection_error(sd->session, NBE_DUPLICATE_ID);
 				return;
 		}
 	}
-	mutex->unlock(login->online_db_mutex);
+	db_unlock(login->online_db);
 
 	rwlock->read_lock(g_char_server_list_lock);
 	bool server_list = lclif->server_list(sd, &g_char_server_list);
@@ -1671,9 +1688,9 @@ static void login_auth_ok(struct login_session_data *sd)
 	node->group_id = sd->group_id;
 	node->expiration_time = sd->expiration_time;
 
-	mutex->lock(login->auth_db_mutex);
+	db_lock(login->auth_db, WRITE_LOCK);
 	idb_put(login->auth_db, sd->account_id, node);
-	mutex->unlock(login->auth_db_mutex);
+	db_unlock(login->auth_db);
 
 
 	// mark client as 'online'
@@ -2476,10 +2493,12 @@ int do_final(void)
 	}
 	login->accounts = NULL; // destroyed in account_engine
 	accounts = NULL;
+
+	db_lock(login->online_db, WRITE_LOCK);
 	login->online_db->destroy(login->online_db, NULL);
+
+	db_lock(login->auth_db, WRITE_LOCK);
 	login->auth_db->destroy(login->auth_db, NULL);
-	mutex->destroy(login->online_db_mutex);
-	mutex->destroy(login->auth_db_mutex);
 
 	rwlock->destroy(g_char_server_list_lock);
 	g_char_server_list_lock = NULL;
@@ -2649,21 +2668,11 @@ int do_init(int argc, char **argv)
 
 	// Online user database init
 	login->online_db = idb_alloc(DB_OPT_RELEASE_DATA);
-	login->online_db_mutex = mutex->create();
-	if(!login->online_db_mutex) {
-		ShowFatalError("Failed to initialize online db\n");
-		exit(EXIT_FAILURE);
-	}
 	timer->add_func_list(login->waiting_disconnect_timer,
 		"login->waiting_disconnect_timer");
 
 	// Interserver auth init
 	login->auth_db = idb_alloc(DB_OPT_RELEASE_DATA);
-	login->auth_db_mutex = mutex->create();
-	if(!login->auth_db_mutex) {
-		ShowFatalError("Failed to initialize auth db\n");
-		exit(EXIT_FAILURE);
-	}
 
 	// Create login queue
 	struct s_action_queue *queue = action->queue_create(10, login->ers_collection, NULL, NULL, NULL, NULL);

@@ -113,6 +113,9 @@
 #include "common/rwlock.h"
 #include "common/mutex.h"
 #include "common/utils.h"
+#include "common/atomic.h"
+#include "common/rwlock.h"
+#include "common/thread.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -188,6 +191,8 @@ enum DBNodeColor {
  * @param data Data of this database entry
  * @param deleted If the node is deleted
  * @param color Color of the node
+ * @param reference_counter Number of instances of this node
+ * @param waiting_deletion  Delete node when reference_counter reaches 0
  * @private
  * @see struct DBMap_impl#ht
  */
@@ -202,6 +207,9 @@ struct DBNode {
 	// Other
 	enum DBNodeColor color;
 	unsigned deleted : 1;
+
+	unsigned int reference_counter;
+	bool waiting_deletion;
 };
 
 /**
@@ -221,11 +229,11 @@ struct db_free {
  * @param vtable Interface of the database
  * @param alloc_file File where the database was allocated
  * @param alloc_line Line in the file where the database was allocated
- * @param free_list Array of deleted nodes to be freed
- * @param free_count Number of deleted nodes in free_list
- * @param free_max Current maximum capacity of free_list
- * @param free_lock Lock for freeing the nodes
+ * @param lock Internal database lock
+ * @param lock_tid TID if db is write locked, otherwise -1
+ * @param garbage_collection Internal garbage collection so we don't spam free calls
  * @param nodes Manager of reusable tree nodes
+ * @param cache Last accessed node (atomically accessed)
  * @param cmp Comparator of the database
  * @param hash Hasher of the database
  * @param release Releaser of the database
@@ -234,7 +242,7 @@ struct db_free {
  * @param options Options of the database
  * @param item_count Number of items in the database
  * @param maxlen Maximum length of strings in DB_STRING and DB_ISTRING databases
- * @param global_lock Global lock of the database
+ * @param global_lock Global lock of the database (atomically accessed)
  * @param bucket_count Current size of ht
  * @param load_factor The ratio of item_count and bucket_count that triggers a capacity increase
  * @private
@@ -250,11 +258,27 @@ struct DBMap_impl {
 	// File and line of allocation
 	const char *alloc_file;
 	int alloc_line;
-	// Lock system
-	struct db_free *free_list;
-	unsigned int free_count;
-	unsigned int free_max;
-	unsigned int free_lock;
+
+	struct rwlock_data *lock;
+	int lock_tid;
+	/**
+	 * Internal garbage collection
+	 * @param free_list Array of deleted nodes to be freed
+	 * @param free_count Number of deleted nodes in free_list
+	 * @param free_max Current maximum capacity of free_list
+	 * @param free_lock Number of instances currently using the database, when
+	 *                  reaches 0 all nodes in the free_list are freed from
+	 *                  db->nodes (atomically accessed)
+	 * @see db_free_lock
+	 * @see db_free_unlock
+	 **/
+	struct {
+		struct db_free *free_list;
+		unsigned int free_count;
+		unsigned int free_max;
+		unsigned int free_lock;
+	} garbage_collection;
+
 	// Hash table implementation
 	ERS *nodes;
 	struct DBNode **ht;
@@ -271,7 +295,6 @@ struct DBMap_impl {
 	enum DBType type;
 	enum DBOptions options;
 
-	unsigned global_lock : 1;
 #ifdef DB_ENABLE_PRIVATE_STATS
 	struct s_private_stats {
 		uint32_t collision;
@@ -531,6 +554,7 @@ static void db_rotate_left(struct DBNode *node, struct DBNode **root)
  * @private
  * @see #db_rebalance()
  * @see #db_rebalance_erase()
+ * @writelock
  */
 static void db_rotate_right(struct DBNode *node, struct DBNode **root)
 {
@@ -564,6 +588,7 @@ static void db_rotate_right(struct DBNode *node, struct DBNode **root)
  * @see #db_rotate_left()
  * @see #db_rotate_right()
  * @see #db_obj_put()
+ * @writelock
  */
 static void db_rebalance(struct DBNode *node, struct DBNode **root)
 {
@@ -626,6 +651,7 @@ static void db_rebalance(struct DBNode *node, struct DBNode **root)
  * @see #db_rotate_left()
  * @see #db_rotate_right()
  * @see #db_free_unlock()
+ * @writelock
  */
 static void db_rebalance_erase(struct DBNode *node, struct DBNode **root)
 {
@@ -861,11 +887,12 @@ static void db_dup_key_free(struct DBMap_impl *db, struct DBKey_s *key)
  * @see struct DBMap_impl#free_max
  * @see #db_obj_remove()
  * @see #db_free_remove()
+ * @writelock
  */
 static void db_free_add(struct DBMap_impl *db, struct DBNode *node, struct DBNode **root)
 {
 	DB_COUNTSTAT(db_free_add);
-	if (db->free_lock == (unsigned int)~0) {
+	if (db->garbage_collection.free_lock == (unsigned int)~0) {
 		ShowFatalError("db_free_add: free_lock overflow\n"
 				"Database allocated at %s:%d\n",
 				db->alloc_file, db->alloc_line);
@@ -877,23 +904,24 @@ static void db_free_add(struct DBMap_impl *db, struct DBNode *node, struct DBNod
 		node->key = db_dup_key(db, &node->key);
 		db->release(&old_key, node->data, DB_RELEASE_KEY);
 	}
-	if (db->free_count == db->free_max) { // No more space, expand free_list
-		db->free_max = (db->free_max<<2) +3; // = db->free_max*4 +3
-		if (db->free_max <= db->free_count) {
-			if (db->free_count == (unsigned int)~0) {
+	if (db->garbage_collection.free_count == db->garbage_collection.free_max) { // No more space, expand free_list
+		db->garbage_collection.free_max = (db->garbage_collection.free_max<<2) +3; // = db->free_max*4 +3
+		if (db->garbage_collection.free_max <= db->garbage_collection.free_count) {
+			if (db->garbage_collection.free_count == (unsigned int)~0) {
 				ShowFatalError("db_free_add: free_count overflow\n"
 						"Database allocated at %s:%d\n",
 						db->alloc_file, db->alloc_line);
 				exit(EXIT_FAILURE);
 			}
-			db->free_max = (unsigned int)~0;
+			db->garbage_collection.free_max = (unsigned int)~0;
 		}
-		RECREATE(db->free_list, struct db_free, db->free_max);
+		RECREATE(db->garbage_collection.free_list, struct db_free,
+			db->garbage_collection.free_max);
 	}
 	node->deleted = 1;
-	db->free_list[db->free_count].node = node;
-	db->free_list[db->free_count].root = root;
-	db->free_count++;
+	db->garbage_collection.free_list[db->garbage_collection.free_count].node = node;
+	db->garbage_collection.free_list[db->garbage_collection.free_count].root = root;
+	db->garbage_collection.free_count++;
 	db->item_count--;
 }
 
@@ -909,51 +937,102 @@ static void db_free_add(struct DBMap_impl *db, struct DBNode *node, struct DBNod
  * @see struct DBMap_impl#free_count
  * @see #db_obj_put()
  * @see #db_free_add()
+ * @writelock
  */
 static void db_free_remove(struct DBMap_impl *db, struct DBNode *node)
 {
 	unsigned int i;
 
 	DB_COUNTSTAT(db_free_remove);
-	for (i = 0; i < db->free_count; i++) {
-		if (db->free_list[i].node == node) {
-			if (i < db->free_count -1) // copy the last item to where the removed one was
-				memcpy(&db->free_list[i], &db->free_list[db->free_count -1], sizeof(struct db_free));
+	for (i = 0; i < db->garbage_collection.free_count; i++) {
+		if (db->garbage_collection.free_list[i].node == node) {
+			if (i < db->garbage_collection.free_count -1) // copy the last item to where the removed one was
+				memcpy(&db->garbage_collection.free_list[i],
+				       &db->garbage_collection.free_list[db->garbage_collection.free_count -1],
+				       sizeof(struct db_free));
 			db_dup_key_free(db, &node->key);
 			break;
 		}
 	}
 	node->deleted = 0;
-	if (i == db->free_count) {
-		ShowWarning("db_free_remove: node was not found - database allocated at %s:%d\n", db->alloc_file, db->alloc_line);
+	if (i == db->garbage_collection.free_count) {
+		ShowWarning("db_free_remove: node was not found - database allocated at %s:%d\n",
+			db->alloc_file, db->alloc_line);
 	} else {
-		db->free_count--;
+		db->garbage_collection.free_count--;
 	}
 	db->item_count++;
 }
 
 /**
+ * Checks And Switches current acquired lock to WRITE_LOCK.
+ * Doesn't perform any operations if the the currently acquired lock
+ * is already a WRITE_LOCK.
+ *
+ * @return Returns true if the lock was switched
+ **/
+static bool db_lock_cas(struct DBMap_impl *db)
+{
+	if(!db->lock)
+		return false;
+
+	bool is_writer = (db->lock_tid == thread->get_tid());
+	if(!is_writer) {
+		rwlock->read_unlock(db->lock);
+		rwlock->write_lock(db->lock);
+		db->lock_tid = thread->get_tid();
+		return true;
+	}
+	return false;
+}
+
+/**
+ * Reacquires read lock if `reacquire` is true
+ **/
+static void db_lock_reacquire(struct DBMap_impl *db, bool reacquire)
+{
+	if(!reacquire || !db->lock)
+		return;
+
+	db->lock_tid = -1;
+	rwlock->write_unlock(db->lock);
+	rwlock->read_lock(db->lock);
+}
+
+/**
  * Increment the free_lock of the database.
- * @param db Target database
+ * Acquires db->lock.
+ * @param db   Target database
+ * @param type Type of lock to be used in most operations, operations that need
+ *             more privileges will automatically acquire and release the write lock.
  * @private
  * @see struct DBMap_impl#free_lock
  * @see #db_unlock()
  */
-static void db_free_lock(struct DBMap_impl *db)
+static void db_free_lock(struct DBMap_impl *db, enum lock_type type)
 {
 	DB_COUNTSTAT(db_free_lock);
-	if (db->free_lock == (unsigned int)~0) {
+	if(db->garbage_collection.free_lock == (unsigned int)~0) {
 		ShowFatalError("db_free_lock: free_lock overflow\n"
 				"Database allocated at %s:%d\n",
 				db->alloc_file, db->alloc_line);
 		exit(EXIT_FAILURE);
 	}
-	db->free_lock++;
+	if(db->lock) {
+		if(type == READ_LOCK)
+			rwlock->read_lock(db->lock);
+		else {
+			rwlock->write_lock(db->lock);
+			Assert(db->lock_tid == -1);
+			db->lock_tid = thread->get_tid();
+		}
+	}
+	InterlockedIncrement(&db->garbage_collection.free_lock);
 }
 
 /**
  * Decrement the free_lock of the database.
- * If it was the last lock, frees the nodes of the database.
+ * If it was the last lock, frees the nodes in the free_list of this database.
  * Keeps the tree balanced.
  * NOTE: Frees the duplicated keys of the nodes
  * @param db Target database
@@ -961,37 +1040,352 @@ static void db_free_lock(struct DBMap_impl *db)
  * @see struct DBMap_impl#free_lock
  * @see #db_free_dbn()
  * @see #db_lock()
+ * @lock
  */
 static void db_free_unlock(struct DBMap_impl *db)
 {
 	unsigned int i;
+	unsigned int free_lock_tmp;
 
 	DB_COUNTSTAT(db_free_unlock);
-	if (db->free_lock == 0) {
-		ShowWarning("db_free_unlock: free_lock was already 0\n"
+	free_lock_tmp = InterlockedDecrement(&db->garbage_collection.free_lock);
+	if (free_lock_tmp == UINT32_MAX) {
+		ShowFatalError("db_free_unlock: free_lock underflow\n"
 				"Database allocated at %s:%d\n",
 				db->alloc_file, db->alloc_line);
-	} else {
-		db->free_lock--;
+		exit(EXIT_FAILURE);
 	}
-	if (db->free_lock)
-		return; // Not last lock
+	if (free_lock_tmp)
+		goto unlock_return; // Not last lock
 
-	if (!db->free_count)
-		return; // No operation
+	if (!db->garbage_collection.free_count)
+		goto unlock_return; // No operation
+
+	// Switch lock in use only if we have the read lock
+	bool reacquire = db_lock_cas(db);
 
 	rwlock->read_lock(db->nodes->collection_lock);
 	mutex->lock(db->nodes->cache_mutex);
-	for (i = 0; i < db->free_count ; i++) {
-		db_rebalance_erase(db->free_list[i].node, db->free_list[i].root);
-		db_dup_key_free(db, &db->free_list[i].node->key);
+	for (i = 0; i < db->garbage_collection.free_count ; i++) {
+		db_rebalance_erase(db->garbage_collection.free_list[i].node,
+		                   db->garbage_collection.free_list[i].root);
+		db_dup_key_free(db, &db->garbage_collection.free_list[i].node->key);
 		DB_COUNTSTAT(db_node_free);
-		ers_free(db->nodes, db->free_list[i].node);
+		ers_free(db->nodes, db->garbage_collection.free_list[i].node);
 	}
 	mutex->unlock(db->nodes->cache_mutex);
 	rwlock->read_unlock(db->nodes->collection_lock);
 
-	db->free_count = 0;
+	db->garbage_collection.free_count = 0;
+	if(db->lock) {
+		rwlock->write_unlock(db->lock);
+		db->lock_tid = -1;
+	}
+	return;
+
+unlock_return:
+	{
+		if(!db->lock)
+			return;
+		bool is_writer = (db->lock_tid == thread->get_tid());
+		if(is_writer) {
+			db->lock_tid = -1;
+			rwlock->write_unlock(db->lock);
+		} else
+			rwlock->read_unlock(db->lock);
+		return;
+	}
+}
+
+/**
+ * Verifies whether the database cache was hit.
+ *
+ * @return Cached node (when hit), otherwise NULL
+ * @readlock
+ **/
+static struct DBNode *db_cache_is_hit(struct DBMap_impl *db, const struct DBKey_s *key)
+{
+	struct DBNode *tmp_cache = db->cache;
+	if(tmp_cache && db->cmp(key, &tmp_cache->key) == 0) {
+#if defined(DEBUG)
+		if(tmp_cache->deleted) {
+			ShowDebug("db_cache_is_hit: Cache contains a deleted node. Please report this!!!\n");
+			return NULL;
+		}
+#endif
+		return tmp_cache; // cache hit
+	}
+	return NULL;
+}
+
+
+/**
+ * Performs recursive iteration of a DBNode tree, adding all items into the
+ * provided database and then freeing the node.
+ *
+ * @param db Target Database.
+ * @param node Node.
+ * Acquires collection_lock (read) and cache_mutex
+ * @private
+ * @writelock
+ **/
+static void db_rehash_node(struct DBMap_impl *db, struct DBNode *node)
+{
+	struct DBMap *self = (struct DBMap *)db;
+	self->put(self, node->key, node->data, NULL);
+
+	if(node->left)
+		db_rehash_node(db, node->left);
+	if(node->right)
+		db_rehash_node(db, node->right);
+
+	/**
+	 * The node is freed here instead of being put in a list to be freed
+	 * later because otherwise the memory usage of this DBMap would double
+	 * while a rehash operation was being done. Also even after freeing all
+	 * the memory would continue to be allocated in the ERS.
+	 **/
+	rwlock->read_lock(db->nodes->collection_lock);
+	mutex->lock(db->nodes->cache_mutex);
+	ers_free(db->nodes, node);
+	rwlock->read_unlock(db->nodes->collection_lock);
+	mutex->unlock(db->nodes->cache_mutex);
+}
+
+/**
+ * Reallocates <code>ht</code> with <code>new_count</code> entries and recalculates
+ * all hashes in order to populate the new memory.
+ * This operation is extremely expensive and should only be triggered after the
+ * <code>entry_count</code> superseeds the <code>load_factor</code> threshold.
+ * @param db        Target Database.
+ * @param new_count New number of entries.
+ * @private
+ * @writelock
+ **/
+static bool db_rehash(struct DBMap_impl *db, size_t new_count)
+{
+	static bool done = false;
+
+	DB_COUNTSTAT(db_rehash);
+	DB_COUNTSTAT_PRIVATE(db, rehash);
+	// Save previous state
+	size_t previous_count = db->bucket_count;
+	struct DBNode **ht_old = db->ht;
+	enum DBOptions options = db->options;
+	// Reset state
+	db->ht = aCalloc(new_count, sizeof(*db->ht));
+	db->bucket_count = new_count;
+	db->item_count = 0;
+	InterlockedExchangePointer(&db->cache, NULL);
+	// Don't try to copy keys (if DB_OPT_DUP_KEY is already set they were
+	// already duplicated)
+	db->options &= ~DB_OPT_DUP_KEY;
+
+	struct DBNode *node = NULL;
+	/**
+	 * collection_lock and cache_mutex can't be acquired before calling
+	 * db_rehash_node because obj_put and rehash_node both acquire those
+	 * locks.
+	 * This makes this operation more expensive because there are several
+	 * lock acquirals (at least two per iteration).
+	 **/
+	for(size_t i = 0; i < previous_count; i++) {
+		node = ht_old[i];
+		if(node)
+			db_rehash_node(db, node);
+	}
+
+	db->options = options;
+	aFree(ht_old);
+	return true;
+}
+
+/**
+ * Adds new entry at the next valid position.
+ * This function should be called after failure to find a node.
+ *
+ * @param db Target database
+ * @param hash Calculated hash for key via <code>db->hash%db->bucket_count</code>
+ * @param c Last valid comparison <code>db->cmp</code>
+ * @param parent This entry's parent
+ * @return pointer to new node
+ * @retval NULL Failed to create node
+ * @remarks db must be locked via <code>db_free_lock</code>
+ * @see db_obj_vensure
+ * @see db_obj_put
+ * @private
+ * @writelock
+ **/
+struct DBNode *db_node_create(struct DBMap_impl *db, unsigned int hash, int c, struct DBNode *parent)
+{
+	struct DBNode *node;
+
+	if (db->item_count == UINT32_MAX) {
+		ShowError("db_obj_create: item_count overflow, aborting item insertion.\n"
+				"Database allocated at %s:%d",
+				db->alloc_file, db->alloc_line);
+		return NULL;
+	}
+
+	DB_COUNTSTAT(db_node_alloc);
+
+	rwlock->read_lock(db->nodes->collection_lock);
+	mutex->lock(db->nodes->cache_mutex);
+	node = ers_alloc(db->nodes);
+	mutex->unlock(db->nodes->cache_mutex);
+	rwlock->read_unlock(db->nodes->collection_lock);
+
+	node->left = NULL;
+	node->right = NULL;
+	node->deleted = 0;
+	db->item_count++;
+	if (c == 0) { // hash entry is empty
+		node->color = BLACK;
+		node->parent = NULL;
+		db->ht[hash] = node;
+	} else {
+		node->color = RED;
+		if (c < 0) { // put at the left
+			parent->left = node;
+			node->parent = parent;
+		} else { // put at the right
+			parent->right = node;
+			node->parent = parent;
+		}
+		if (parent->color == RED) // two consecutive RED nodes, must rebalance
+			db_rebalance(node, &db->ht[hash]);
+	}
+
+	return node;
+}
+
+/**
+ * Puts key and data in provided node
+ *
+ * @param db Target database
+ * @param node Node to be filled
+ * @param key Key that identifies the data
+ * @param data Data to be put in the database
+ * @writelock
+ **/
+void db_node_fill(struct DBMap_impl *db, struct DBNode *node, struct DBKey_s *key, struct DBData data)
+{
+	if (db->options&DB_OPT_DUP_KEY) {
+		node->key = db_dup_key(db, key);
+		if (db->options&DB_OPT_RELEASE_KEY)
+			db->release(key, node->data, DB_RELEASE_KEY);
+	} else {
+		memcpy(&node->key, key, sizeof(*key));
+	}
+	node->data = data;
+	if(!(db->load_factor == 0.f || db->options&DB_OPT_DISABLE_GROWTH)) {
+		if((db->item_count/db->bucket_count) >= db->load_factor)
+			db_rehash(db, 2*db->bucket_count + 1);
+	}
+}
+
+/**
+ * Gets the node of the entry identified by the key.
+ * @param db         Target database
+ * @param key        Key that identifies the entry
+ * @param out_root   Root node (NULL when cache hit) [can be NULL]
+ * @param out_node   Obtained node (NULL when no node)
+ * @param ensure     If no node is found a new node is created (upon creation CAS lock)
+ * @param caller Name of the function that called (for debug purposes)
+ * @retval 0 Error in operation
+ * @retval 1 Found node (cache hit)
+ * @retval 2 Created node (lock was not switched)
+ * @retval 3 Created node (lock was switched)
+ * @retval 4 No errors (check *node)
+ * @private
+ * @writelock (ensure true)
+ * @readlock  (ensure false)
+ */
+static int db_node_get(struct DBMap_impl *db, const struct DBKey_s *key,
+	struct DBNode ***out_root, struct DBNode **out_node, bool ensure,
+	const char *caller
+) {
+	struct DBNode *node = NULL;
+	struct DBNode *parent = NULL;
+	unsigned int hash;
+	int c = 0;
+	bool found = false;
+
+	if(out_root)
+		*out_root = NULL;
+	*out_node = NULL;
+
+	nullpo_retr(0, db);
+	if(!db) {
+		Assert_report(!db && "No database to get node!");
+		return 0;
+	}
+	if(!(db->options&DB_OPT_ALLOW_NULL_KEY) && db_is_key_null(db->type, key)) {
+		ShowError("db_node_get(%s): Attempted to retrieve not allowed NULL key for db\n"
+			"\tAllocated at %s:%d\n", caller, db->alloc_file, db->alloc_line);
+		Assert_report(!(db->options&DB_OPT_ALLOW_NULL_KEY) && db_is_key_null(db->type, key));
+		return 0;
+	}
+
+	if((node = db_cache_is_hit(db, key))) {
+		*out_node = node;
+		return 1;
+	}
+
+	hash = db->hash(key)%db->bucket_count;
+	node = db->ht[hash];
+	if(out_root)
+		*out_root = &db->ht[hash];
+#if defined(DB_ENABLE_STATS) || defined(DB_ENABLE_PRIVATE_STATS)
+	// Only try to calculate when possible insertion incoming
+	if(ensure && db->ht[hash] && db->cmp(&key, &db->ht[hash]->key)
+		&& !db->ht[hash]->deleted
+	) {
+		DB_COUNTSTAT_SWITCH(db->type, collision);
+		DB_COUNTSTAT_PRIVATE(db, collision);
+	}
+	int bucket_fill = 0;
+#endif
+	while(node) {
+		c = db->cmp(key, &node->key);
+		if(c == 0) {
+			if(!(node->deleted))
+				InterlockedExchangePointer(&db->cache, node);
+			break;
+		}
+		parent = node;
+		if(c < 0)
+			node = node->left;
+		else
+			node = node->right;
+#if defined(DB_ENABLE_STATS) || defined(DB_ENABLE_PRIVATE_STATS)
+		// Only try to calculate when possible insertion incoming
+		if(ensure) {
+			bucket_fill++;
+			DB_GREATERTHAN_SWITCH(db->type, bucket_fill, bucket_peak);
+			if(bucket_fill > db->stats.bucket_peak)
+				db->stats.bucket_peak = bucket_fill;
+		}
+#endif
+	}
+
+	// Create node if necessary
+	if(ensure && !node) {
+		bool reacquire = db_lock_cas(db);
+		node = db_node_create(db, hash, c, parent);
+		if(!node) {
+			ShowError("db_node_get(%s): Failed to create node for db allocated at %s:%d\n",
+				caller, db->alloc_file, db->alloc_line);
+			db_lock_reacquire(db, reacquire);
+			return 0;
+		}
+		InterlockedExchangePointer(&db->cache, node);
+		*out_node = node;
+		return (reacquire)?3/*lock switched*/:2;
+	}
+
+	*out_node = node;
+	return 4;
 }
 
 /******************************************************************************\
@@ -1019,8 +1413,6 @@ static void db_free_unlock(struct DBMap_impl *db)
  *  db_release_key          - Releaser that only releases the key.             *
  *  db_release_data         - Releaser that only releases the data.            *
  *  db_release_both         - Releaser that releases key and data.             *
- *  db_rehash_node          - Recursive iteration of node and reput data in db.*
- *  db_rehash               - Grows bucket list of provided database.          *
 \*******************************************************************************/
 
 /**
@@ -1417,90 +1809,10 @@ static void db_release_both(struct DBKey_s *key, struct DBData data, enum DBRele
 	}
 }
 
-
-/**
- * Performs recursive iteration of a DBNode tree, adding all items into the
- * provided database and then freeing the node.
- *
- * @param self Database.
- * @param node Node.
- * Acquires collection_lock (read) and cache_mutex
- * @private
- **/
-static void db_rehash_node(struct DBMap *self, struct DBNode *node)
-{
-	struct DBMap_impl *db = (struct DBMap_impl *)self;
-
-	self->put(self, node->key, node->data, NULL);
-	if(node->left)
-		db_rehash_node(self, node->left);
-	if(node->right)
-		db_rehash_node(self, node->right);
-
-	/**
-	 * The node is freed here instead of being put in a list to be freed
-	 * later because otherwise the memory usage of this DBMap would double
-	 * while a rehash operation was being done. Also even after freeing all
-	 * the memory would continue to be allocated in the ERS.
-	 **/
-	rwlock->read_lock(db->nodes->collection_lock);
-	mutex->lock(db->nodes->cache_mutex);
-	ers_free(db->nodes, node);
-	rwlock->read_unlock(db->nodes->collection_lock);
-	mutex->unlock(db->nodes->cache_mutex);
-}
-
-/**
- * Reallocates <code>ht</code> with <code>new_count</code> entries and recalculates
- * all hashes in order to populate the new memory.
- * This operation is extremely expensive and should only be triggered after the
- * <code>entry_count</code> superseeds the <code>load_factor</code> threshold.
- * @param self      Database object.
- * @param new_count New number of entries.
- * @private
- **/
-static bool db_rehash(struct DBMap *self, size_t new_count)
-{
-	struct DBMap_impl *db = (struct DBMap_impl *)self;
-	static bool done = false;
-
-	DB_COUNTSTAT(db_rehash);
-	DB_COUNTSTAT_PRIVATE(db, rehash);
-	// Save previous state
-	size_t previous_count = db->bucket_count;
-	struct DBNode **ht_old = db->ht;
-	enum DBOptions options = db->options;
-	// Reset state
-	db->ht = aCalloc(new_count, sizeof(*db->ht));
-	db->bucket_count = new_count;
-	db->item_count = 0;
-	db->cache = NULL;
-	// Don't try to copy keys (if DB_OPT_DUP_KEY is already set they were
-	// already duplicated)
-	db->options &= ~DB_OPT_DUP_KEY;
-
-	struct DBNode *node = NULL;
-	/**
-	 * collection_lock and cache_mutex can't be acquired before calling
-	 * db_rehash_node because obj_put and rehash_node both acquire those
-	 * locks.
-	 * This makes this operation more expensive because there are several
-	 * lock acquirals (at least two per iteration).
-	 **/
-	for(size_t i = 0; i < previous_count; i++) {
-		node = ht_old[i];
-		if(node)
-			db_rehash_node(self, node);
-	}
-
-	db->options = options;
-	aFree(ht_old);
-	return true;
-}
-
 /*****************************************************************************\
  *  (4) Section with protected functions used in the interface of the        *
- *  database and interface of the iterator.                                  *
+ *  database and interface of the iterator. Before calling any of these      *
+ *  functions the db should be locked.                                       *
  *  dbit_obj_first   - Fetches the first entry from the database.            *
  *  dbit_obj_last    - Fetches the last entry from the database.             *
  *  dbit_obj_next    - Fetches the next entry from the database.             *
@@ -1531,6 +1843,8 @@ static bool db_rehash(struct DBMap *self, size_t new_count)
  *  db_obj_size     - Return the size of the database.                       *
  *  db_obj_type     - Return the type of the database.                       *
  *  db_obj_options  - Return the options of the database.                    *
+ *  db_obj_lock     - Lock database to read.                                 *
+ *  db_obj_unlock   - Unlocks database.                                      *
 \*****************************************************************************/
 
 /**
@@ -1542,6 +1856,7 @@ static bool db_rehash(struct DBMap *self, size_t new_count)
  * @return Data of the entry
  * @protected
  * @see struct DBIterator#first()
+ * @readlock
  */
 static struct DBData *dbit_obj_first(struct DBIterator *self, struct DBKey_s *out_key)
 {
@@ -1564,6 +1879,7 @@ static struct DBData *dbit_obj_first(struct DBIterator *self, struct DBKey_s *ou
  * @return Data of the entry
  * @protected
  * @see struct DBIterator#last()
+ * @readlock
  */
 static struct DBData *dbit_obj_last(struct DBIterator *self, struct DBKey_s *out_key)
 {
@@ -1586,6 +1902,7 @@ static struct DBData *dbit_obj_last(struct DBIterator *self, struct DBKey_s *out
  * @return Data of the entry
  * @protected
  * @see struct DBIterator#next()
+ * @readlock
  */
 static struct DBData *dbit_obj_next(struct DBIterator *self, struct DBKey_s *out_key)
 {
@@ -1662,6 +1979,7 @@ static struct DBData *dbit_obj_next(struct DBIterator *self, struct DBKey_s *out
  * @return Data of the entry
  * @protected
  * @see struct DBIterator#prev()
+ * @readlock
  */
 static struct DBData *dbit_obj_prev(struct DBIterator *self, struct DBKey_s *out_key)
 {
@@ -1737,6 +2055,7 @@ static struct DBData *dbit_obj_prev(struct DBIterator *self, struct DBKey_s *out
  * @return true if the entry exists
  * @protected
  * @see struct DBIterator#exists()
+ * @readlock
  */
 static bool dbit_obj_exists(struct DBIterator *self)
 {
@@ -1759,6 +2078,7 @@ static bool dbit_obj_exists(struct DBIterator *self)
  * @protected
  * @see struct DBMap#remove()
  * @see struct DBIterator#remove()
+ * @writelock
  */
 static int dbit_obj_remove(struct DBIterator *self, struct DBData *out_data)
 {
@@ -1771,13 +2091,14 @@ static int dbit_obj_remove(struct DBIterator *self, struct DBData *out_data)
 	if( node && !node->deleted )
 	{
 		struct DBMap_impl *db = it->db;
-		if( db->cache == node )
-			db->cache = NULL;
+		bool reacquire = db_lock_cas(db);
+		InterlockedExchangePointer(&db->cache, NULL);
 		db->release(&node->key, node->data, DB_RELEASE_DATA);
 		if( out_data )
 			memcpy(out_data, &node->data, sizeof(struct DBData));
 		retval = 1;
 		db_free_add(db, node, &db->ht[it->ht_index]);
+		db_lock_reacquire(db, reacquire);
 	}
 	return retval;
 }
@@ -1786,14 +2107,13 @@ static int dbit_obj_remove(struct DBIterator *self, struct DBData *out_data)
  * Destroys this iterator and unlocks the database.
  * @param self Iterator
  * @protected
+ * @readlock
  */
 static void dbit_obj_destroy(struct DBIterator *self)
 {
 	struct DBIterator_impl *it = (struct DBIterator_impl *)self;
 
 	DB_COUNTSTAT(dbit_destroy);
-	// unlock the database
-	db_free_unlock(it->db);
 	// free iterator
 	rwlock->read_lock(db_iterator_ers->collection_lock);
 
@@ -1812,6 +2132,7 @@ static void dbit_obj_destroy(struct DBIterator *self)
  * @param self Database
  * @return New iterator
  * @protected
+ * @readlock
  */
 static struct DBIterator *db_obj_iterator(struct DBMap *self)
 {
@@ -1840,23 +2161,26 @@ static struct DBIterator *db_obj_iterator(struct DBMap *self)
 	it->db = db;
 	it->ht_index = -1;
 	it->node = NULL;
-	/* Lock the database */
-	db_free_lock(db);
+
 	return &it->vtable;
 }
 
 /**
  * Sets a new releasal function for provided table
+ * @writelock
  **/
 void db_set_release(struct DBMap *self, DBReleaser new_release)
 {
 	struct DBMap_impl *db = (struct DBMap_impl *)self;
+	bool reacquire = db_lock_cas(db);
 	db->release = new_release;
+	db_lock_reacquire(db, reacquire);
 }
 
 /**
  * Sets a new hashing function for provided table
  * @return False if there are already any entries in the table.
+ * @writelock
  **/
 static bool db_set_hash(struct DBMap *self, DBHasher new_hash)
 {
@@ -1866,7 +2190,9 @@ static bool db_set_hash(struct DBMap *self, DBHasher new_hash)
 			db->alloc_file, db->alloc_line);
 		return false;
 	}
+	bool reacquire = db_lock_cas(db);
 	db->hash = new_hash;
+	db_lock_reacquire(db, reacquire);
 	return true;
 }
 
@@ -1877,47 +2203,18 @@ static bool db_set_hash(struct DBMap *self, DBHasher new_hash)
  * @return true is the entry exists
  * @protected
  * @see struct DBMap#exists()
+ * @readlock
  */
 static bool db_obj_exists(struct DBMap *self, const struct DBKey_s key)
 {
 	struct DBMap_impl *db = (struct DBMap_impl *)self;
-	struct DBNode *node;
-	bool found = false;
+	struct DBNode *node = NULL;
 
 	DB_COUNTSTAT(db_exists);
-	if (db == NULL) return false; // nullpo candidate
-	if (!(db->options&DB_OPT_ALLOW_NULL_KEY) && db_is_key_null(db->type, &key)) {
-		return false; // nullpo candidate
-	}
+	if(!db_node_get(db, &key, NULL, &node, false, "db_obj_exists"))
+		return false;
 
-	if (db->cache && db->cmp(&key, &db->cache->key) == 0) {
-#if defined(DEBUG)
-		if (db->cache->deleted) {
-			ShowDebug("db_exists: Cache contains a deleted node. Please report this!!!\n");
-			return false;
-		}
-#endif
-		return true; // cache hit
-	}
-
-	db_free_lock(db);
-	node = db->ht[db->hash(&key)%db->bucket_count];
-	while (node) {
-		int c = db->cmp(&key, &node->key);
-		if (c == 0) {
-			if (!(node->deleted)) {
-				db->cache = node;
-				found = true;
-			}
-			break;
-		}
-		if (c < 0)
-			node = node->left;
-		else
-			node = node->right;
-	}
-	db_free_unlock(db);
-	return found;
+	return (node != NULL);
 }
 
 /**
@@ -1927,90 +2224,19 @@ static bool db_obj_exists(struct DBMap *self, const struct DBKey_s key)
  * @return Data of the entry or NULL if not found
  * @protected
  * @see struct DBMap#get()
+ * @readlock
  */
 static struct DBData *db_obj_get(struct DBMap *self, const struct DBKey_s key)
 {
 	struct DBMap_impl *db = (struct DBMap_impl *)self;
-	struct DBNode *node;
+	struct DBNode *node = NULL;
 	struct DBData *data = NULL;
 
 	DB_COUNTSTAT(db_get);
-	if (db == NULL) return NULL; // nullpo candidate
-	if (!(db->options&DB_OPT_ALLOW_NULL_KEY) && db_is_key_null(db->type, &key)) {
-		ShowError("db_get: Attempted to retrieve non-allowed NULL key for db allocated at %s:%d\n",db->alloc_file, db->alloc_line);
-		return NULL; // nullpo candidate
-	}
+	if(!db_node_get(db, &key, NULL, &node, false, "db_obj_get"))
+		return NULL;
 
-	if (db->cache && db->cmp(&key, &db->cache->key) == 0) {
-#if defined(DEBUG)
-		if (db->cache->deleted) {
-			ShowDebug("db_get: Cache contains a deleted node. Please report this!!!\n");
-			return NULL;
-		}
-#endif
-		return &db->cache->data; // cache hit
-	}
-
-	db_free_lock(db);
-	node = db->ht[db->hash(&key)%db->bucket_count];
-	while (node) {
-		int c = db->cmp(&key, &node->key);
-		if (c == 0) {
-			if (!(node->deleted)) {
-				data = &node->data;
-				db->cache = node;
-			}
-			break;
-		}
-		if (c < 0)
-			node = node->left;
-		else
-			node = node->right;
-	}
-	db_free_unlock(db);
-	return data;
-}
-
-/**
- * Gets the data of the entry identified by the key.
- * Ignores database cache and free_lock
- * This function is thread-safe.
- *
- * @param self Interface of the database
- * @param key Key that identifies the entry
- * @return Data of the entry or NULL if not found
- * @protected
- * @see struct DBMap#get()
- * @see db_obj_get
- */
-static struct DBData *db_obj_get_safe(struct DBMap *self, const struct DBKey_s key)
-{
-	struct DBMap_impl *db = (struct DBMap_impl *)self;
-	struct DBNode *node;
-	struct DBData *data = NULL;
-
-	DB_COUNTSTAT(db_get);
-	if (db == NULL) return NULL; // nullpo candidate
-	if (!(db->options&DB_OPT_ALLOW_NULL_KEY) && db_is_key_null(db->type, &key)) {
-		ShowError("db_get: Attempted to retrieve non-allowed NULL key for db allocated at %s:%d\n",db->alloc_file, db->alloc_line);
-		return NULL; // nullpo candidate
-	}
-
-	node = db->ht[db->hash(&key)%db->bucket_count];
-	while (node) {
-		int c = db->cmp(&key, &node->key);
-		if (c == 0) {
-			if (!(node->deleted))
-				data = &node->data;
-			break;
-		}
-		if (c < 0)
-			node = node->left;
-		else
-			node = node->right;
-	}
-
-	return data;
+	return (node)?&node->data:NULL;
 }
 
 /**
@@ -2028,6 +2254,7 @@ static struct DBData *db_obj_get_safe(struct DBMap *self, const struct DBKey_s k
  * @return The number of entries that matched
  * @protected
  * @see struct DBMap#vgetall()
+ * @readlock
  */
 static unsigned int db_obj_vgetall(struct DBMap *self, struct DBData **buf, unsigned int max, DBMatcher match, va_list args)
 {
@@ -2038,10 +2265,9 @@ static unsigned int db_obj_vgetall(struct DBMap *self, struct DBData **buf, unsi
 	unsigned int ret = 0;
 
 	DB_COUNTSTAT(db_vgetall);
-	if (db == NULL) return 0; // nullpo candidate
-	if (match == NULL) return 0; // nullpo candidate
+	nullpo_retr(0, db);
+	nullpo_retr(0, match);
 
-	db_free_lock(db);
 	for (i = 0; i < db->bucket_count; i++) {
 		// Match in the order: current node, left tree, right tree
 		node = db->ht[i];
@@ -2079,7 +2305,6 @@ static unsigned int db_obj_vgetall(struct DBMap *self, struct DBData **buf, unsi
 
 		}
 	}
-	db_free_unlock(db);
 	return ret;
 }
 
@@ -2101,6 +2326,7 @@ static unsigned int db_obj_vgetall(struct DBMap *self, struct DBData **buf, unsi
  * @protected
  * @see struct DBMap#vgetall()
  * @see struct DBMap#getall()
+ * @readlock
  */
 static unsigned int db_obj_getall(struct DBMap *self, struct DBData **buf, unsigned int max, DBMatcher match, ...)
 {
@@ -2108,7 +2334,7 @@ static unsigned int db_obj_getall(struct DBMap *self, struct DBData **buf, unsig
 	unsigned int ret;
 
 	DB_COUNTSTAT(db_getall);
-	if (self == NULL) return 0; // nullpo candidate
+	nullpo_retr(0, self);
 
 	va_start(args, match);
 	ret = self->vgetall(self, buf, max, match, args);
@@ -2117,90 +2343,7 @@ static unsigned int db_obj_getall(struct DBMap *self, struct DBData **buf, unsig
 }
 
 /**
- * Adds new entry at the next valid position.
- * This function should be called after failure to find a node.
- *
- * @param self Interface of the database
- * @param hash Calculated hash for key via <code>db->hash</code>
- * @param c Last valid comparison <code>db->cmp</code>
- * @param parent This entry's parent
- * @return pointer to new node
- * @retval NULL Failed to create node
- * @remarks db must be locked via <code>db_free_lock</code>
- * @see db_obj_vensure
- * @see db_obj_put
- **/
-struct DBNode *db_obj_create(struct DBMap *self, unsigned int hash, int c, struct DBNode *parent)
-{
-	struct DBMap_impl *db = (struct DBMap_impl *)self;
-	struct DBNode *node;
-
-	if (db->item_count == UINT32_MAX) {
-		ShowError("db_obj_create: item_count overflow, aborting item insertion.\n"
-				"Database allocated at %s:%d",
-				db->alloc_file, db->alloc_line);
-		return NULL;
-	}
-
-	DB_COUNTSTAT(db_node_alloc);
-
-	rwlock->read_lock(db->nodes->collection_lock);
-	mutex->lock(db->nodes->cache_mutex);
-	node = ers_alloc(db->nodes);
-	mutex->unlock(db->nodes->cache_mutex);
-	rwlock->read_unlock(db->nodes->collection_lock);
-
-	node->left = NULL;
-	node->right = NULL;
-	node->deleted = 0;
-	db->item_count++;
-	if (c == 0) { // hash entry is empty
-		node->color = BLACK;
-		node->parent = NULL;
-		db->ht[hash] = node;
-	} else {
-		node->color = RED;
-		if (c < 0) { // put at the left
-			parent->left = node;
-			node->parent = parent;
-		} else { // put at the right
-			parent->right = node;
-			node->parent = parent;
-		}
-		if (parent->color == RED) // two consecutive RED nodes, must rebalance
-			db_rebalance(node, &db->ht[hash]);
-	}
-
-	return node;
-}
-
-/**
- * Puts key and data in provided node
- *
- * @param self Interface of the database
- * @param node Node to be filled
- * @param key Key that identifies the data
- * @param data Data to be put in the database
- **/
-void db_obj_fill(struct DBMap *self, struct DBNode *node, struct DBKey_s *key, struct DBData data)
-{
-	struct DBMap_impl *db = (struct DBMap_impl *)self;
-	if (db->options&DB_OPT_DUP_KEY) {
-		node->key = db_dup_key(db, key);
-		if (db->options&DB_OPT_RELEASE_KEY)
-			db->release(key, node->data, DB_RELEASE_KEY);
-	} else {
-		memcpy(&node->key, key, sizeof(*key));
-	}
-	node->data = data;
-	if(!(db->load_factor == 0.f || db->options&DB_OPT_DISABLE_GROWTH)) {
-		if((db->item_count/db->bucket_count) >= db->load_factor)
-			db_rehash(self, 2*db->bucket_count + 1);
-	}
-}
-
-/**
- * Get the data of the entry identified by the key.
+ * Gets the data of the entry identified by the key.
  * If the entry does not exist, an entry is added with the data returned by
  * <code>create</code>.
  * @param self Interface of the database
@@ -2210,61 +2353,45 @@ void db_obj_fill(struct DBMap *self, struct DBNode *node, struct DBKey_s *key, s
  * @return Data of the entry
  * @protected
  * @see struct DBMap#vensure()
+ * @writelock
  */
 static struct DBData *db_obj_vensure(struct DBMap *self, struct DBKey_s key, DBCreateData create, va_list args)
 {
 	struct DBMap_impl *db = (struct DBMap_impl *)self;
-	struct DBNode *node;
-	struct DBNode *parent = NULL;
-	unsigned int hash;
-	int c = 0;
-	struct DBData *data = NULL;
+	struct DBNode *node = NULL;
 
 	DB_COUNTSTAT(db_vensure);
-	if (db == NULL) return NULL; // nullpo candidate
-	if (create == NULL) {
-		ShowError("db_ensure: Create function is NULL for db allocated at %s:%d\n",db->alloc_file, db->alloc_line);
-		return NULL; // nullpo candidate
-	}
-	if (!(db->options&DB_OPT_ALLOW_NULL_KEY) && db_is_key_null(db->type, &key)) {
-		ShowError("db_ensure: Attempted to use non-allowed NULL key for db allocated at %s:%d\n",db->alloc_file, db->alloc_line);
+	nullpo_retr(NULL, db);
+	if(create == NULL) {
+		ShowError("db_ensure: Create function is NULL for db allocated at %s:%d\n",
+			db->alloc_file, db->alloc_line);
 		return NULL; // nullpo candidate
 	}
 
-	if (db->cache && db->cmp(&key, &db->cache->key) == 0)
-		return &db->cache->data; // cache hit
-
-	db_free_lock(db);
-	hash = db->hash(&key)%db->bucket_count;
-	node = db->ht[hash];
-	while (node) {
-		c = db->cmp(&key, &node->key);
-		if (c == 0) {
-			break;
-		}
-		parent = node;
-		if (c < 0)
-			node = node->left;
-		else
-			node = node->right;
-	}
-	// Create node if necessary
-	if (node == NULL) {
-		va_list argscopy;
-		node = db_obj_create(self, hash, c, parent);
-		if(!node) {
-			ShowError("db_ensure: Failed to create node for db allocated at %s:%d\n",
-				db->alloc_file, db->alloc_line);
+	int retval = db_node_get(db, &key, NULL, &node, true, "db_obj_vensure");
+	switch(retval) {
+		case 0: // Failed to find because there was an error
 			return NULL;
+		case 1: // Cache hit
+		case 4: // Node found
+			Assert(node); // Always true db_node_get has `ensure` set to true
+			return &node->data;
+		case 2: // Created node (lock was not switched)
+		case 3: // Created node (lock was switched)
+		{
+			va_list argscopy;
+			va_copy(argscopy, args);
+			db_node_fill(db, node, &key, create(&key, argscopy));
+			va_end(argscopy);
+			db_lock_reacquire(db, (retval == 3)/*lock was switched*/);
+			return &node->data;
 		}
-		va_copy(argscopy, args);
-		db_obj_fill(self, node, &key, create(&key, argscopy));
-		va_end(argscopy);
+		default:
+			ShowError("db_ensure: Unknown get_node (%d) for db allocated at %s:%d\n",
+				retval, db->alloc_file, db->alloc_line);
+			return NULL;
 	}
-	data = &node->data;
-	db->cache = node;
-	db_free_unlock(db);
-	return data;
+	return NULL;
 }
 
 /**
@@ -2281,6 +2408,7 @@ static struct DBData *db_obj_vensure(struct DBMap *self, struct DBKey_s key, DBC
  * @protected
  * @see struct DBMap#vensure()
  * @see struct DBMap#ensure()
+ * @writelock
  */
 static struct DBData *db_obj_ensure(struct DBMap *self, struct DBKey_s key, DBCreateData create, ...)
 {
@@ -2308,96 +2436,57 @@ static struct DBData *db_obj_ensure(struct DBMap *self, struct DBKey_s key, DBCr
  * @protected
  * @see #db_malloc_dbn(void)
  * @see struct DBMap#put()
+ * @writelock
  */
 static int db_obj_put(struct DBMap *self, struct DBKey_s key, struct DBData data, struct DBData *out_data)
 {
 	struct DBMap_impl *db = (struct DBMap_impl *)self;
-	struct DBNode *node;
-	struct DBNode *parent = NULL;
-	int c = 0, retval = 0;
-	unsigned int hash;
+	struct DBNode *node = NULL;
 
 	DB_COUNTSTAT(db_put);
-	if (db == NULL) return 0; // nullpo candidate
-	if (db->global_lock) {
-		ShowError("db_put: Database is being destroyed, aborting entry insertion.\n"
-				"Database allocated at %s:%d\n",
-				db->alloc_file, db->alloc_line);
+	nullpo_retr(0, db);
+	if(!(db->options&DB_OPT_ALLOW_NULL_KEY) && db_is_key_null(db->type, &key)) {
+		ShowError("db_put: Attempted to use non-allowed NULL key for db allocated at %s:%d\n",
+			db->alloc_file, db->alloc_line);
 		return 0; // nullpo candidate
 	}
-	if (!(db->options&DB_OPT_ALLOW_NULL_KEY) && db_is_key_null(db->type, &key)) {
-		ShowError("db_put: Attempted to use non-allowed NULL key for db allocated at %s:%d\n",db->alloc_file, db->alloc_line);
+	if(!(db->options&DB_OPT_ALLOW_NULL_DATA) && (data.type == DB_DATA_PTR && data.u.ptr == NULL)) {
+		ShowError("db_put: Attempted to use non-allowed NULL data for db allocated at %s:%d\n",
+			db->alloc_file, db->alloc_line);
 		return 0; // nullpo candidate
 	}
-	if (!(db->options&DB_OPT_ALLOW_NULL_DATA) && (data.type == DB_DATA_PTR && data.u.ptr == NULL)) {
-		ShowError("db_put: Attempted to use non-allowed NULL data for db allocated at %s:%d\n",db->alloc_file, db->alloc_line);
-		return 0; // nullpo candidate
-	}
-	if ((db->type == DB_STRING || db->type == DB_ISTRING) && !key.len) {
+	if((db->type == DB_STRING || db->type == DB_ISTRING) && !key.len) {
 		ShowWarning("db_put: Attempted to store key (%s) with no length for "
 			"db allocated at %s:%d\n Calculating length.",
 			key.u.str, db->alloc_file, db->alloc_line);
 		size_t key_len = strlen(key.u.str);
 		key.len = (int16_t)cap_value(key_len, 0, INT16_MAX);
 	}
-	if (key.len > db->maxlen) {
+	if(key.len > db->maxlen) {
 		ShowWarning("db_put: Attempted to store key with len (%d) greater than "
 			"maxlen (%d) for db allocated at %s:%d\n Truncating key.",
 			key.len, db->maxlen, db->alloc_file, db->alloc_line);
 		key.len = db->maxlen;
 	}
 
-	// search for an equal node
-	db_free_lock(db);
-	hash = db->hash(&key)%db->bucket_count;
-#if defined(DB_ENABLE_STATS) || defined(DB_ENABLE_PRIVATE_STATS)
-	if(db->ht[hash] && db->cmp(&key, &db->ht[hash]->key)
-		&& !db->ht[hash]->deleted
-	) {
-		DB_COUNTSTAT_SWITCH(db->type, collision);
-		DB_COUNTSTAT_PRIVATE(db, collision);
-	}
-	int bucket_fill = 0;
-#endif
-	for (node = db->ht[hash]; node; ) {
-		c = db->cmp(&key, &node->key);
-		if (c == 0) { // equal entry, replace
-			if (node->deleted) {
-				db_free_remove(db, node);
-			} else {
-				db->release(&node->key, node->data, DB_RELEASE_BOTH);
-				if (out_data)
-					memcpy(out_data, &node->data, sizeof(*out_data));
-				retval = 1;
-			}
-			break;
-		}
-		parent = node;
-		if (c < 0) {
-			node = node->left;
+	int retval = db_node_get(db, &key, NULL, &node, true, "db_obj_put");
+	if(retval == 0 || !node) // node should be always set db_node_get `ensure` is true
+		return 0;
+
+	// Node already in database, release
+	if(retval != 2 && retval != 3) {
+		if(node->deleted) {
+			db_free_remove(db, node);
 		} else {
-			node = node->right;
-		}
-#if defined(DB_ENABLE_STATS) || defined(DB_ENABLE_PRIVATE_STATS)
-		bucket_fill++;
-		DB_GREATERTHAN_SWITCH(db->type, bucket_fill, bucket_peak);
-		if(bucket_fill > db->stats.bucket_peak)
-			db->stats.bucket_peak = bucket_fill;
-#endif
-	}
-	// allocate a new node if necessary
-	if (node == NULL) {
-		node = db_obj_create(self, hash, c, parent);
-		if(!node) {
-			ShowError("db_put: Failed to create node for db allocated at %s:%d\n",
-				db->alloc_file, db->alloc_line);
-			return 0;
+			db->release(&node->key, node->data, DB_RELEASE_BOTH);
+			if(out_data)
+				memcpy(out_data, &node->data, sizeof(*out_data));
 		}
 	}
-	db_obj_fill(self, node, &key, data);
-	db->cache = node;
-	db_free_unlock(db);
-	return retval;
+	Assert(!db->lock || (db->lock && db->lock_tid != -1));
+	db_node_fill(db, node, &key, data);
+	db_lock_reacquire(db, (retval == 3)/*lock was switched*/);
+	return (retval == 2 || retval == 3)?0:1/*entry already exists*/;
 }
 
 /**
@@ -2411,50 +2500,35 @@ static int db_obj_put(struct DBMap *self, struct DBKey_s key, struct DBData data
  * @protected
  * @see #db_free_add()
  * @see struct DBMap#remove()
+ * @writelock
  */
 static int db_obj_remove(struct DBMap *self, const struct DBKey_s key, struct DBData *out_data)
 {
 	struct DBMap_impl *db = (struct DBMap_impl *)self;
-	struct DBNode *node;
-	unsigned int hash;
-	int retval = 0;
+	struct DBNode *node = NULL;
+	struct DBNode **root = NULL;
 
 	DB_COUNTSTAT(db_remove);
-	if (db == NULL) return 0; // nullpo candidate
-	if (db->global_lock) {
-		ShowError("db_remove: Database is being destroyed. Aborting entry deletion.\n"
-				"Database allocated at %s:%d\n",
-				db->alloc_file, db->alloc_line);
-		return 0; // nullpo candidate
-	}
-	if (!(db->options&DB_OPT_ALLOW_NULL_KEY) && db_is_key_null(db->type, &key)) {
-		ShowError("db_remove: Attempted to use non-allowed NULL key for db allocated at %s:%d\n",db->alloc_file, db->alloc_line);
-		return 0; // nullpo candidate
-	}
+	nullpo_retr(0, db);
 
-	db_free_lock(db);
-	hash = db->hash(&key)%db->bucket_count;
-	for(node = db->ht[hash]; node; ){
-		int c = db->cmp(&key, &node->key);
-		if (c == 0) {
-			if (!(node->deleted)) {
-				if (db->cache == node)
-					db->cache = NULL;
-				db->release(&node->key, node->data, DB_RELEASE_DATA);
-				if (out_data)
-					memcpy(out_data, &node->data, sizeof(*out_data));
-				retval = 1;
-				db_free_add(db, node, &db->ht[hash]);
-			}
-			break;
-		}
-		if (c < 0)
-			node = node->left;
-		else
-			node = node->right;
+	int retval = db_node_get(db, &key, NULL, &node, false, "db_obj_remove");
+	if(!retval || !node)
+		return 0;
+	Assert(retval != 2 && retval != 4); // Node can't be created on obj_remove
+
+	bool reacquire = db_lock_cas(db);
+	if(!(node->deleted)) {
+		if(retval == 1) // Cache hit
+			InterlockedExchangePointer(&db->cache, NULL);
+		db->release(&node->key, node->data, DB_RELEASE_DATA);
+		if(out_data)
+			memcpy(out_data, &node->data, sizeof(*out_data));
+		if(!root) // Got node from cache
+			root = &db->ht[db->hash(&key)%db->bucket_count];
+		db_free_add(db, node, root);
 	}
-	db_free_unlock(db);
-	return retval;
+	db_lock_reacquire(db, reacquire);
+	return 1;
 }
 
 /**
@@ -2466,6 +2540,7 @@ static int db_obj_remove(struct DBMap *self, const struct DBKey_s key, struct DB
  * @return Sum of the values returned by func
  * @protected
  * @see struct DBMap#vforeach()
+ * @writelock
  */
 static int db_obj_vforeach(struct DBMap *self, DBApply func, va_list args)
 {
@@ -2476,13 +2551,14 @@ static int db_obj_vforeach(struct DBMap *self, DBApply func, va_list args)
 	struct DBNode *parent;
 
 	DB_COUNTSTAT(db_vforeach);
-	if (db == NULL) return 0; // nullpo candidate
-	if (func == NULL) {
-		ShowError("db_foreach: Passed function is NULL for db allocated at %s:%d\n",db->alloc_file, db->alloc_line);
+	nullpo_retr(0, db);
+	if(func == NULL) {
+		ShowError("db_foreach: Passed function is NULL for db allocated at %s:%d\n",
+			db->alloc_file, db->alloc_line);
 		return 0; // nullpo candidate
 	}
 
-	db_free_lock(db);
+	bool reacquire = db_lock_cas(db);
 	for (i = 0; i < db->bucket_count; i++) {
 		// Apply func in the order: current node, left node, right node
 		node = db->ht[i];
@@ -2511,7 +2587,7 @@ static int db_obj_vforeach(struct DBMap *self, DBApply func, va_list args)
 			}
 		}
 	}
-	db_free_unlock(db);
+	db_lock_reacquire(db, reacquire);
 	return sum;
 }
 
@@ -2527,6 +2603,7 @@ static int db_obj_vforeach(struct DBMap *self, DBApply func, va_list args)
  * @protected
  * @see struct DBMap#vforeach()
  * @see struct DBMap#foreach()
+ * @writelock
  */
 static int db_obj_foreach(struct DBMap *self, DBApply func, ...)
 {
@@ -2534,7 +2611,7 @@ static int db_obj_foreach(struct DBMap *self, DBApply func, ...)
 	int ret;
 
 	DB_COUNTSTAT(db_foreach);
-	if (self == NULL) return 0; // nullpo candidate
+	nullpo_retr(0, self);
 
 	va_start(args, func);
 	ret = self->vforeach(self, func, args);
@@ -2553,6 +2630,7 @@ static int db_obj_foreach(struct DBMap *self, DBApply func, ...)
  * @return Sum of values returned by func
  * @protected
  * @see struct DBMap#vclear()
+ * @writelock
  */
 static int db_obj_vclear(struct DBMap *self, DBApply func, va_list args)
 {
@@ -2563,10 +2641,10 @@ static int db_obj_vclear(struct DBMap *self, DBApply func, va_list args)
 	struct DBNode *parent;
 
 	DB_COUNTSTAT(db_vclear);
-	if (db == NULL) return 0; // nullpo candidate
+	nullpo_retr(0, db);
 
-	db_free_lock(db);
-	db->cache = NULL;
+	bool reacquire = db_lock_cas(db);
+	InterlockedExchangePointer(&db->cache, NULL);
 
 	rwlock->read_lock(db->nodes->collection_lock);
 	mutex->lock(db->nodes->cache_mutex);
@@ -2612,9 +2690,9 @@ static int db_obj_vclear(struct DBMap *self, DBApply func, va_list args)
 	mutex->unlock(db->nodes->cache_mutex);
 	rwlock->read_unlock(db->nodes->collection_lock);
 
-	db->free_count = 0;
+	db->garbage_collection.free_count = 0;
 	db->item_count = 0;
-	db_free_unlock(db);
+	db_lock_reacquire(db, reacquire);
 	return sum;
 }
 
@@ -2634,6 +2712,7 @@ static int db_obj_vclear(struct DBMap *self, DBApply func, va_list args)
  * @protected
  * @see struct DBMap#vclear()
  * @see struct DBMap#clear()
+ * @writelock
  */
 static int db_obj_clear(struct DBMap *self, DBApply func, ...)
 {
@@ -2641,7 +2720,7 @@ static int db_obj_clear(struct DBMap *self, DBApply func, ...)
 	int ret;
 
 	DB_COUNTSTAT(db_clear);
-	if (self == NULL) return 0; // nullpo candidate
+	nullpo_retr(0, self);
 
 	va_start(args, func);
 	ret = self->vclear(self, func, args);
@@ -2650,7 +2729,7 @@ static int db_obj_clear(struct DBMap *self, DBApply func, ...)
 }
 
 /**
- * Finalize the database, feeing all the memory it uses.
+ * Finalize the database, freeing all the memory it uses.
  * Before deleting an entry, func is applied to it.
  * Returns the sum of values returned by func, if it exists.
  * NOTE: This locks the database globally. Any attempt to insert or remove
@@ -2661,6 +2740,8 @@ static int db_obj_clear(struct DBMap *self, DBApply func, ...)
  * @return Sum of values returned by func
  * @protected
  * @see struct DBMap#vdestroy()
+ * @writelock
+ * @remarks Unlocks database upon destruction.
  */
 static int db_obj_vdestroy(struct DBMap *self, DBApply func, va_list args)
 {
@@ -2668,34 +2749,30 @@ static int db_obj_vdestroy(struct DBMap *self, DBApply func, va_list args)
 	int sum;
 
 	DB_COUNTSTAT(db_vdestroy);
-	if (db == NULL) return 0; // nullpo candidate
-	if (db->global_lock) {
-		ShowError("db_vdestroy: Database is already locked for destruction. Aborting second database destruction.\n"
-				"Database allocated at %s:%d\n",
-				db->alloc_file, db->alloc_line);
-		return 0;
-	}
-	if (db->free_lock)
+	nullpo_retr(0, db);
+
+	db_lock_cas(db);
+	int remaining_lock = InterlockedExchange(&db->garbage_collection.free_lock, 1);
+	if(remaining_lock != 1) // The database must be locked so it can be destroyed
 		ShowWarning("db_vdestroy: Database is still in use, %u lock(s) left. Continuing database destruction.\n"
 				"Database allocated at %s:%d\n",
-				db->free_lock, db->alloc_file, db->alloc_line);
+				remaining_lock-1, db->alloc_file, db->alloc_line);
 
 	DB_COUNTSTAT_SWITCH(db->type, destroy);
-	db_free_lock(db);
-	db->global_lock = 1;
+
 	sum = self->vclear(self, func, args);
-	aFree(db->free_list);
-	db->free_list = NULL;
-	db->free_max = 0;
+	aFree(db->garbage_collection.free_list);
+	db->garbage_collection.free_list = NULL;
+	db->garbage_collection.free_max = 0;
+
+	db_free_unlock(db);
+	if(db->lock)
+		rwlock->destroy(db->lock);
 
 	struct rwlock_data *collection_lock = db->nodes->collection_lock;
 	rwlock->write_lock(collection_lock);
 	ers_destroy(db->nodes);
 	rwlock->write_unlock(collection_lock);
-
-	// When it's the last key db_free_unlock tries to lock
-	// ers_global_lock() and collection lock as well
-	db_free_unlock(db);
 
 	rwlock->read_lock(db_alloc_ers->collection_lock);
 	mutex->lock(db_alloc_ers->cache_mutex);
@@ -2722,6 +2799,8 @@ static int db_obj_vdestroy(struct DBMap *self, DBApply func, va_list args)
  * @protected
  * @see struct DBMap#vdestroy()
  * @see struct DBMap#destroy()
+ * @writelock
+ * @remarks Unlocks database upon destruction.
  */
 static int db_obj_destroy(struct DBMap *self, DBApply func, ...)
 {
@@ -2729,7 +2808,7 @@ static int db_obj_destroy(struct DBMap *self, DBApply func, ...)
 	int ret;
 
 	DB_COUNTSTAT(db_destroy);
-	if (self == NULL) return 0; // nullpo candidate
+	nullpo_retr(0, self);
 
 	va_start(args, func);
 	ret = self->vdestroy(self, func, args);
@@ -2744,20 +2823,16 @@ static int db_obj_destroy(struct DBMap *self, DBApply func, ...)
  * @protected
  * @see struct DBMap_impl#item_count
  * @see struct DBMap#size()
+ * @readlock
  */
 static unsigned int db_obj_size(struct DBMap *self)
 {
 	struct DBMap_impl *db = (struct DBMap_impl *)self;
-	unsigned int item_count;
 
 	DB_COUNTSTAT(db_size);
-	if (db == NULL) return 0; // nullpo candidate
+	nullpo_retr(0, db);
 
-	db_free_lock(db);
-	item_count = db->item_count;
-	db_free_unlock(db);
-
-	return item_count;
+	return db->item_count;
 }
 
 /**
@@ -2767,20 +2842,16 @@ static unsigned int db_obj_size(struct DBMap *self)
  * @protected
  * @see struct DBMap_impl#type
  * @see struct DBMap#type()
+ * @readlock
  */
 static enum DBType db_obj_type(struct DBMap *self)
 {
 	struct DBMap_impl *db = (struct DBMap_impl *)self;
-	enum DBType type;
 
 	DB_COUNTSTAT(db_type);
 	nullpo_retr(DB_ERROR, db);
 
-	db_free_lock(db);
-	type = db->type;
-	db_free_unlock(db);
-
-	return type;
+	return db->type;
 }
 
 /**
@@ -2790,20 +2861,35 @@ static enum DBType db_obj_type(struct DBMap *self)
  * @protected
  * @see struct DBMap_impl#options
  * @see struct DBMap#options()
+ * @readlock
  */
 static enum DBOptions db_obj_options(struct DBMap *self)
 {
 	struct DBMap_impl* db = (struct DBMap_impl *)self;
-	enum DBOptions options;
 
 	DB_COUNTSTAT(db_options);
 	nullpo_retr(DB_OPT_BASE, db);
 
-	db_free_lock(db);
-	options = db->options;
-	db_free_unlock(db);
+	return db->options;
+}
 
-	return options;
+/**
+ * Increments free lock of the database
+ * @protected
+ * @remarks All protected functions must be preceded by a lock call
+ **/
+static void db_obj_lock(struct DBMap *self, enum lock_type type)
+{
+	db_free_lock((struct DBMap_impl*)self, type);
+}
+
+/**
+ * Decrements free lock of the database
+ * @protected
+ **/
+static void db_obj_unlock(struct DBMap *self)
+{
+	db_free_unlock((struct DBMap_impl*)self);
 }
 
 /*****************************************************************************\
@@ -3023,7 +3109,6 @@ static struct DBMap *db_alloc(const char *file, const char *func, int line,
 	db->vtable.iterator = db_obj_iterator;
 	db->vtable.exists   = db_obj_exists;
 	db->vtable.get      = db_obj_get;
-	db->vtable.get_safe = db_obj_get_safe;
 	db->vtable.getall   = db_obj_getall;
 	db->vtable.vgetall  = db_obj_vgetall;
 	db->vtable.ensure   = db_obj_ensure;
@@ -3041,19 +3126,26 @@ static struct DBMap *db_alloc(const char *file, const char *func, int line,
 	db->vtable.options  = db_obj_options;
 	db->vtable.set_hash = db_set_hash;
 	db->vtable.set_release = db_set_release;
+	db->vtable.lock     = db_obj_lock;
+	db->vtable.unlock   = db_obj_unlock;
 	/* File and line of allocation */
 	db->alloc_file = file;
 	db->alloc_line = line;
-	/* Lock system */
-	db->free_list = NULL;
-	db->free_count = 0;
-	db->free_max = 0;
-	db->free_lock = 0;
+	/* Garbage collection */
+	db->garbage_collection.free_list = NULL;
+	db->garbage_collection.free_count = 0;
+	db->garbage_collection.free_max = 0;
+	db->garbage_collection.free_lock = 0;
 	/* Table implementation */
 	db->load_factor = load_factor;
 	db->bucket_count = initial_capacity;
 	/* Other */
 	snprintf(ers_name, 50, "db_alloc:nodes:%s:%s:%d",func,file,line);
+	if(options&DB_OPT_DISABLE_LOCK)
+		db->lock = NULL;
+	else
+		db->lock = rwlock->create();
+	db->lock_tid = -1;
 
 	rwlock->write_lock(ers_collection_lock(db_ers_collection));
 	db->nodes = ers_new(db_ers_collection, sizeof(struct DBNode),
@@ -3070,7 +3162,6 @@ static struct DBMap *db_alloc(const char *file, const char *func, int line,
 	db->options = options;
 	db->item_count = 0;
 	db->maxlen = maxlen;
-	db->global_lock = 0;
 
 	if( db->maxlen == 0 && (type == DB_STRING || type == DB_ISTRING) )
 		db->maxlen = UINT16_MAX;

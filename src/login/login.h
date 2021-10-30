@@ -189,10 +189,7 @@ INDEX_MAP_STRUCT_DECL(s_mmo_char_server_list, struct mmo_char_server);
  **/
 struct login_interface {
 	struct DBMap *auth_db;
-	struct mutex_data *auth_db_mutex;
-
 	struct DBMap *online_db;
-	struct mutex_data *online_db_mutex;
 
 	struct Login_Config *config;
 	struct AccountDB* accounts;

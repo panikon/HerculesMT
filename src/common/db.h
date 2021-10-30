@@ -160,6 +160,7 @@ enum DBType {
  * @param DB_OPT_ALLOW_NULL_KEY Allow NULL keys in the database.
  * @param DB_OPT_ALLOW_NULL_DATA Allow NULL data in the database.
  * @param DB_OPT_DISABLE_GROWTH Disables increase of buckets with changes in loading factor
+ * @param DB_OPT_DISABLE_LOCK Disables database lock
  * @public
  * @see #db_fix_options()
  * @see #db_default_release()
@@ -174,6 +175,7 @@ enum DBOptions {
 	DB_OPT_ALLOW_NULL_KEY  = 0x08,
 	DB_OPT_ALLOW_NULL_DATA = 0x10,
 	DB_OPT_DISABLE_GROWTH  = 0x20,
+	DB_OPT_DISABLE_LOCK    = 0x40,
 };
 
 /**
@@ -421,8 +423,15 @@ struct DBIterator {
 /**
  * Public interface of a database. Only contains functions.
  * All the functions take the interface as the first argument.
+ *
  * @public
  * @see #db_alloc()
+ * @remarks All functions in the interface must be preceded by a lock call!
+ *          The lock can be either READ_LOCK or WRITE_LOCK depending on the
+ *          types of most operations that'll be performed. The database automatically
+ *          switches to WRITE_LOCK if required and then reacquires READ_LOCK.
+ *          Thus all the described lock types in the documentation of these protected
+ *          functions are suggestions.
  */
 struct DBMap {
 
@@ -454,18 +463,6 @@ struct DBMap {
 	 * @protected
 	 */
 	struct DBData *(*get)(struct DBMap *self, struct DBKey_s key);
-
-	/**
-	 * Get the data of the entry identified by the key.
-	 * Ignores database cache and free_lock
-	 * This function is thread-safe.
-	 *
-	 * @param self Database
-	 * @param key Key that identifies the entry
-	 * @return Data of the entry or NULL if not found
-	 * @protected
-	 */
-	struct DBData *(*get_safe)(struct DBMap *self, struct DBKey_s key);
 
 	/**
 	 * Just calls struct DBMap#vgetall().
@@ -683,6 +680,16 @@ struct DBMap {
 	 * Sets a new releasal function for provided table
 	 **/
 	void (*set_release)(struct DBMap *self, DBReleaser new_release);
+
+	/**
+	 * Locks database
+	 **/
+	void (*lock)(struct DBMap *self, enum lock_type type);
+
+	/**
+	 * Unlocks database
+	 **/
+	void (*unlock)(struct DBMap *self);
 };
 
 // For easy access to the common functions.
@@ -697,9 +704,7 @@ struct DBMap {
 // Get pointer-type data from DBMaps of various key types
 #define db_get(db,k)     ( DB->data2ptr((db)->get((db),(k))) )
 #define idb_get(db,k)    ( DB->data2ptr((db)->get((db),DB->i2key(k))) )
-#define idb_get_safe(db,k)( DB->data2ptr((db)->get_safe((db),DB->i2key(k))) )
 #define uidb_get(db,k)   ( DB->data2ptr((db)->get((db),DB->ui2key(k))) )
-#define uidb_get_safe(db,k)( DB->data2ptr((db)->get_safe((db),DB->ui2key(k))) )
 #define strdb_get(db,k,l)( DB->data2ptr((db)->get((db),DB->str2key((k),(l)))) )
 #define i64db_get(db,k)  ( DB->data2ptr((db)->get((db),DB->i642key(k))) )
 #define ui64db_get(db,k) ( DB->data2ptr((db)->get((db),DB->ui642key(k))) )
@@ -709,7 +714,6 @@ struct DBMap {
 #define idb_iget(db,k)    ( DB->data2i((db)->get((db),DB->i2key(k))) )
 #define uidb_iget(db,k)   ( DB->data2i((db)->get((db),DB->ui2key(k))) )
 #define strdb_iget(db,k,l)( DB->data2i((db)->get((db),DB->str2key((k),(l)))) )
-#define strdb_iget_safe(db,k,l)( DB->data2i((db)->get_safe((db),DB->str2key((k),(l)))) )
 #define i64db_iget(db,k)  ( DB->data2i((db)->get((db),DB->i642key(k))) )
 #define ui64db_iget(db,k) ( DB->data2i((db)->get((db),DB->ui642key(k))) )
 
@@ -781,6 +785,8 @@ struct DBMap {
 #define dbi_remove(dbi)     ( (dbi)->remove((dbi),NULL) )
 #define dbi_exists(dbi)     ( (dbi)->exists(dbi) )
 #define dbi_destroy(dbi)    ( (dbi)->destroy(dbi) )
+#define db_lock(db,t)       ( (db)->lock((db),(t)) )
+#define db_unlock(db)       ( (db)->unlock((db)) )
 
 /*****************************************************************************
  *  (2) Section with public functions.                                       *
