@@ -122,9 +122,10 @@ static void do_init_loginif(void)
 	size_t length = ARRAYLENGTH(inter_packet);
 
 	loginif->packet_list = aMalloc(sizeof(*loginif->packet_list)*length);
-	loginif->packet_db = idb_alloc(DB_OPT_BASE);
+	loginif->packet_db = idb_alloc(DB_OPT_BASE|DB_OPT_DISABLE_LOCK);
 
 	// Fill packet db
+	db_lock(loginif->packet_db, WRITE_LOCK);
 	for(size_t i = 0; i < length; i++) {
 		int exists;
 		loginif->packet_list[i].len = inter_packet[i].packet_len;
@@ -136,6 +137,7 @@ static void do_init_loginif(void)
 				inter_packet[i].packet_id);
 		}
 	}
+	db_unlock(loginif->packet_db);
 
 	// establish char-login connection if not present
 	timer->add_func_list(chr->check_connect_login_server, "chr->check_connect_login_server");
@@ -157,6 +159,7 @@ static void do_final_loginif(void)
 		// chr->login_session = NULL;
 	}
 
+	db_lock(loginif->packet_db, WRITE_LOCK);
 	db_clear(loginif->packet_db);
 	aFree(loginif->packet_list);
 }
@@ -223,7 +226,7 @@ static void loginif_update_ip(void)
  * @see DBApply
  * @see loginif_account_list
  * @see online_char_db
- * @mutex online_char_db_mutex
+ * @lock db_lock(chr->online_char_db)
  */
 static int loginif_account_list_sub(const struct DBKey_s *key, struct DBData *data, va_list ap)
 {
@@ -263,14 +266,14 @@ static void loginif_accinfo_request(int account_id, int u_fd, int u_aid, int u_g
  * @see loginif_account_list_sub
  * @see TimerFunc
  *
- * Acquires online_char_db_mutex
+ * Acquires db_lock(chr->online_char_db);
  **/
 static int loginif_account_list(struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data)
 {
 	if(!chr->login_session)
 		return 0;
 
-	mutex->lock(chr->online_char_db_mutex);
+	db_lock(chr->online_char_db, WRITE_LOCK);
 	int users = chr->online_char_db->size(chr->online_char_db);
 	int i = 0;
 
@@ -281,7 +284,7 @@ static int loginif_account_list(struct timer_interface *tm, int tid, int64 tick,
 	WFIFOL(chr->login_session,4) = i; // count
 	WFIFOSET(chr->login_session,WFIFOW(chr->login_session,2));
 
-	mutex->unlock(chr->online_char_db_mutex);
+	db_unlock(chr->online_char_db);
 	return 0;
 }
 
@@ -1005,7 +1008,7 @@ static enum parsefunc_rcode loginif_parse(struct s_receive_action_data *act)
 		}
 
 		struct loginif_packet_entry *packet_data;
-		packet_data = DB->data2ptr(loginif->packet_db->get_safe(loginif->packet_db, DB->i2key(command)));
+		packet_data = idb_get(loginif->packet_db, command);
 		if(!packet_data) {
 			ShowError("loginif_parse: Unknown packet 0x%04x from a "
 				"char-server! Disconnecting!\n", command);

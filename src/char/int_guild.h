@@ -54,7 +54,6 @@ struct inter_guild_interface {
 	 * int guild_id -> struct guild*
 	 **/
 	struct DBMap *guild_db;
-	struct mutex_data *guild_db_mutex;
 
 	/**
 	 * Castle cache
@@ -65,7 +64,6 @@ struct inter_guild_interface {
 	 * int castle_id -> struct guild_castle*
 	 **/
 	struct DBMap *castle_db;
-	struct mutex_data *castle_db_mutex;
 
 	unsigned int exp[MAX_GUILDLEVEL];
 

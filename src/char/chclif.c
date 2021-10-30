@@ -300,7 +300,7 @@ void chclif_parse_delete2_req(struct s_receive_action_data *act, struct char_ses
  * CH_DELETE_CHAR and CH_DELETE_CHAR2
  * Confirmation of a delete character request
  *
- * Acquires online_char_db_mutex
+ * Acquires db_lock(chr->online_char_db)
  **/
 void chclif_parse_delete_char(struct s_receive_action_data *act, struct char_session_data *sd, int ipl)
 {
@@ -316,10 +316,10 @@ void chclif_parse_delete_char(struct s_receive_action_data *act, struct char_ses
 		struct online_char_data *character;
 
 		int pincode_enable = 0;
-		mutex->lock(chr->online_char_db_mutex);
+		db_lock(chr->online_char_db, WRITE_LOCK);
 		character = idb_get(chr->online_char_db, sd->account_id);
 		pincode_enable = (character)?character->pincode_enable:0;
-		mutex->unlock(chr->online_char_db_mutex);
+		db_unlock(chr->online_char_db);
 
 		if(pincode_enable == -1) {
 			chr->auth_error(act->session, 0);
@@ -433,7 +433,7 @@ void chclif_parse_make_char(struct s_receive_action_data *act, struct char_sessi
  * CH_SELECT_CHAR
  * Parses character selection and notifies player of the available map-server.
  *
- * Acquires char_db_lock
+ * Acquires db_lock(chr->char_db_)
  **/
 void chclif_parse_select_char(struct s_receive_action_data *act, struct char_session_data *sd, int ipl)
 {
@@ -442,10 +442,10 @@ void chclif_parse_select_char(struct s_receive_action_data *act, struct char_ses
 		struct online_char_data *character;
 
 		int pincode_enable = 0;
-		mutex->lock(chr->online_char_db_mutex);
+		db_lock(chr->online_char_db, WRITE_LOCK);
 		character = idb_get(chr->online_char_db, sd->account_id);
 		pincode_enable = (character)?character->pincode_enable:0;
-		mutex->unlock(chr->online_char_db_mutex);
+		db_unlock(chr->online_char_db);
 
 		if(pincode_enable == -1) {
 			chr->auth_error(act->session, 0);
@@ -486,12 +486,14 @@ void chclif_parse_select_char(struct s_receive_action_data *act, struct char_ses
 	chr->set_char_online(-2,char_id,sd->account_id);
 
 	struct mmo_charstatus *cd;
-	rwlock->write_lock(chr->char_db_lock);
+	db_lock(chr->char_db_, WRITE_LOCK);
 	cd = chr->mmo_char_fromsql(char_id, CHARSAVE_ALL, NULL, CHARCACHE_INSERT);
 	if(!cd) {
-		rwlock->write_unlock(chr->char_db_lock);
+		db_unlock(chr->char_db_);
 		/* failed to load something. REJECT! */
+		db_lock(chr->online_char_db, WRITE_LOCK);
 		chr->set_char_offline(char_id, sd->account_id);
+		db_unlock(chr->online_char_db);
 		chr->auth_error(act->session, 0);
 		socket_io->session_disconnect_guard(act->session);
 		return;/* jump off this boat */
@@ -504,7 +506,7 @@ void chclif_parse_select_char(struct s_receive_action_data *act, struct char_ses
 
 	struct point last_point;
 	memcpy(&last_point, &cd->last_point, sizeof(last_point));
-	rwlock->write_unlock(chr->char_db_lock);
+	db_unlock(chr->char_db_);
 
 	rwlock->read_lock(chr->map_server_list_lock);
 	struct mmo_map_server *server;
@@ -609,7 +611,7 @@ enum parsefunc_rcode chclif_parse(struct s_receive_action_data *act)
 		}
 
 		struct chclif_packet_entry *packet_data;
-		packet_data = DB->data2ptr(chclif->packet_db->get_safe(chclif->packet_db, DB->i2key(command)));
+		packet_data = idb_get(chclif->packet_db, command);
 		if(!packet_data) {
 			ShowError("chclif_parse: Unknown packet 0x%04x. Disconnecting!\n", command);
 			socket_io->session_disconnect_guard(act->session);
@@ -636,6 +638,7 @@ enum parsefunc_rcode chclif_parse(struct s_receive_action_data *act)
  **/
 void chclif_final(void)
 {
+	db_lock(chclif->packet_db, WRITE_LOCK);
 	db_clear(chclif->packet_db);
 	aFree(chclif->packet_list);
 }
@@ -680,9 +683,10 @@ void chclif_init(void)
 	size_t length = ARRAYLENGTH(inter_packet);
 
 	chclif->packet_list = aMalloc(sizeof(*chclif->packet_list)*length);
-	chclif->packet_db = idb_alloc(DB_OPT_BASE);
+	chclif->packet_db = idb_alloc(DB_OPT_BASE|DB_OPT_DISABLE_LOCK); // packet_db is read-only
 
 	// Fill packet db
+	db_lock(chclif->packet_db, WRITE_LOCK);
 	for(size_t i = 0; i < length; i++) {
 		int exists;
 		chclif->packet_list[i].len = inter_packet[i].packet_len;
@@ -694,6 +698,7 @@ void chclif_init(void)
 				inter_packet[i].packet_id);
 		}
 	}
+	db_unlock(chclif->packet_db);
 }
 
 /**

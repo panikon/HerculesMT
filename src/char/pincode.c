@@ -46,7 +46,7 @@ struct pincode_interface *pincode;
  * Pincode system activation triggered after login-server authentication
  * @see pincode->loginstate
  *
- * Acquires online_char_db_mutex
+ * Acquires db_lock(chr->online_char_db)
  **/
 static void pincode_handle(struct socket_data *session, struct char_session_data *sd)
 {
@@ -54,13 +54,13 @@ static void pincode_handle(struct socket_data *session, struct char_session_data
 
 	nullpo_retv(sd);
 
-	mutex->lock(chr->online_char_db_mutex);
+	db_lock(chr->online_char_db, WRITE_LOCK);
 	character = idb_get(chr->online_char_db, sd->account_id);
 
 	if(character && character->pincode_enable > pincode->charselect) {
 		character->pincode_enable = pincode->charselect * 2;
 	} else {
-		mutex->unlock(chr->online_char_db_mutex);
+		db_unlock(chr->online_char_db);
 		// Player already answered the PIN correctly enough times.
 		pincode->loginstate(session, sd, PINCODE_LOGIN_OK);
 		return;
@@ -81,7 +81,7 @@ static void pincode_handle(struct socket_data *session, struct char_session_data
 
 	if (character)
 		character->pincode_enable = -1;
-	mutex->unlock(chr->online_char_db_mutex);
+	db_unlock(chr->online_char_db);
 }
 
 /**
@@ -126,7 +126,7 @@ static void pincode_check(struct s_receive_action_data *act, struct char_session
 		case PINCODE_SUCCESS:
 		{
 			struct online_char_data* character;
-			if((character = (struct online_char_data*)idb_get(chr->online_char_db, sd->account_id)))
+			if((character = idb_get(chr->online_char_db, sd->account_id)))
 				character->pincode_enable = pincode->charselect * 2;
 			pincode->loginstate(act->session, sd, PINCODE_LOGIN_OK);
 			break;

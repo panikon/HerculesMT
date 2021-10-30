@@ -124,7 +124,7 @@ static void mapif_server_destroy(struct mmo_map_server *server, bool remove)
  * Notifies other map-servers of the shutdown and also login-server, then
  * sets all of its characters offline and frees all data related to it.
  * Acquires map_server_list_lock
- * Acquires online_char_db_mutex
+ * Acquires db_lock(chr->online_char_db)
  **/
 static void mapif_server_reset(struct mmo_map_server *server)
 {
@@ -165,10 +165,10 @@ static void mapif_server_reset(struct mmo_map_server *server)
 	 * This information is broadcasted in fixed intervals
 	 * @see do_init_loginif
 	 **/
-	mutex->lock(chr->online_char_db_mutex);
+	db_lock(chr->online_char_db, WRITE_LOCK);
 	chr->online_char_db->foreach(chr->online_char_db,
 		chr->db_setoffline, server->pos); //Tag relevant chars as 'in disconnected' server.
-	mutex->unlock(chr->online_char_db_mutex);
+	db_unlock(chr->online_char_db);
 	mapif->server_destroy(server, true);
 }
 
@@ -793,7 +793,7 @@ static void mapif_auction_sendlist(struct socket_data *session, int char_id, sho
  * 0x3050 ZW_AUCTION_REQUEST_LIST <char_id>.L <type>.W <price>.L <page>.W <search>[NAME_LENGTH].B
  * Map-server request of information of an auction list
  *
- * Acquires inter_auction->db_mutex
+ * Acquires db_lock(inter_auction->db)
  **/
 static void mapif_parse_auction_requestlist(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
@@ -807,7 +807,7 @@ static void mapif_parse_auction_requestlist(struct s_receive_action_data *act, s
 
 	int len = sizeof(struct auction_data);
 
-	mutex->lock(inter_auction->db_mutex);
+	db_lock(inter_auction->db, READ_LOCK);
 
 	unsigned char buf[5 * sizeof(struct auction_data)];
 	struct DBIterator *iter = db_iterator(inter_auction->db);
@@ -839,7 +839,7 @@ static void mapif_parse_auction_requestlist(struct s_receive_action_data *act, s
 		j++; // Found Results
 	}
 	dbi_destroy(iter);
-	mutex->unlock(inter_auction->db_mutex);
+	db_unlock(inter_auction->db);
 
 	mapif->auction_sendlist(act->session, char_id, j, pages, buf);
 }
@@ -870,14 +870,14 @@ static void mapif_auction_register(struct socket_data *session,
  * 0x3051 ZW_AUCTION_REGISTER
  * Parses map-server request to register an auction
  *
- * Acquires inter_auction->db_mutex
+ * Acquires db_lock(inter_auction->db)
  **/
 static void mapif_parse_auction_register(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	size_t pos = 2;
 	struct auction_data a = {0};
 
-	mutex->lock(inter_auction->db_mutex);
+	db_lock(inter_auction->db, WRITE_LOCK);
 
 	offsetof(struct PACKET_ZW_AUCTION_REGISTER, data.seller_id);
 	pos += sizeof((a.seller_id  = RFIFOL(act, pos)));
@@ -904,7 +904,7 @@ static void mapif_parse_auction_register(struct s_receive_action_data *act, stru
 		a.auction_id = inter_auction->create(&a);
 	}
 
-	mutex->unlock(inter_auction->db_mutex);
+	db_unlock(inter_auction->db);
 
 	mapif->auction_register(act->session,
 		a.auction_id,
@@ -932,15 +932,15 @@ static void mapif_auction_cancel(struct socket_data *session, int char_id, enum 
  * 0x3052 ZW_AUCTION_CANCEL <char_id>.L <auction_id>.L
  * Parses cancelation request (CZ_AUCTION_ADD_CANCEL)
  *
- * Acquires inter_auction->db_mutex
+ * Acquires db_lock(inter_auction->db)
  **/
 static void mapif_parse_auction_cancel(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int char_id    = RFIFOL(act, 2);
 	int auction_id = RFIFOL(act, 6);
-	mutex->lock(inter_auction->db_mutex);
+	db_lock(inter_auction->db, WRITE_LOCK);
 	inter_auction->cancel(act->session, char_id, auction_id);
-	mutex->unlock(inter_auction->db_mutex);
+	db_unlock(inter_auction->db);
 }
 
 /**
@@ -959,16 +959,16 @@ static void mapif_auction_close(struct socket_data *session, int char_id, enum e
  * 0x3053 ZW_AUCTION_CLOSE <char_id>.L <result>.B
  * Parses close request (CZ_AUCTION_REQ_MY_SELL_STOP)
  *
- * Acquires inter_auction->db_mutex
+ * Acquires db_lock(inter_auction->db)
  **/
 static void mapif_parse_auction_close(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	int char_id    = RFIFOL(act, 2);
 	int auction_id = RFIFOL(act, 6);
 
-	mutex->lock(inter_auction->db_mutex);
+	db_lock(inter_auction->db, WRITE_LOCK);
 	inter_auction->close(act->session, char_id, auction_id);
-	mutex->unlock(inter_auction->db_mutex);
+	db_unlock(inter_auction->db);
 }
 
 /**
@@ -988,7 +988,7 @@ static void mapif_auction_bid(struct socket_data *session, int char_id, int bid,
 /**
  * 0x3055 ZW_AUCTION_BID <char_id>.L <auction_id>.L <bid>.L <buyer_name>
  *
- * Acquires inter_auction->db_mutex
+ * Acquires db_lock(inter_auction->db)
  **/
 static void mapif_parse_auction_bid(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
@@ -998,9 +998,9 @@ static void mapif_parse_auction_bid(struct s_receive_action_data *act, struct mm
 	int bid                 = RFIFOL(act, 12);
 	safestrncpy(buyer_name, RFIFOP(act, 16), NAME_LENGTH);
 
-	mutex->lock(inter_auction->db_mutex);
+	db_lock(inter_auction->db, WRITE_LOCK);
 	inter_auction->bid(act->session, char_id, auction_id, bid, buyer_name);
-	mutex->unlock(inter_auction->db_mutex);
+	db_unlock(inter_auction->db);
 }
 
 /*======================================
@@ -1390,7 +1390,7 @@ static int mapif_guild_castle_dataload(struct socket_data *session, const int *c
 	WFIFOHEAD(session, len, true);
 	WFIFOW(session, 0) = 0x3840;
 	WFIFOW(session, 2) = len;
-	mutex->lock(inter_guild->castle_db_mutex);
+	db_lock(inter_guild->castle_db, WRITE_LOCK);
 	size_t pos = 4;
 	for (i = 0; i < num; i++) {
 		gc = inter_guild->castle_fromsql(*(castle_ids++));
@@ -1423,7 +1423,7 @@ static int mapif_guild_castle_dataload(struct socket_data *session, const int *c
 			pos += sizeof((WFIFOL(session, pos) = gc->guardian[j].id));
 		}
 	}
-	mutex->unlock(inter_guild->castle_db_mutex);
+	db_unlock(inter_guild->castle_db);
 	assert(pos == len);
 	WFIFOSET(session, len);
 	return 0;
@@ -1465,7 +1465,7 @@ static void mapif_parse_CreateGuild(struct s_receive_action_data *act, struct mm
 static void mapif_parse_GuildInfo(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
 	//We use this because on start-up the info of castle-owned guilds is required. [Skotlex]
-	mutex->lock(inter_guild->guild_db_mutex);
+	db_lock(inter_guild->guild_db, WRITE_LOCK);
 	struct guild * g = inter_guild->fromsql(RFIFOL(act, 2));
 	if(g != NULL) {
 		if(!inter_guild->calcinfo(g))
@@ -1474,7 +1474,7 @@ static void mapif_parse_GuildInfo(struct s_receive_action_data *act, struct mmo_
 		// Failed to load info
 		mapif->guild_info(server, &(struct guild){.guild_id = RFIFOL(act, 2)}, false);
 	}
-	mutex->unlock(inter_guild->guild_db_mutex);
+	db_unlock(inter_guild->guild_db);
 }
 
 /**
@@ -2377,13 +2377,13 @@ static void mapif_parse_CreateParty(struct s_receive_action_data *act, struct mm
 		offsetof(struct PACKET_ZW_PARTY_CREATE, leader),
 		&leader);
 
-	mutex->lock(inter_party->db_mutex);
+	db_lock(inter_party->db, WRITE_LOCK);
 	p = inter_party->create(RFIFOP(act, 2),
 		RFIFOB(act, 26), RFIFOB(act, 27),
 		&leader);
 
 	if(p == NULL) {
-		mutex->unlock(inter_party->db_mutex);
+		db_unlock(inter_party->db);
 		mapif->party_created(act->session,
 			leader.account_id,
 			leader.char_id, NULL);
@@ -2392,7 +2392,7 @@ static void mapif_parse_CreateParty(struct s_receive_action_data *act, struct mm
 
 	mapif->party_info(act->session, p->party.party_id, 0, &p->party);
 	mapif->party_created(act->session, leader.account_id, leader.char_id, &p->party);
-	mutex->unlock(inter_party->db_mutex);
+	db_unlock(inter_party->db);
 }
 
 /**
@@ -2404,10 +2404,10 @@ static void mapif_parse_PartyInfo(struct s_receive_action_data *act, struct mmo_
 	struct party_data *p;
 	int party_id = RFIFOL(act, 2);
 	int char_id  = RFIFOL(act, 6);
-	mutex->lock(inter_party->db_mutex);
+	db_lock(inter_party->db, WRITE_LOCK);
 	p = inter_party->fromsql(party_id);
 	mapif->party_info(act->session, party_id, char_id, &p->party);
-	mutex->unlock(inter_party->db_mutex);
+	db_unlock(inter_party->db);
 }
 
 /**
@@ -3559,9 +3559,10 @@ static void mapif_parse_load_achievements(struct s_receive_action_data *act, str
 
 	struct char_achievements *cp = NULL;
 
-	mutex->lock(inter_achievement->char_achievements_mutex);
+	db_lock(inter_achievement->char_achievements, WRITE_LOCK);
 	/* Ensure data exists */
-	cp = idb_ensure(inter_achievement->char_achievements, char_id, inter_achievement->ensure_char_achievements);
+	cp = idb_ensure(inter_achievement->char_achievements, char_id,
+		inter_achievement->ensure_char_achievements);
 
 	/* Load storage for char-server. */
 	inter_achievement->fromsql(char_id, cp);
@@ -3569,7 +3570,7 @@ static void mapif_parse_load_achievements(struct s_receive_action_data *act, str
 	/* Send Achievements to map server. */
 	mapif->sAchievementsToMap(act->session, char_id, cp);
 
-	mutex->unlock(inter_achievement->char_achievements_mutex);
+	db_unlock(inter_achievement->char_achievements);
 }
 
 /**
@@ -3653,13 +3654,13 @@ static void mapif_achievement_save(int char_id, const struct char_achievements *
 {
 	struct char_achievements *cp = NULL;
 
-	mutex->lock(inter_achievement->char_achievements_mutex);
+	db_lock(inter_achievement->char_achievements, WRITE_LOCK);
 	/* Get loaded achievements. */
 	cp = idb_ensure(inter_achievement->char_achievements, char_id, inter_achievement->ensure_char_achievements);
 
 	if (VECTOR_LENGTH(*p)) /* Save current achievements. */
 		inter_achievement->tosql(char_id, cp, p);
-	mutex->unlock(inter_achievement->char_achievements_mutex);
+	db_unlock(inter_achievement->char_achievements);
 }
 
 /**
@@ -3667,6 +3668,7 @@ static void mapif_achievement_save(int char_id, const struct char_achievements *
  **/
 void mapif_final(void)
 {
+	db_lock(mapif->packet_db, WRITE_LOCK);
 	db_clear(mapif->packet_db);
 	aFree(mapif->packet_list);
 }
@@ -3804,9 +3806,10 @@ void mapif_init(void)
 	size_t length = ARRAYLENGTH(inter_packet);
 
 	mapif->packet_list = aMalloc(sizeof(*mapif->packet_list)*length);
-	mapif->packet_db = idb_alloc(DB_OPT_BASE);
+	mapif->packet_db = idb_alloc(DB_OPT_BASE|DB_OPT_DISABLE_LOCK);
 
 	// Fill packet db
+	db_lock(mapif->packet_db, WRITE_LOCK);
 	for(size_t i = 0; i < length; i++) {
 		int exists;
 		mapif->packet_list[i].len = inter_packet[i].packet_len;
@@ -3818,6 +3821,7 @@ void mapif_init(void)
 				inter_packet[i].packet_id);
 		}
 	}
+	db_unlock(mapif->packet_db);
 }
 
 void mapif_defaults(void)

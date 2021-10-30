@@ -118,11 +118,6 @@ size_t hwrite(const void * ptr, size_t size, size_t count, FILE * stream);
 #define HSleep(x) sleep(x)
 #endif
 
-enum {
-	READ_LOCK,
-	WRITE_LOCK
-} lock_type;
-
 /* [Ind/Hercules] Caching */
 struct HCache_interface {
 	void (*init) (void);

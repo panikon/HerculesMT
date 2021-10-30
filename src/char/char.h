@@ -260,7 +260,6 @@ struct char_interface {
 	 * @see online_char_data
 	 **/
 	struct DBMap *online_char_db;
-	struct mutex_data *online_char_db_mutex;
 
 	/**
 	 * Character status database
@@ -274,7 +273,6 @@ struct char_interface {
 	 * @see mmo_charstatus
 	 **/
 	struct DBMap *char_db_;
-	struct rwlock_data *char_db_lock;
 
 	char userid[NAME_LENGTH];
 	char passwd[NAME_LENGTH];

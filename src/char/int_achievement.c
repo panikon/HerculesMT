@@ -180,7 +180,6 @@ static int inter_achievement_sql_init(void)
 	// Initialize the loaded db storage.
 	// used as a comparand against map-server achievement data before saving.
 	inter_achievement->char_achievements = idb_alloc(DB_OPT_RELEASE_DATA);
-	inter_achievement->char_achievements_mutex = mutex->create();
 	return 1;
 }
 
@@ -214,8 +213,10 @@ static int inter_achievement_char_achievements_clear(const struct DBKey_s *key, 
  */
 static void inter_achievement_sql_final(void)
 {
-	inter_achievement->char_achievements->destroy(inter_achievement->char_achievements, inter_achievement->char_achievements_clear);
-	mutex->destroy(inter_achievement->char_achievements_mutex);
+	db_lock(inter_achievement->char_achievements, WRITE_LOCK);
+	inter_achievement->char_achievements->destroy(
+		inter_achievement->char_achievements,
+		inter_achievement->char_achievements_clear);
 }
 
 /**

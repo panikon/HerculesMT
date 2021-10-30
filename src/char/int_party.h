@@ -57,7 +57,6 @@ struct inter_party_interface {
 	 * int party_id -> struct party_data*
 	 **/
 	struct DBMap *db;
-	struct mutex_data *db_mutex;
 
 	void (*remove_orphaned_member) (int char_id, int party_id);
 	int (*find) (int char_id);

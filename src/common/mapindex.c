@@ -104,6 +104,7 @@ static const char *mapindex_getmapname_ext(const char *string, char *output)
  *
  * @param index  Index of the name, when -1 finds the next valid position
  * @return success
+ * @writelock db_lock(mapindex->db)
  **/
 static bool mapindex_addmap(int index, const char *name)
 {
@@ -307,6 +308,7 @@ static int mapindex_init(void)
 	VECTOR_ENSURE(mapindex->list, expected_length, 1);
 	fseek(fp, 0, SEEK_SET);
 
+	db_lock(mapindex->db, WRITE_LOCK);
 	while(fgets(line, sizeof(line), fp)) {
 		if(line[0] == '/' && line[1] == '/')
 			continue;
@@ -324,6 +326,7 @@ static int mapindex_init(void)
 		}
 		last_index = index;
 	}
+	db_unlock(mapindex->db);
 	fclose(fp);
 
 	mapindex->check_default();

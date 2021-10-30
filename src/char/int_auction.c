@@ -47,7 +47,7 @@ struct inter_auction_interface *inter_auction;
 /**
  * Returns number of active auctions of a char_id
  *
- * @mutex inter_auction->db_mutex
+ * @readlock db_lock(inter_auction->db)
  **/
 static int inter_auction_count(int char_id, bool buy)
 {
@@ -104,7 +104,7 @@ static void inter_auction_save(struct auction_data *auction)
  * @remarks timestamp is ignored and is generated using auction->hours
  * @return auction id
  * @retval 0 Failed
- * @mutex inter_auction->db_mutex
+ * @lock db_lock(inter_auction->db)
  **/
 static unsigned int inter_auction_create(const struct auction_data *auction)
 {
@@ -179,12 +179,12 @@ static unsigned int inter_auction_create(const struct auction_data *auction)
  * Auction end timer
  *
  * @see TimerFunc
- * Acquires inter_auction->db_mutex
+ * Acquires db_lock(inter_auction->db)
  **/
 static int inter_auction_end_timer(struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data)
 {
 	struct auction_data *auction;
-	mutex->lock(inter_auction->db_mutex);
+	db_lock(inter_auction->db, WRITE_LOCK);
 
 	if( (auction = idb_get(inter_auction->db, id)) != NULL )
 	{
@@ -209,14 +209,14 @@ static int inter_auction_end_timer(struct timer_interface *tm, int tid, int64 ti
 		inter_auction->delete_(auction);
 	}
 
-	mutex->unlock(inter_auction->db_mutex);
+	db_unlock(inter_auction->db);
 	return 0;
 }
 
 /**
  * Removes auction from database and cache
  *
- * @mutex inter_auction->db_mutex
+ * @lock db_lock(inter_auction->db)
  **/
 static void inter_auction_delete(struct auction_data *auction)
 {
@@ -238,7 +238,7 @@ static void inter_auction_delete(struct auction_data *auction)
 /**
  * Cancels an auction
  *
- * @mutex inter_auction->db_mutex
+ * @lock db_lock(inter_auction->db)
  **/
 static void inter_auction_cancel(struct socket_data *session, int char_id,
 	unsigned int auction_id
@@ -271,7 +271,7 @@ static void inter_auction_cancel(struct socket_data *session, int char_id,
 /**
  * Closes an auction
  *
- * @mutex inter_auction->db_mutex
+ * @lock db_lock(inter_auction->db)
  **/
 static void inter_auction_close(struct socket_data *session, int char_id,
 	unsigned int auction_id
@@ -303,7 +303,7 @@ static void inter_auction_close(struct socket_data *session, int char_id,
 /**
  * Places a new bid in provided auction
  *
- * @mutex inter_auction->db_mutex
+ * @lock db_lock(inter_auction->db)
  **/
 static void inter_auction_bid(struct socket_data *session, int char_id,
 	unsigned int auction_id, int bid, const char *buyer_name
@@ -368,7 +368,7 @@ static void inter_auction_bid(struct socket_data *session, int char_id,
 /**
  * Loads auctions from database to cache
  *
- * @mutex inter_auction->db_mutex
+ * @lock db_lock(inter_auction->db)
  **/
 static void inter_auctions_fromsql(void)
 {
@@ -447,18 +447,17 @@ static void inter_auctions_fromsql(void)
 static int inter_auction_sql_init(void)
 {
 	inter_auction->db = idb_alloc(DB_OPT_RELEASE_DATA);
-	inter_auction->db_mutex = mutex->create();
+	db_lock(inter_auction->db, WRITE_LOCK);
 	inter_auction->fromsql();
+	db_unlock(inter_auction->db);
 
 	return 0;
 }
 
 static void inter_auction_sql_final(void)
 {
+	db_lock(inter_auction->db, WRITE_LOCK);
 	inter_auction->db->destroy(inter_auction->db,NULL);
-	mutex->destroy(inter_auction->db_mutex);
-
-	return;
 }
 
 void inter_auction_defaults(void)
@@ -466,7 +465,6 @@ void inter_auction_defaults(void)
 	inter_auction = &inter_auction_s;
 
 	inter_auction->db = NULL; // int auction_id -> struct auction_data*
-	inter_auction->db_mutex = NULL;
 
 	inter_auction->cancel = inter_auction_cancel;
 	inter_auction->close = inter_auction_close;

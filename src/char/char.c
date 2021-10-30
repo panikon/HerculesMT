@@ -233,7 +233,6 @@ static struct rwlock_data *skillid2idx_lock = NULL;
  * map-server so we can reduce the number of lock calls [Panikon]
  **/
 static struct DBMap *auth_db;
-static struct mutex_data *auth_db_mutex = NULL;
 
 //-----------------------------------------------------
 // Online User Database
@@ -244,7 +243,7 @@ static struct mutex_data *auth_db_mutex = NULL;
  *
  * @see online_char_db
  * @see DBCreateData
- * @mutex online_char_db_mutex
+ * @lock db_lock(chr->online_char_db)
  **/
 static struct DBData char_create_online_char_data(const struct DBKey_s *key, va_list args)
 {
@@ -262,7 +261,7 @@ static struct DBData char_create_online_char_data(const struct DBKey_s *key, va_
 /**
  * Sets account online in char-server (in char-selection screen)
  *
- * Acquires online_char_db_mutex
+ * Acquires db_lock(chr->online_char_db)
  * Acquires map_server_list_lock
  * @see online_char_db
  **/
@@ -270,7 +269,7 @@ static void char_set_char_charselect(int account_id)
 {
 	struct online_char_data* character;
 
-	mutex->lock(chr->online_char_db_mutex);
+	db_lock(chr->online_char_db, WRITE_LOCK);
 	character = idb_ensure(chr->online_char_db, account_id, chr->create_online_char_data);
 
 	if(character->server > -1) {
@@ -293,7 +292,7 @@ static void char_set_char_charselect(int account_id)
 		character->waiting_disconnect = INVALID_TIMER;
 	}
 
-	mutex->unlock(chr->online_char_db_mutex);
+	db_unlock(chr->online_char_db);
 
 	if(chr->login_session)
 		loginif->set_account_online(account_id);
@@ -308,8 +307,8 @@ static void char_set_char_charselect(int account_id)
  * @param map_id Map position in map list, set to -2 to do a dummy online set (only db)
  * @see online_char_db
  * @readlock chr->map_server_list_lock
- * Acquires chr->online_char_db_mutex
- * Acquires chr->char_db_lock
+ * Acquires db_lock(chr->online_char_db)
+ * Acquires db_lock(chr->char_db_)
  **/
 static void char_set_char_online(int map_id, int char_id, int account_id)
 {
@@ -323,7 +322,7 @@ static void char_set_char_online(int map_id, int char_id, int account_id)
 		Sql_ShowDebug(sql_handle);
 
 	//Check to see for online conflicts
-	mutex->lock(chr->online_char_db_mutex);
+	db_lock(chr->online_char_db, WRITE_LOCK);
 	character = idb_ensure(chr->online_char_db, account_id, chr->create_online_char_data);
 	if(character->char_id != -1
 	&& character->server > -1
@@ -355,14 +354,14 @@ static void char_set_char_online(int map_id, int char_id, int account_id)
 		timer->delete(character->waiting_disconnect, chr->waiting_disconnect);
 		character->waiting_disconnect = INVALID_TIMER;
 	}
-	mutex->unlock(chr->online_char_db_mutex);
+	db_unlock(chr->online_char_db);
 
 	//Set char online in guild cache. If char is in memory, use the guild id on it, otherwise seek it.
 	int guild_id = -1;
-	rwlock->read_lock(chr->char_db_lock);
+	db_lock(chr->char_db_, READ_LOCK);
 	struct mmo_charstatus *cp = idb_get(chr->char_db_,char_id);
 	guild_id = cp?cp->guild_id:-1;
-	rwlock->read_unlock(chr->char_db_lock);
+	db_unlock(chr->char_db_);
 	inter_guild->CharOnline(char_id, guild_id);
 
 	//Notify login server
@@ -375,8 +374,8 @@ static void char_set_char_online(int map_id, int char_id, int account_id)
  *
  * @param char_id Character to be set, when -1 sets all characters of this account.
  * @readlock chr->map_server_list_lock
- * Acquires online_char_db_mutex
- * Acquires char_db_lock
+ * Acquires db_lock(chr->char_db_)
+ * Acquires db_lock(inter_achievement->char_achievements)
  **/
 static void char_set_char_offline(int char_id, int account_id)
 {
@@ -391,22 +390,24 @@ static void char_set_char_offline(int char_id, int account_id)
 			Sql_ShowDebug(sql_handle);
 	} else {
 		int guild_id = -1;
-		rwlock->write_lock(chr->char_db_lock);
+		db_lock(chr->char_db_, WRITE_LOCK);
 		struct mmo_charstatus *cp = idb_get(chr->char_db_, char_id);
 		if(cp) {
 			guild_id = cp->guild_id;
 			idb_remove(chr->char_db_, char_id);
 		}
-		rwlock->write_unlock(chr->char_db_lock);
+		db_unlock(chr->char_db_);
 		inter_guild->CharOffline(char_id, guild_id);
 
 		/* Character Achievements */
+		db_lock(inter_achievement->char_achievements, WRITE_LOCK);
 		struct char_achievements *c_ach = idb_get(inter_achievement->char_achievements,
 											      char_id);
 		if(c_ach != NULL) {
 			VECTOR_CLEAR(*c_ach);
 			idb_remove(inter_achievement->char_achievements, char_id);
 		}
+		db_unlock(inter_achievement->char_achievements);
 
 		if( SQL_ERROR == SQL->Query(sql_handle,
 			"UPDATE `%s` SET `online`='0' WHERE `char_id`='%d' LIMIT 1", char_db, char_id)
@@ -414,7 +415,6 @@ static void char_set_char_offline(int char_id, int account_id)
 			Sql_ShowDebug(sql_handle);
 	}
 
-	mutex->lock(chr->online_char_db_mutex);
 	character = idb_get(chr->online_char_db, account_id);
 	if(character != NULL) {
 		//We don't free yet to avoid aCalloc/aFree spamming during char change. [Skotlex]
@@ -436,7 +436,6 @@ static void char_set_char_offline(int char_id, int account_id)
 			character->pincode_enable = -1;
 		}
 	}
-	mutex->unlock(chr->online_char_db_mutex);
 
 	//Remove char if 1- Set all offline, or 2- character is no longer connected to char-server.
 	if(chr->login_session
@@ -454,7 +453,7 @@ static void char_set_char_offline(int char_id, int account_id)
  * @see mapif_server_reset
  * @see chr->online_char_db
  * @see DBApply
- * @mutex chr->online_char_db_mutex
+ * @lock db_lock(chr->online_char_db)
  */
 static int char_db_setoffline(const struct DBKey_s *key, struct DBData *data, va_list ap)
 {
@@ -481,7 +480,7 @@ static int char_db_setoffline(const struct DBKey_s *key, struct DBData *data, va
  * @see chr->online_char_db
  * @see DBApply
  * @readlock chr->map_server_list_lock
- * @mutex chr->online_char_db_mutex
+ * @lock db_lock(chr->online_char_db)
  */
 static int char_db_kickoffline(const struct DBKey_s *key, struct DBData *data, va_list ap)
 {
@@ -520,9 +519,9 @@ static void char_set_all_offline(int id)
 	else
 		ShowNotice("Sending users of map-server %d offline.\n",id);
 
-	mutex->lock(chr->online_char_db_mutex);
+	db_lock(chr->online_char_db, WRITE_LOCK);
 	chr->online_char_db->foreach(chr->online_char_db,chr->db_kickoffline,id);
-	mutex->unlock(chr->online_char_db_mutex);
+	db_unlock(chr->online_char_db);
 
 	if(id >= 0 || !chr->login_session)
 		return;
@@ -537,18 +536,18 @@ static void char_set_all_offline(int id)
  * @see online_char_db
  * @author [Skotlex]
  *
- * Acquires online_char_db_mutex
+ * Acquires db_lock(chr->online_char_db)
  **/
 static int char_waiting_disconnect(struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data)
 {
-	mutex->lock(chr->online_char_db_mutex);
+	db_lock(chr->online_char_db, WRITE_LOCK);
 	struct online_char_data* character = idb_get(chr->online_char_db, id);
 	if(character && character->waiting_disconnect == tid) {
 		//Mark it offline due to timeout.
 		character->waiting_disconnect = INVALID_TIMER;
 		chr->set_char_offline(character->char_id, character->account_id);
 	}
-	mutex->unlock(chr->online_char_db_mutex);
+	db_unlock(chr->online_char_db);
 	return 0;
 }
 
@@ -559,7 +558,7 @@ static int char_waiting_disconnect(struct timer_interface *tm, int tid, int64 ti
  * @see char_online_data_cleanup
  * @see online_char_db
  * @see DBApply
- * @mutex chr->online_char_db_mutex
+ * @lock db_lock(chr->online_char_db)
  **/
 static int char_online_data_cleanup_sub(const struct DBKey_s *key, struct DBData *data, va_list ap)
 {
@@ -580,13 +579,13 @@ static int char_online_data_cleanup_sub(const struct DBKey_s *key, struct DBData
  * Checks global timeout of each character entry.
  *
  * @see online_char_db
- * Acquires online_char_db_mutex
+ * Acquires db_lock(chr->online_char_db);
  **/
 static int char_online_data_cleanup(struct timer_interface *tm, int tid, int64 tick, int id, intptr_t data)
 {
-	mutex->lock(chr->online_char_db_mutex);
+	db_lock(chr->online_char_db, WRITE_LOCK);
 	chr->online_char_db->foreach(chr->online_char_db, chr->online_data_cleanup_sub);
-	mutex->unlock(chr->online_char_db_mutex);
+	db_unlock(chr->online_char_db);
 	return 0;
 }
 
@@ -610,7 +609,7 @@ static void char_set_all_offline_sql(void)
  *
  * @see chr->char_db_
  * @see DBCreateData
- * @writelock char_db_lock
+ * @writelock db_lock(chr->char_db_)
  */
 static struct DBData char_create_charstatus(const struct DBKey_s *key, va_list args)
 {
@@ -758,7 +757,7 @@ static int32 char_mmo_char_compare(const struct mmo_charstatus *cp, const struct
  * @retval >0 Internal cache was not updated, value with successfuly saved data.
  * @see char_save_flag
  *
- * Acquires char_db_lock
+ * Acquires db_lock(chr->char_db_)
  **/
 static int char_mmo_char_tosql(int char_id, struct mmo_charstatus *p)
 {
@@ -774,7 +773,7 @@ static int char_mmo_char_tosql(int char_id, struct mmo_charstatus *p)
 		return -1;
 	}
 
-	rwlock->write_lock(chr->char_db_lock);
+	db_lock(chr->char_db_, WRITE_LOCK);
 	cp = idb_ensure(chr->char_db_, char_id, chr->create_charstatus);
 	save_flag = chr->mmo_char_compare(cp, p);
 	control_flag = save_flag;
@@ -1038,7 +1037,7 @@ static int char_mmo_char_tosql(int char_id, struct mmo_charstatus *p)
 		memcpy(cp, p, sizeof(struct mmo_charstatus));
 		save_flag = 0; // Cache updated
 	}
-	rwlock->write_unlock(chr->char_db_lock);
+	db_unlock(chr->char_db_);
 	return save_flag;
 }
 
@@ -1512,8 +1511,8 @@ static int char_mmo_chars_fromsql(struct char_session_data *sd, uint8 *buf, int 
  * @param load_flag  Bitmask of data to be loaded (@see char_save_flag)
  * @param out        Pointer to object to be filled (ignored when cache_data is not 0)
  * @param cache_data 0 Don't change cache, load data to `out`
- * @param cache_data 1 Insert into cache - @writelock char_db_lock
- * @param cache_data 2 Update cache      - @writelock char_db_lock
+ * @param cache_data 1 Insert into cache - @writelock db_lock(chr->char_db_)
+ * @param cache_data 2 Update cache      - @writelock db_lock(chr->char_db_)
  * @retval cache_data is 0 returns pointer to out
  * @retval cache_data is 1 or 2 returns pointer to object in cache
  * @retval NULL failed
@@ -1861,7 +1860,6 @@ static struct mmo_charstatus *char_mmo_char_fromsql(int char_id, int load_flag, 
 static int char_mmo_char_sql_init(void)
 {
 	chr->char_db_= idb_alloc(DB_OPT_RELEASE_DATA);
-	chr->char_db_lock = rwlock->create();
 
 	//the 'set offline' part is now in check_login_conn ...
 	//if the server connects to loginserver
@@ -2792,14 +2790,14 @@ static int char_char_family(int cid1, int cid2, int cid3)
 /**
  * Forces disconnection of a player that's connected to the char-server
  *
- * Acquires online_char_db_mutex
+ * Acquires db_lock(chr->online_char_db)
  **/
 static void char_disconnect_player(int account_id)
 {
-	mutex->lock(chr->online_char_db_mutex);
+	db_lock(chr->online_char_db, WRITE_LOCK);
 	struct online_char_data *character = idb_get(chr->online_char_db, account_id);
 	struct socket_data *session = socket_io->session_from_id(character->session_id);
-	mutex->unlock(chr->online_char_db_mutex);
+	db_unlock(chr->online_char_db);
 
 	/**
 	 * session_disconnect marks the session for removal and when the next
@@ -2831,7 +2829,7 @@ static void char_authfail_fd(struct socket_data *session, enum notify_ban_errorc
  * @return true Character kicked
  * @see char_auth_ok
  * @see online_char_db
- * @mutex online_char_db_mutex
+ * @lock db_lock(chr->online_char_db)
  * Acquires map_server_list_lock
  **/
 static bool char_auth_kick_online(struct socket_data *session, struct online_char_data *character)
@@ -2873,7 +2871,7 @@ static bool char_auth_kick_online(struct socket_data *session, struct online_cha
  * @param session Character session
  * @see online_char_db
  * Acquires chr->map_server_list_lock
- * Acquires online_char_db_mutex
+ * Acquires db_lock(chr->online_char_db)
  **/
 static void char_auth_ok(struct socket_data *session, struct char_session_data *sd)
 {
@@ -2882,10 +2880,10 @@ static void char_auth_ok(struct socket_data *session, struct char_session_data *
 	nullpo_retv(sd);
 
 	bool kicked;
-	mutex->lock(chr->online_char_db_mutex);
+	db_lock(chr->online_char_db, WRITE_LOCK);
 	character = idb_get(chr->online_char_db, sd->account_id);
 	kicked = chr->auth_kick_online(session, character);
-	mutex->unlock(chr->online_char_db_mutex);
+	db_unlock(chr->online_char_db);
 	if(kicked)
 		return; // This account was already online, kicked.
 
@@ -3240,7 +3238,7 @@ static void char_parse_frommap_set_users_count(struct s_receive_action_data *act
  * ZW_USER_LIST
  * Current online characters in map-server
  *
- * Acquires online_char_db_mutex
+ * Acquires db_lock(chr->online_char_db)
  **/
 static void char_parse_frommap_set_users(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
@@ -3249,11 +3247,11 @@ static void char_parse_frommap_set_users(struct s_receive_action_data *act, stru
 
 	server->user_count = RFIFOW(act,4);
 
-	mutex->lock(chr->online_char_db_mutex);
+	db_lock(chr->online_char_db, WRITE_LOCK);
 	chr->online_char_db->foreach(chr->online_char_db,chr->db_setoffline,
 		server->pos); //Set all chars from this server as 'unknown'
 	/**
-	 * Unlock chr->online_char_db_mutex after all operations so no timer can
+	 * Unlock db_lock(chr->online_char_db) after all operations so no timer can
 	 * mess with the database while we're loading the data.
 	 **/
 
@@ -3273,7 +3271,7 @@ static void char_parse_frommap_set_users(struct s_receive_action_data *act, stru
 		character->server = server->pos;
 		character->char_id = cid;
 	}
-	mutex->unlock(chr->online_char_db_mutex);
+	db_unlock(chr->online_char_db);
 	//If any chars remain in -2, they will be cleaned in the cleanup timer.
 }
 
@@ -3281,8 +3279,8 @@ static void char_parse_frommap_set_users(struct s_receive_action_data *act, stru
  * ZW_SAVE_CHARACTER
  * Save character request
  *
- * Acquires online_char_db_mutex
- * Acquires char_db_lock
+ * Acquires db_lock(chr->online_char_db)
+ * Acquires db_lock(chr->char_db_)
  **/
 static void char_parse_frommap_save_character(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
@@ -3300,25 +3298,25 @@ static void char_parse_frommap_save_character(struct s_receive_action_data *act,
 	 * Check account only if this ain't final save. Final-save goes through because
 	 * of the char-map reconnect.
 	 **/
-	mutex->lock(chr->online_char_db_mutex);
+	db_lock(chr->online_char_db, WRITE_LOCK);
 	if(RFIFOB(act, 12)
-	 || ( (character = (struct online_char_data*)idb_get(chr->online_char_db, aid)) != NULL
+	 || ( (character = idb_get(chr->online_char_db, aid)) != NULL
 	    && character->char_id == cid)
 	) {
-		mutex->unlock(chr->online_char_db_mutex);
+		db_unlock(chr->online_char_db);
 		// TODO/FIXME: Copy of a padded struct
 		struct mmo_charstatus char_dat;
 		memcpy(&char_dat, RFIFOP(act, 13), sizeof(struct mmo_charstatus));
 		int save_flag = chr->mmo_char_tosql(cid, &char_dat);
 		if(save_flag > 0) {
 			// Cache wasn't updated, try to reload changed data from db
-			rwlock->write_lock(chr->char_db_lock);
+			db_lock(chr->char_db_, WRITE_LOCK);
 			chr->mmo_char_fromsql(cid, save_flag, NULL, CHARCACHE_UPDATE);
-			rwlock->write_unlock(chr->char_db_lock);
+			db_unlock(chr->char_db_);
 		}
 	} else {
-		mutex->unlock(chr->online_char_db_mutex);
-		// set_char_online acquires online_char_db_mutex
+		db_unlock(chr->online_char_db);
+		// set_char_online acquires db_lock(chr->online_char_db)
 		/**
 		 * This may be valid on char-server reconnection, when re-sending
 		 * characters that already logged off.
@@ -3330,7 +3328,9 @@ static void char_parse_frommap_save_character(struct s_receive_action_data *act,
 
 	if(RFIFOB(act, 12)) {
 		//Flag, set character offline after saving. [Skotlex]
+		db_lock(chr->online_char_db, WRITE_LOCK);
 		chr->set_char_offline(cid, aid);
+		db_unlock(chr->online_char_db);
 		mapif->save_character_ack(act->session, aid, cid);
 	}
 }
@@ -3369,8 +3369,8 @@ static void char_parse_frommap_char_select_req(struct s_receive_action_data *act
  * ZW_CHANGE_SERVER_REQUEST
  * Request to move a character between map-servers
  *
- * Acquires online_char_db_mutex
- * Acquires char_db_lock
+ * Acquires db_lock(chr->online_char_db)
+ * Acquires db_lock(chr->char_db_)
  **/
 static void char_parse_frommap_change_map_server(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
@@ -3396,7 +3396,7 @@ static void char_parse_frommap_change_map_server(struct s_receive_action_data *a
 		new_server = INDEX_MAP_INDEX(chr->map_server_list, map_id);
 
 	//Char should just had been saved before this packet, so this should be safe. [Skotlex]
-	rwlock->write_lock(chr->char_db_lock);
+	db_lock(chr->char_db_, WRITE_LOCK);
 	char_data = uidb_get(chr->char_db_, char_id);
 	if(char_data == NULL) { //Really shouldn't happen.
 		ShowDebug("char_parse_frommap_change_map_server: AID %d CID %d from "
@@ -3404,7 +3404,7 @@ static void char_parse_frommap_change_map_server(struct s_receive_action_data *a
 			account_id, char_id, server->pos);
 		char_data = chr->mmo_char_fromsql(char_id, CHARSAVE_ALL, NULL, CHARCACHE_INSERT);
 		if(!char_data) {
-			rwlock->write_unlock(chr->char_db_lock);
+			db_unlock(chr->char_db_);
 			ShowError("char_parse_frommap_change_map_server: Failed to cache data "
 				"(AID %d CID %d)\n", account_id, char_id);
 			return;
@@ -3420,7 +3420,7 @@ static void char_parse_frommap_change_map_server(struct s_receive_action_data *a
 		char_data->last_point.x = x;
 		char_data->last_point.y = y;
 		char_data->sex = sex;
-		rwlock->write_unlock(chr->char_db_lock);
+		db_unlock(chr->char_db_);
 
 		struct char_session_data sd = { // Dummy session data for auth entry
 			.account_id = account_id,
@@ -3432,16 +3432,16 @@ static void char_parse_frommap_change_map_server(struct s_receive_action_data *a
 		};
 		chr->create_auth_entry(&sd, char_id, client_addr, true);
 
-		mutex->lock(chr->online_char_db_mutex);
+		db_lock(chr->online_char_db, WRITE_LOCK);
 		data = idb_ensure(chr->online_char_db, account_id, chr->create_online_char_data);
 		data->char_id = char_data->char_id;
 		data->server = map_id; //Update server where char is.
-		mutex->unlock(chr->online_char_db_mutex);
+		db_unlock(chr->online_char_db);
 
 		//Reply with an ack.
 		mapif->change_map_server_ack(server->session, RFIFOP(act, 2), true);
 	} else { //Reply with nak
-		rwlock->write_unlock(chr->char_db_lock);
+		db_unlock(chr->char_db_);
 		mapif->change_map_server_ack(server->session, RFIFOP(act, 2), false);
 	}
 }
@@ -3489,17 +3489,17 @@ static void char_parse_frommap_change_email(struct s_receive_action_data *act, s
  * @see loginif->parse_kick
  *
  * Acquires map_server_list_lock
- * Acquires online_char_db_mutex
- * Acquires auth_db_mutex
+ * Acquires db_lock(chr->online_char_db)
+ * Acquires db_lock(auth_db)
  **/
 static void char_kick(int account_id)
 {
 	struct online_char_data *character;
 
-	mutex->lock(chr->online_char_db_mutex);
+	db_lock(chr->online_char_db, WRITE_LOCK);
 	character = idb_get(chr->online_char_db, account_id);
 	if(!character) {
-		mutex->unlock(chr->online_char_db_mutex);
+		db_unlock(chr->online_char_db);
 		goto remove_auth_db; // Account not marked as online
 	}
 	
@@ -3533,17 +3533,15 @@ static void char_kick(int account_id)
 			chr->authfail_fd(client_session, NBE_SERVER_CLOSED);
 			socket_io->session_disconnect_guard(client_session);
 		} else { // still moving to the map-server
-			mutex->unlock(chr->online_char_db_mutex);
 			chr->set_char_offline(-1, account_id);
-			goto remove_auth_db; // Already unlocked online_char_db_mutex
 		}
 	}
-	mutex->unlock(chr->online_char_db_mutex);
+	db_unlock(chr->online_char_db);
 	// Fall-through
 remove_auth_db:
-	mutex->lock(auth_db_mutex);
+	db_lock(auth_db, WRITE_LOCK);
 	idb_remove(auth_db, account_id); // reject auth attempts from map-server
-	mutex->unlock(auth_db_mutex);
+	db_unlock(auth_db);
 }
 
 static void char_ban(int account_id, int char_id, time_t *unban_time, short year, short month, short day, short hour, short minute, short second)
@@ -3603,7 +3601,7 @@ static void char_unban(int char_id, int *result)
  * Changes the sex of all characters of an account.
  * @see loginif_parse_changesex_reply
  * @see char_change_sex_sub
- * Acquires auth_db_mutex
+ * Acquires db_lock(auth_db)
  **/
 static void char_changecharsex_all(int account_id, int sex)
 {
@@ -3612,11 +3610,11 @@ static void char_changecharsex_all(int account_id, int sex)
 	struct SqlStmt *stmt;
 	struct Sql *sql_handle = inter->sql_handle_get();
 
-	mutex->lock(auth_db_mutex);
+	db_lock(auth_db, WRITE_LOCK);
 	node = idb_get(auth_db, account_id);
 	if(node != NULL)
 		node->sex = sex;
-	mutex->unlock(auth_db_mutex);
+	db_unlock(auth_db);
 
 	// get characters
 	stmt = SQL->StmtMalloc(sql_handle);
@@ -3894,7 +3892,9 @@ static void char_parse_frommap_ragsrvinfo(struct s_receive_action_data *act, str
  **/
 static void char_parse_frommap_set_char_offline(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
+	db_lock(chr->online_char_db, WRITE_LOCK);
 	chr->set_char_offline(RFIFOL(act, 2), RFIFOL(act, 6));
+	db_unlock(chr->online_char_db);
 }
 
 /**
@@ -3995,7 +3995,7 @@ static void char_parse_frommap_ping(struct s_receive_action_data *act, struct mm
  * Map-server account authentication request
  *
  * Acquires auth_db_mutex
- * Acquires char_db_lock
+ * Acquires db_lock(auth_db)
  **/
 static void char_parse_frommap_auth_request(struct s_receive_action_data *act, struct mmo_map_server *server)
 {
@@ -4009,7 +4009,7 @@ static void char_parse_frommap_auth_request(struct s_receive_action_data *act, s
 	char standalone = RFIFOB(act, 19);
 
 	/**
-	 * We copy node data before acquiring chr->char_db_lock so we can avoid
+	 * We copy node data before acquiring chr->char_db_ so we can avoid
 	 * potential deadlock situations.
 	 **/
 	struct char_auth_node copy;
@@ -4017,7 +4017,7 @@ static void char_parse_frommap_auth_request(struct s_receive_action_data *act, s
 	struct char_auth_node *node = NULL;
 	if(!standalone) {
 		// Don't try to acquire auth node if player is autotrading
-		mutex->lock(auth_db_mutex);
+		db_lock(auth_db, WRITE_LOCK);
 		node = idb_get(auth_db, account_id);
 		if(node) {
 			node->read_flag = true; // Set so no thread can change this node
@@ -4025,13 +4025,13 @@ static void char_parse_frommap_auth_request(struct s_receive_action_data *act, s
 			cached_node = node;
 			node = &copy;
 		}
-		mutex->unlock(auth_db_mutex);
+		db_unlock(auth_db);
 	}
 
-	rwlock->read_lock(chr->char_db_lock);
-	cd = uidb_get_safe(chr->char_db_,char_id);
+	db_lock(chr->char_db_, READ_LOCK);
+	cd = uidb_get(chr->char_db_,char_id);
 	if(cd == NULL) { //Really shouldn't happen.
-		rwlock->read_unlock(chr->char_db_lock);
+		db_unlock(chr->char_db_);
 		ShowDebug("char_parse_frommap_auth_request: AID %d CID %d requesting  "
 			"map-server %d without cached data! Denying auth\n",
 			account_id, char_id, server->pos);
@@ -4044,7 +4044,7 @@ static void char_parse_frommap_auth_request(struct s_receive_action_data *act, s
 		cd->sex = sex;
 
 		mapif->auth_ok(act->session, account_id, NULL, cd);
-		rwlock->read_unlock(chr->char_db_lock);
+		db_unlock(chr->char_db_);
 
 		chr->set_char_online(server->pos, char_id, account_id);
 		return;
@@ -4063,22 +4063,24 @@ static void char_parse_frommap_auth_request(struct s_receive_action_data *act, s
 			cd->sex = sex;
 
 		mapif->auth_ok(act->session, account_id, node, cd);
-		rwlock->read_unlock(chr->char_db_lock);
+		db_unlock(chr->char_db_);
 
 		// only use the auth once and mark user online
-		mutex->lock(auth_db_mutex);
+		db_lock(auth_db, WRITE_LOCK);
 		idb_remove(auth_db, account_id);
-		mutex->unlock(auth_db_mutex);
+		db_unlock(auth_db);
 
 		chr->set_char_online(server->pos, char_id, account_id);
 	}
 	else
 	{// auth failed
-		rwlock->read_unlock(chr->char_db_lock);
+		db_unlock(chr->char_db_);
 
-		mutex->lock(auth_db_mutex);
-		cached_node->read_flag = false;
-		mutex->unlock(auth_db_mutex);
+		if(cached_node) {
+			db_lock(auth_db, WRITE_LOCK);
+			cached_node->read_flag = false;
+			db_unlock(auth_db);
+		}
 
 		mapif->auth_failed(act->session, account_id, char_id, login_id1, sex, ip);
 	}
@@ -4182,7 +4184,7 @@ static enum parsefunc_rcode char_parse_frommap(struct s_receive_action_data *act
 				goto unlock_list_return_incomplete;
 		}
 		struct mapif_packet_entry *packet_data;
-		packet_data = DB->data2ptr(mapif->packet_db->get_safe(mapif->packet_db, DB->i2key(command)));
+		packet_data = idb_get(mapif->packet_db, command);
 		if(!packet_data) {
 			ShowError("char_parse_frommap: Unknown packet 0x%04x from a "
 				"map-server! Disconnecting!\n", command);
@@ -4462,22 +4464,22 @@ static void char_send_account_id(struct socket_data *session, int account_id)
  * @see chclif_parse_enter
  * @retval NBE_SUCCESS successful first step of authentication
  *
- * Acquires auth_db_mutex
+ * Acquires db_lock(auth_db);
  **/
 static enum notify_ban_errorcode char_auth(struct socket_data *session, struct char_session_data *sd,
 	int ipl
 ) {
-	mutex->lock(auth_db_mutex);
+	db_lock(auth_db, WRITE_LOCK);
 	struct char_auth_node *node = idb_get(auth_db, sd->account_id);
 	if(!node) {
-		mutex->unlock(auth_db_mutex);
+		db_unlock(auth_db);
 		// Authentication not found (coming from login server)
 		if(!chr->login_session)
 			return NBE_SERVER_CLOSED;
 		loginif->auth(session->id, sd, ipl);
 	} else {
 		if(node->read_flag == true) { // This node is in another auth step
-			mutex->unlock(auth_db_mutex);
+			db_unlock(auth_db);
 			return NBE_TIME_GAP;
 		}
 		// Coming from map-server (after ZW_CHAR_SELECT_REQ)
@@ -4487,7 +4489,7 @@ static enum notify_ban_errorcode char_auth(struct socket_data *session, struct c
 		|| node->ip         != ipl
 		) {
 			// Authentication mismatch, deny connection
-			mutex->unlock(auth_db_mutex);
+			db_unlock(auth_db);
 			return NBE_DISCONNECTED;
 		}
 		enum notify_ban_errorcode temp_code = NBE_SUCCESS;
@@ -4499,7 +4501,7 @@ static enum notify_ban_errorcode char_auth(struct socket_data *session, struct c
 			temp_code = NBE_NO_PAYING_TIME;
 
 		idb_remove(auth_db, sd->account_id);
-		mutex->unlock(auth_db_mutex);
+		db_unlock(auth_db);
 
 		if(temp_code != NBE_SUCCESS)
 			return temp_code;
@@ -4691,9 +4693,9 @@ static void char_create_auth_entry(struct char_session_data *sd, int char_id, in
 	node->changing_mapservers  = changing_map_servers;
 	node->read_flag            = false;
 
-	mutex->lock(auth_db_mutex);
+	db_lock(auth_db, WRITE_LOCK);
 	idb_put(auth_db, sd->account_id, node);
-	mutex->unlock(auth_db_mutex);
+	db_unlock(auth_db);
 }
 
 static void char_creation_failed(struct socket_data *session, enum refuse_make_char_errorcode result)
@@ -4845,19 +4847,19 @@ static void char_parse_char_move_character(struct s_receive_action_data *act, st
  * Called before processing a new action.
  * @mutex session->mutex
  * @see chclif->parse
- * Acquires online_char_db_mutex
+ * Acquires db_lock(chr->online_char_db)
  **/
 static void char_disconnect(struct socket_data *session, struct char_session_data *sd)
 {
 	if(sd != NULL && sd->auth) {
 		// already authed client
-		mutex->lock(chr->online_char_db_mutex);
+		db_lock(chr->online_char_db, WRITE_LOCK);
 		struct online_char_data* data = idb_get(chr->online_char_db, sd->account_id);
 		if( data != NULL && data->session_id == session->id)
 			data->session_id = -1;
-		mutex->unlock(chr->online_char_db_mutex);
 		if( data == NULL || data->server == -1) //If it is not in any server, send it offline. [Skotlex]
 			chr->set_char_offline(-1, sd->account_id);
+		db_unlock(chr->online_char_db);
 	}
 	if(sd && sd->rename)
 		aFree(sd->rename);
@@ -5728,12 +5730,14 @@ int do_final(void)
 	if( SQL_ERROR == SQL->Query(sql_handle, "DELETE FROM `%s`", ragsrvinfo_db) )
 		Sql_ShowDebug(sql_handle);
 
+	db_lock(chr->char_db_, WRITE_LOCK);
 	chr->char_db_->destroy(chr->char_db_, NULL);
-	chr->online_char_db->destroy(chr->online_char_db, NULL);
-	mutex->destroy(chr->online_char_db_mutex);
 
+	db_lock(chr->online_char_db, WRITE_LOCK);
+	chr->online_char_db->destroy(chr->online_char_db, NULL);
+
+	db_lock(auth_db, WRITE_LOCK);
 	auth_db->destroy(auth_db, NULL);
-	mutex->destroy(auth_db_mutex);
 
 	mutex->destroy(fame_list_mutex);
 	HPM_char_do_final();
@@ -5947,12 +5951,7 @@ int do_init(int argc, char **argv)
 	inter->init_sql();
 
 	auth_db = idb_alloc(DB_OPT_RELEASE_DATA);
-	if(!(auth_db_mutex = mutex->create()))
-		exit(EXIT_FAILURE);
-
 	chr->online_char_db = idb_alloc(DB_OPT_RELEASE_DATA);
-	if(!(chr->online_char_db_mutex = mutex->create()))
-		exit(EXIT_FAILURE);
 
 	HPM->event(HPET_INIT);
 
@@ -6081,9 +6080,7 @@ void char_defaults(void)
 	chr->login_session = NULL;
 
 	chr->online_char_db = NULL;
-	chr->online_char_db_mutex = NULL;
 	chr->char_db_ = NULL;
-	chr->char_db_lock = NULL;
 
 	memset(chr->userid, 0, sizeof(chr->userid));
 	memset(chr->passwd, 0, sizeof(chr->passwd));

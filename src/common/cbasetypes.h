@@ -511,5 +511,9 @@ typedef char bool;
 #define STATIC_ASSERT(ex, msg)
 #endif
 
+enum {
+	READ_LOCK,
+	WRITE_LOCK
+} lock_type;
 
 #endif /* COMMON_CBASETYPES_H */

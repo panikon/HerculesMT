@@ -37,7 +37,6 @@ struct inter_auction_interface {
 	 * int auction_id -> struct auction_data*
 	 **/
 	struct DBMap *db;
-	struct mutex_data *db_mutex;
 
 	void (*cancel) (struct socket_data *session, int char_id, unsigned int auction_id);
 	void (*close) (struct socket_data *session, int char_id, unsigned int auction_id);
