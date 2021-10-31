@@ -374,7 +374,9 @@ static int npc_event_dequeue(struct map_session_data *sd)
 }
 
 /**
+ * Creates a node in an entry of npc->ev_label_db
  * @see DBCreateData
+ * @see npc->ev_label_db
  */
 static struct DBData npc_event_export_create(union DBKey key, va_list args)
 {
@@ -393,7 +395,9 @@ static struct DBData npc_event_export_create(union DBKey key, va_list args)
  * @retval 1 Event already exists
  * @retval 0 Event added successfuly
  * @see npc->ev_db
+ *
  * Acquires db_lock(npc->ev_db)
+ * Acquires db_lock(npc->ev_label_db)
  **/
 static int npc_event_export(struct npc_data *nd, int i)
 {
@@ -430,8 +434,10 @@ static int npc_event_export(struct npc_data *nd, int i)
 		strdb_put(npc->ev_db, buf, ev_len, ev);
 		db_unlock(npc->ev_db);
 
-		label_linkdb = strdb_ensure(npc->ev_label_db, lname, npc->event_export_create);
+		db_lock(npc->ev_label_db, WRITE_LOCK);
+		label_linkdb = strdb_ensure(npc->ev_label_db, lname, 0, npc->event_export_create);
 		linkdb_insert(label_linkdb, nd, ev);
+		db_unlock(npc->ev_label_db, WRITE_LOCK);
 	}
 	return 0;
 }
@@ -481,7 +487,7 @@ static int npc_event_do(const char *name, int name_len)
 {
 	nullpo_ret(name);
 	if(name[0] == ':' && name[1] == ':') {
-		return npc->event_doall(name+2); // skip leading "::"
+		return npc->event_doall(name+2, (name_len > 2)?name_len-2:0, 0); // skip leading "::"
 	}
 	else {
 		db_lock(npc->ev_db, READ_LOCK);
@@ -524,23 +530,27 @@ static bool npc_event_dolocal(const char *exname, const char *name,
 	return (ev != NULL);
 }
 
-// runs the specified event, with a RID attached (global only)
-static int npc_event_doall_id(const char *name, int rid)
+/**
+ * Runs the specified event, with a RID attached (global only)
+ * @param name     Event name without preceding '::'
+ * @param name_len Length of event name (if 0 the length is calculated internally)
+ * @param RID      RID to be attached to the script (if 0 no RID)
+ * @return Number of executed instances
+ * @see npc->ev_label_db
+ * Acquires db_lock(npc->ev_label_db)
+ **/
+static int npc_event_doall(const char *name, int name_len, int rid)
 {
 	int c = 0;
-	struct linkdb_node **label_linkdb = strdb_get(npc->ev_label_db, name);
 
-	if (label_linkdb == NULL)
-		return 0;
+	db_lock(npc->ev_label_db, READ_LOCK);
+	struct linkdb_node **label_linkdb = strdb_get(npc->ev_label_db, name, name_len);
 
-	linkdb_foreach(label_linkdb, npc->event_doall_sub, &c, name, rid);
+	if(label_linkdb)
+		linkdb_foreach(label_linkdb, npc->event_doall_sub, &c, name, rid);
+
+	db_unlock(npc->ev_label_db);
 	return c;
-}
-
-// runs the specified event (global only)
-static int npc_event_doall(const char *name)
-{
-	return npc->event_doall_id(name, 0);
 }
 
 /*==========================================
@@ -554,6 +564,7 @@ static int npc_event_do_clock(int tid, int64 tick, int id, intptr_t data)
 	struct tm* t;
 	char buf[64];
 	int c = 0;
+	int label_len = 0;
 
 	clock = time(NULL);
 	t = localtime(&clock);
@@ -572,24 +583,24 @@ static int npc_event_do_clock(int tid, int64 tick, int id, intptr_t data)
 			default:day = ""; break;
 		}
 
-		sprintf(buf,"OnMinute%02d",t->tm_min);
-		c += npc->event_doall(buf);
+		label_len = sprintf(buf,"OnMinute%02d",t->tm_min);
+		c += npc->event_doall(buf, label_len, 0);
 
-		sprintf(buf,"OnClock%02d%02d",t->tm_hour,t->tm_min);
-		c += npc->event_doall(buf);
+		label_len = sprintf(buf,"OnClock%02d%02d",t->tm_hour,t->tm_min);
+		c += npc->event_doall(buf, label_len, 0);
 
-		sprintf(buf,"On%s%02d%02d",day,t->tm_hour,t->tm_min);
-		c += npc->event_doall(buf);
+		label_len = sprintf(buf,"On%s%02d%02d",day,t->tm_hour,t->tm_min);
+		c += npc->event_doall(buf, label_len, 0);
 	}
 
 	if (t->tm_hour != ev_tm_b.tm_hour) {
-		sprintf(buf,"OnHour%02d",t->tm_hour);
-		c += npc->event_doall(buf);
+		label_len = sprintf(buf,"OnHour%02d",t->tm_hour);
+		c += npc->event_doall(buf, label_len, 0);
 	}
 
 	if (t->tm_mday != ev_tm_b.tm_mday) {
-		sprintf(buf,"OnDay%02d%02d",t->tm_mon+1,t->tm_mday);
-		c += npc->event_doall(buf);
+		label_len = sprintf(buf,"OnDay%02d%02d",t->tm_mon+1,t->tm_mday);
+		c += npc->event_doall(buf, label_len, 0);
 	}
 
 	memcpy(&ev_tm_b,t,sizeof(ev_tm_b));
@@ -602,7 +613,8 @@ static int npc_event_do_clock(int tid, int64 tick, int id, intptr_t data)
  **/
 static void npc_event_do_oninit(bool reload)
 {
-	ShowStatus("Event '"CL_WHITE"OnInit"CL_RESET"' executed with '"CL_WHITE"%d"CL_RESET"' NPCs."CL_CLL"\n", npc->event_doall("OnInit"));
+	ShowStatus("Event '"CL_WHITE"OnInit"CL_RESET"' executed with "
+		CL_WHITE"%d"CL_RESET"' NPCs."CL_CLL"\n", npc->event_doall("OnInit",7,0));
 
 	// This interval has already been added on startup
 	if( !reload )
@@ -3105,6 +3117,7 @@ static int npc_remove_map(struct npc_data *nd)
  *
  * @param npcname Unique NPC name
  * @see DBApply
+ * @see npc->unload
  * @lock db_lock(npc->ev_db)
  */
 static int npc_unload_ev(const struct DBKey_s *key, struct DBData *data, va_list args)
@@ -3120,12 +3133,16 @@ static int npc_unload_ev(const struct DBKey_s *key, struct DBData *data, va_list
 }
 
 /**
+ * Removes an NPC event from event label database
+ * @param nd NPC to be removed
  * @see DBApply
+ * @see npc->unload
+ * @lock db_lock(npc->ev_label)
  */
 static int npc_unload_ev_label(const struct DBKey_s *key, struct DBData *data, va_list args)
 {
 	struct linkdb_node **label_linkdb = DB->data2ptr(data);
-	struct npc_data* nd = va_arg(ap, struct npc_data *);
+	struct npc_data* nd = va_arg(args, struct npc_data *);
 
 	linkdb_erase(label_linkdb, nd);
 
@@ -3202,6 +3219,7 @@ static int npc_unload_mob(struct mob_data *md, va_list args)
  * @param unload_mobs If true, mobs spawned by the NPC will be removed.
  *
  * Acquires db_lock(npc->ev_db)
+ * Acquires db_lock(npc->ev_label_db)
  **/
 static void npc_unload(struct npc_data *nd, bool single, bool unload_mobs)
 {
@@ -3241,7 +3259,10 @@ static void npc_unload(struct npc_data *nd, bool single, bool unload_mobs)
 			db_lock(npc->ev_db, READ_LOCK);
 			npc->ev_db->foreach(npc->ev_db, npc->unload_ev, nd->exname); /// Clean up all related events.
 			db_unlock(npc->ev_db);
+
+			db_lock(npc->ev_label_db, WRITE_LOCK);
 			npc->ev_label_db->foreach(npc->ev_label_db, npc->unload_ev_label, nd);
+			db_unlock(npc->ev_label_db);
 		}
 
 		struct s_mapiterator *iter = mapit_geteachpc();
@@ -5789,7 +5810,7 @@ static void npc_read_event_script(void)
 /**
  * @see DBApply
  */
-static int npc_path_db_clear_sub(union DBKey key, struct DBData *data, va_list args)
+static int npc_path_db_clear_sub(const struct DBKey_s *key, struct DBData *data, va_list args)
 {
 	struct npc_path_data *npd = DB->data2ptr(data);
 	nullpo_ret(npd);
@@ -5799,9 +5820,11 @@ static int npc_path_db_clear_sub(union DBKey key, struct DBData *data, va_list a
 }
 
 /**
+ * Clears all npc data from npc->ev_label_db
  * @see DBApply
+ * @lock db_lock(npc->ev_label_db)
  */
-static int npc_ev_label_db_clear_sub(union DBKey key, struct DBData *data, va_list args)
+static int npc_ev_label_db_clear_sub(const struct DBKey_s *key, struct DBData *data, va_list args)
 {
 	struct linkdb_node **label_linkdb = DB->data2ptr(data);
 	linkdb_final(label_linkdb); // linked data (struct event_data*) is freed when clearing ev_db
@@ -5836,6 +5859,7 @@ static void npc_process_files(int npc_min)
  * Clears and then reloads all NPC files.
  *
  * Acquires db_lock(npc->ev_db)
+ * Acquires db_lock(npc->ev_label_db)
  **/
 static void npc_reload(void)
 {
@@ -5850,7 +5874,10 @@ static void npc_reload(void)
 	db_clear(npc->ev_db);
 	db_unlock(npc->ev_db);
 
+	db_lock(npc->ev_label_db, WRITE_LOCK);
 	npc->ev_label_db->clear(npc->ev_label_db, npc->ev_label_db_clear_sub);
+	db_unlock(npc->ev_label_db);
+
 	npc->npc_last_npd = NULL;
 	npc->npc_last_path = NULL;
 	npc->npc_last_ref = NULL;
@@ -5941,17 +5968,17 @@ static void npc_reload(void)
 	 */
 	if (intif->CheckForCharServer() == 0) {
 		ShowStatus("Event '"CL_WHITE"OnInterIfInit"CL_RESET"' executed with '"CL_WHITE"%d"CL_RESET"' NPCs.\n",
-		           npc->event_doall("OnInterIfInit"));
+		           npc->event_doall("OnInterIfInit", 14, 0));
 		ShowStatus("Event '"CL_WHITE"OnInterIfInitOnce"CL_RESET"' executed with '"CL_WHITE"%d"CL_RESET"' NPCs.\n",
-		           npc->event_doall("OnInterIfInitOnce"));
+		           npc->event_doall("OnInterIfInitOnce", 18, 0));
 	}
 
 	/*
 	 * Refresh guild castle flags on both WoE setups.
 	 * These events are only executed after receiving castle information from char-server.
 	 */
-	npc->event_doall("OnAgitInit");
-	npc->event_doall("OnAgitInit2");
+	npc->event_doall("OnAgitInit",  11, 0);
+	npc->event_doall("OnAgitInit2", 12, 0);
 }
 
 /**
@@ -5991,6 +6018,7 @@ static bool npc_unloadfile(const char *filepath, bool unload_mobs)
  * Prepares NPC data for a faster shutdown process
  *
  * Acquires db_lock(npc->ev_db)
+ * Acquires db_lock(npc->ev_label_db);
  **/
 static void do_clear_npc(void)
 {
@@ -6000,7 +6028,9 @@ static void do_clear_npc(void)
 	db_clear(npc->ev_db);
 	db_unlock(npc->ev_db);
 
+	db_lock(npc->ev_label_db, WRITE_LOCK);
 	npc->ev_label_db->clear(npc->ev_label_db, npc->ev_label_db_clear_sub);
+	db_unlock(npc->ev_label_db);
 }
 
 /*==========================================
@@ -6011,7 +6041,9 @@ static int do_final_npc(void)
 	db_lock(npc->ev_db, WRITE_LOCK);
 	db_destroy(npc->ev_db);
 
+	db_lock(npc->ev_label_db, WRITE_LOCK);
 	npc->ev_label_db->destroy(npc->ev_label_db, npc->ev_label_db_clear_sub);
+
 	db_destroy(npc->name_db);
 	npc->path_db->destroy(npc->path_db, npc->path_db_clear_sub);
 	ers_destroy(npc->timer_event_ers);
@@ -6197,7 +6229,6 @@ void npc_defaults(void)
 	npc->event_doall_sub = npc_event_doall_sub;
 	npc->event_do = npc_event_do;
 	npc->event_dolocal = npc_event_dolocal;
-	npc->event_doall_id = npc_event_doall_id;
 	npc->event_doall = npc_event_doall;
 	npc->event_do_clock = npc_event_do_clock;
 	npc->event_do_oninit = npc_event_do_oninit;

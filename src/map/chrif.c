@@ -485,14 +485,18 @@ static void chrif_connectack(int fd)
 
 	chrif->sendmap(fd);
 
-	ShowStatus("Event '"CL_WHITE"OnInterIfInit"CL_RESET"' executed with '"CL_WHITE"%d"CL_RESET"' NPCs.\n", npc->event_doall("OnInterIfInit"));
+	ShowStatus("Event '"CL_WHITE"OnInterIfInit"CL_RESET"' executed with '"
+		CL_WHITE"%d"CL_RESET"' NPCs.\n",
+		npc->event_doall("OnInterIfInit", 14, 0));
 	if( !char_init_done ) {
 		char_init_done = true;
-		ShowStatus("Event '"CL_WHITE"OnInterIfInitOnce"CL_RESET"' executed with '"CL_WHITE"%d"CL_RESET"' NPCs.\n", npc->event_doall("OnInterIfInitOnce"));
+		ShowStatus("Event '"CL_WHITE"OnInterIfInitOnce"CL_RESET
+			"' executed with '"CL_WHITE"%d"CL_RESET"' NPCs.\n",
+			npc->event_doall("OnInterIfInitOnce", 18, 0));
 		guild->castle_map_init();
 	}
 
-	sockt->datasync(fd, true);
+	socket_io->datasync(fd, true);
 	chrif->skillid2idx(fd);
 }
 

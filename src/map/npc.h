@@ -219,7 +219,21 @@ struct npc_interface {
 	 **/
 	struct DBMap *ev_db;
 
-	struct DBMap *ev_label_db; // const char* label_name (without leading "::") -> struct linkdb_node**   (key: struct npc_data*; data: struct event_data*)
+	/**
+	 * Event label database
+	 * Database containing all events in event database. Each of these labels
+	 * points to a link-db that has all event related data (all NPC info).
+	 * These nodes are created via npc->event_export_create.
+	 * This database is used so we can easily execute all instances of the same
+	 * event regardless of the NPC
+	 *
+	 * const char* label_name[NAME_LENGTH] -> struct linkdb_node**
+	 * linkdb_node(key: struct npc_data*; data: struct event_data*)
+	 * @see struct npc_label_list
+	 * @see npc_event_doall
+	 **/
+	struct DBMap *ev_label_db;
+
 	struct DBMap *name_db; // const char* npc_name -> struct npc_data*
 	struct DBMap *path_db;
 	struct eri *timer_event_ers; //For the npc timer data. [Skotlex]
@@ -260,8 +274,7 @@ struct npc_interface {
 	void (*event_doall_sub) (void *key, void *data, va_list ap);
 	int (*event_do) (const char *name);
 	bool (*event_dolocal) (const char *exname, const char *name, bool (*on_event)(const struct event_data *ev, void *param), void *param);
-	int (*event_doall_id) (const char *name, int rid);
-	int (*event_doall) (const char *name);
+	int (*event_doall) (const char *name, int name_len, int rid);
 	int (*event_do_clock) (int tid, int64 tick, int id, intptr_t data);
 	void (*event_do_oninit) ( bool reload );
 	int (*timerevent_export) (struct npc_data *nd, int i);

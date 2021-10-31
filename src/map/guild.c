@@ -2262,8 +2262,8 @@ static int guild_castledataloadack(int len, const struct guild_castle *gc)
 	ev = i; // offset of castle or -1
 
 	if( ev < 0 ) { //No castles owned, invoke OnAgitInit as it is.
-		npc->event_doall("OnAgitInit");
-		npc->event_doall("OnAgitInit2");
+		npc->event_doall("OnAgitInit", 11, 0);
+		npc->event_doall("OnAgitInit2", 12, 0);
 	} else { // load received castles into memory, one by one
 		for( i = 0; i < n; i++, gc++ ) {
 			struct guild_castle *c = guild->castle_search(gc->castle_id);
@@ -2295,7 +2295,7 @@ static int guild_castledataloadack(int len, const struct guild_castle *gc)
 static void guild_agit_start(void)
 {
 	// Run All NPC_Event[OnAgitStart]
-	int c = npc->event_doall("OnAgitStart");
+	int c = npc->event_doall("OnAgitStart", 12, 0);
 	ShowStatus("NPC_Event:[OnAgitStart] Run (%d) Events by @AgitStart.\n",c);
 }
 
@@ -2305,7 +2305,7 @@ static void guild_agit_start(void)
 static void guild_agit_end(void)
 {
 	// Run All NPC_Event[OnAgitEnd]
-	int c = npc->event_doall("OnAgitEnd");
+	int c = npc->event_doall("OnAgitEnd", 10, 0);
 	ShowStatus("NPC_Event:[OnAgitEnd] Run (%d) Events by @AgitEnd.\n",c);
 }
 
@@ -2315,7 +2315,7 @@ static void guild_agit_end(void)
 static void guild_agit2_start(void)
 {
 	// Run All NPC_Event[OnAgitStart2]
-	int c = npc->event_doall("OnAgitStart2");
+	int c = npc->event_doall("OnAgitStart2", 13, 0);
 	ShowStatus("NPC_Event:[OnAgitStart2] Run (%d) Events by @AgitStart2.\n",c);
 }
 
@@ -2325,7 +2325,7 @@ static void guild_agit2_start(void)
 static void guild_agit2_end(void)
 {
 	// Run All NPC_Event[OnAgitEnd2]
-	int c = npc->event_doall("OnAgitEnd2");
+	int c = npc->event_doall("OnAgitEnd2", 11, 0);
 	ShowStatus("NPC_Event:[OnAgitEnd2] Run (%d) Events by @AgitEnd2.\n",c);
 }
 
