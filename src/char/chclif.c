@@ -639,7 +639,7 @@ enum parsefunc_rcode chclif_parse(struct s_receive_action_data *act)
 void chclif_final(void)
 {
 	db_lock(chclif->packet_db, WRITE_LOCK);
-	db_clear(chclif->packet_db);
+	db_destroy(chclif->packet_db);
 	aFree(chclif->packet_list);
 }
 

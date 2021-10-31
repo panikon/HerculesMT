@@ -160,7 +160,7 @@ static void do_final_loginif(void)
 	}
 
 	db_lock(loginif->packet_db, WRITE_LOCK);
-	db_clear(loginif->packet_db);
+	db_destroy(loginif->packet_db);
 	aFree(loginif->packet_list);
 }
 

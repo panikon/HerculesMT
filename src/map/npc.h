@@ -168,7 +168,11 @@ enum actor_classes {
 #define MAX_NPC_CLASS2_START 10001
 #define MAX_NPC_CLASS2_END 10376
 
-//Script NPC events.
+/**
+ * Cached script NPC events.
+ *
+ * @see script_event
+ **/
 enum npce_event {
 	NPCE_LOGIN,
 	NPCE_LOGOUT,
@@ -201,7 +205,20 @@ struct npc_path_data {
 struct npc_interface {
 	/* */
 	struct npc_data *motd;
-	struct DBMap *ev_db; // const char* event_name -> struct event_data*
+
+	/**
+	 * Event database (<unique_npc_name>::On*)
+	 * Labels that can be executed outside the scope of the current NPC, user
+	 * functions can be treated as extern labels.
+	 * Some of these events are cached via script_cache.
+	 *
+	 * Events are loaded in the database via npc_event_export and are executed
+	 * by npc_event_do / npc_event_dolocal / npc_event_doall
+	 *
+	 * const char* event_name[EVENT_NAME_LENGTH] -> struct event_data*
+	 **/
+	struct DBMap *ev_db;
+
 	struct DBMap *ev_label_db; // const char* label_name (without leading "::") -> struct linkdb_node**   (key: struct npc_data*; data: struct event_data*)
 	struct DBMap *name_db; // const char* npc_name -> struct npc_data*
 	struct DBMap *path_db;
@@ -242,6 +259,7 @@ struct npc_interface {
 	int (*event_sub) (struct map_session_data *sd, struct event_data *ev, const char *eventname);
 	void (*event_doall_sub) (void *key, void *data, va_list ap);
 	int (*event_do) (const char *name);
+	bool (*event_dolocal) (const char *exname, const char *name, bool (*on_event)(const struct event_data *ev, void *param), void *param);
 	int (*event_doall_id) (const char *name, int rid);
 	int (*event_doall) (const char *name);
 	int (*event_do_clock) (int tid, int64 tick, int id, intptr_t data);

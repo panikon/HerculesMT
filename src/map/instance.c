@@ -391,17 +391,12 @@ static int instance_map_npcsub(struct block_list *bl, va_list args)
 static int instance_init_npc(struct block_list *bl, va_list args)
 {
 	struct npc_data *nd = NULL;
-	struct event_data *ev;
-	char evname[EVENT_NAME_LENGTH];
 
 	nullpo_ret(bl);
 	Assert_ret(bl->type == BL_NPC);
 	nd = BL_UCAST(BL_NPC, bl);
 
-	snprintf(evname, EVENT_NAME_LENGTH, "%s::OnInstanceInit", nd->exname);
-
-	if( ( ev = strdb_get(npc->ev_db, evname) ) )
-		script->run_npc(ev->nd->u.scr.script, ev->pos, 0, ev->nd->bl.id);
+	npc->event_dolocal(nd->exname,"OnInstanceInit", NULL, NULL);
 
 	return 1;
 }

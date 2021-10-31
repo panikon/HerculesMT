@@ -54,6 +54,7 @@
 #include "common/strlib.h"
 #include "common/timer.h"
 #include "common/utils.h"
+#include "common/rwlock.h"
 
 #include <errno.h>
 #include <math.h>
@@ -73,6 +74,12 @@ static struct view_data npc_viewdb2[MAX_NPC_CLASS2_END-MAX_NPC_CLASS2_START];
 /* for speedup */
 static unsigned int npc_market_qty[MAX_INVENTORY];
 
+/**
+ * Event cache
+ * NPC events that are executed multiple times during runtime
+ *
+ * @see npc->read_event_script
+ **/
 static struct script_event_s {
 	//Holds pointers to the commonly executed scripts for speedup. [Skotlex]
 	struct event_data *event[UCHAR_MAX];
@@ -377,10 +384,17 @@ static struct DBData npc_event_export_create(union DBKey key, va_list args)
 	return DB->ptr2data(head_ptr);
 }
 
-/*==========================================
- * exports a npc event label
- * called from npc_parse_script
- *------------------------------------------*/
+/**
+ * Exports a npc event label (adds to ev_db)
+ * Event labels are any label types that can be executed outside npc scope.
+ *
+ * Called from npc_parse_script and npc_duplicate_sub
+ *
+ * @retval 1 Event already exists
+ * @retval 0 Event added successfuly
+ * @see npc->ev_db
+ * Acquires db_lock(npc->ev_db)
+ **/
 static int npc_event_export(struct npc_data *nd, int i)
 {
 	char* lname;
@@ -396,14 +410,26 @@ static int npc_event_export(struct npc_data *nd, int i)
 		struct event_data *ev;
 		struct linkdb_node **label_linkdb = NULL;
 		char buf[EVENT_NAME_LENGTH];
-		snprintf(buf, ARRAYLENGTH(buf), "%s::%s", nd->exname, lname);
-		if (strdb_exists(npc->ev_db, buf)) // There was already another event of the same name?
+		int ev_len = snprintf(buf, ARRAYLENGTH(buf), "%s::%s", nd->exname, lname);
+
+		/**
+		 * The database locks are acquired inside npc_event_export because usually
+		 * there are fewer labels that are eligible to be exported, so this way
+		 * we can parse asynchronously longer.
+		 **/
+		db_lock(npc->ev_db, WRITE_LOCK);
+		if (strdb_exists(npc->ev_db, buf, ev_len)) {
+			// There was already another event of the same name?
+			db_unlock(npc->ev_db);
 			return 1;
+		}
 		// generate the data and insert it
 		CREATE(ev, struct event_data, 1);
 		ev->nd = nd;
 		ev->pos = pos;
-		strdb_put(npc->ev_db, buf, ev);
+		strdb_put(npc->ev_db, buf, ev_len, ev);
+		db_unlock(npc->ev_db);
+
 		label_linkdb = strdb_ensure(npc->ev_label_db, lname, npc->event_export_create);
 		linkdb_insert(label_linkdb, nd, ev);
 	}
@@ -441,21 +467,61 @@ static void npc_event_doall_sub(void *key, void *data, va_list ap)
 	}
 }
 
-// runs the specified event (supports both single-npc and global events)
-static int npc_event_do(const char *name)
+/**
+ * Runs the specified event (supports both single-npc and global events)
+ *
+ * @param name Event name
+ *             "npc_name::event_name" for local events
+ *             "::event_name" for global events
+ * @param name_len Length of event name, when 0 length is calculated internally
+ * @return Number of executed events
+ * Acquires db_lock(npc->ev_db)
+ **/
+static int npc_event_do(const char *name, int name_len)
 {
 	nullpo_ret(name);
-	if( name[0] == ':' && name[1] == ':' ) {
+	if(name[0] == ':' && name[1] == ':') {
 		return npc->event_doall(name+2); // skip leading "::"
 	}
 	else {
-		struct event_data *ev = strdb_get(npc->ev_db, name);
-		if (ev) {
+		db_lock(npc->ev_db, READ_LOCK);
+		struct event_data *ev = strdb_get(npc->ev_db, name, name_len);
+		if(ev) {
 			script->run_npc(ev->nd->u.scr.script, ev->pos, 0, ev->nd->bl.id);
+			db_unlock(npc->ev_db);
 			return 1;
 		}
+		db_unlock(npc->ev_db);
 	}
 	return 0;
+}
+
+/**
+ * Runs specified event for an NPC
+ *
+ * @param exname[NAME_LENGTH+1] Unique NPC name
+ * @param name[NAME_LENGTH+1]   Event name
+ * @param on_event              Function to be executed if the event is found
+ *                              (before script execution), can be NULL. When
+ *                              returns false the event is not executed.
+ * @retval BOOL Was event ran?
+ *
+ * Acquires db_lock(npc->ev_db)
+ **/
+static bool npc_event_dolocal(const char *exname, const char *name,
+	bool (*on_event)(const struct event_data *ev, void *param), void *param
+) {
+	char evname[EVENT_NAME_LENGTH];
+	struct event_data *ev;
+	int ev_len;
+
+	ev_len = snprintf(evname, ARRAYLENGTH(evname), "%s::%s", exname, evname);
+	db_lock(npc->ev_db, READ_LOCK);
+	ev = strdb_get(npc->ev_db, evname, ev_len);
+	if(ev && (!on_event || (on_event && on_event(ev, param))) )
+		script->run_npc(ev->nd->u.scr.script,ev->pos, 0, ev->nd->bl.id);
+	db_unlock(npc->ev_db, READ_LOCK);
+	return (ev != NULL);
 }
 
 // runs the specified event, with a RID attached (global only)
@@ -741,9 +807,12 @@ static int npc_timerevent_stop(struct npc_data *nd)
 
 	return 0;
 }
-/*==========================================
+
+/**
  * Aborts a running NPC timer that is attached to a player.
- *------------------------------------------*/
+ *
+ * Acquires db_lock(npc->ev_db)
+ **/
 static void npc_timerevent_quit(struct map_session_data *sd)
 {
 	const struct TimerData *td;
@@ -771,8 +840,9 @@ static void npc_timerevent_quit(struct map_session_data *sd)
 		char buf[EVENT_NAME_LENGTH];
 		struct event_data *ev;
 
-		snprintf(buf, ARRAYLENGTH(buf), "%s::OnTimerQuit", nd->exname);
-		ev = (struct event_data*)strdb_get(npc->ev_db, buf);
+		int ev_len = snprintf(buf, ARRAYLENGTH(buf), "%s::OnTimerQuit", nd->exname);
+		db_lock(npc->ev_db, READ_LOCK);
+		ev = strdb_get(npc->ev_db, buf, ev_len);
 		if( ev && ev->nd != nd )
 		{
 			ShowWarning("npc_timerevent_quit: Unable to execute \"OnTimerQuit\", two NPCs have the same event name [%s]!\n",buf);
@@ -801,6 +871,7 @@ static void npc_timerevent_quit(struct map_session_data *sd)
 			nd->u.scr.timer = old_timer;
 			nd->u.scr.timertick = old_tick;
 		}
+		db_unlock(npc->ev_db);
 	}
 	ers_free(npc->timer_event_ers, ted);
 }
@@ -850,6 +921,13 @@ static int npc_settimerevent_tick(struct npc_data *nd, int newtimer)
 	return 0;
 }
 
+/**
+ * Executes an event
+ *
+ * @retval 0 Success
+ * @retval 1 Player's event queue is full
+ * @retval 2 Disabled NPC
+ **/
 static int npc_event_sub(struct map_session_data *sd, struct event_data *ev, const char *eventname)
 {
 	nullpo_retr(2, sd);
@@ -878,19 +956,30 @@ static int npc_event_sub(struct map_session_data *sd, struct event_data *ev, con
 	return 0;
 }
 
-/*==========================================
+/**
  * NPC processing event type
- *------------------------------------------*/
-static int npc_event(struct map_session_data *sd, const char *eventname, int ontouch)
+ *
+ * @param sd Player session data
+ * @param eventname Event to be executed
+ * @param eventname_len Length of eventname (if 0 it'll be calculated internally)
+ * @param ontouch Is this an OnTouch type event? (0: No, 1: Local ontouch, 2: AreaNPC)
+ * @return 0 Success
+ * Acquires db_lock(npc->ev_db)
+ **/
+static int npc_event(struct map_session_data *sd, const char *eventname, int eventname_len, int ontouch)
 {
-	struct event_data* ev = (struct event_data*)strdb_get(npc->ev_db, eventname);
+	struct event_data* ev;
 	struct npc_data *nd;
 
 	nullpo_ret(sd);
 
-	if( ev == NULL || (nd = ev->nd) == NULL ) {
+	db_lock(npc->ev_db, READ_LOCK);
+	ev = strdb_get(npc->ev_db, eventname, eventname_len);
+
+	if(ev == NULL || (nd = ev->nd) == NULL) {
 		if( !ontouch )
 			ShowError("npc_event: event not found [%s]\n", eventname);
+		db_unlock(npc->ev_db);
 		return ontouch;
 	}
 
@@ -904,7 +993,9 @@ static int npc_event(struct map_session_data *sd, const char *eventname, int ont
 			break;
 	}
 
-	return npc->event_sub(sd,ev,eventname);
+	int retval = npc->event_sub(sd, ev, eventname);
+	db_unlock(npc->ev_db);
+	return retval;
 }
 
 /**
@@ -1115,8 +1206,11 @@ static int npc_untouch_areanpc(struct map_session_data *sd, int16 m, int16 x, in
 	return 0;
 }
 
-// OnTouch NPC or Warp for Mobs
-// Return 1 if Warped
+/**
+ * OnTouch NPC or Warp for Mobs
+ * @return 1 if Warped
+ * Acquires db_lock(npc->ev_db) when npc->subtype is SCRIPT
+ **/
 static int npc_touch_areanpc2(struct mob_data *md)
 {
 	int i, m, x, y, id;
@@ -1151,26 +1245,38 @@ static int npc_touch_areanpc2(struct mob_data *md)
 				continue; // Keep Searching
 		}
 
-		if( x >= map->list[m].npc[i]->bl.x-xs && x <= map->list[m].npc[i]->bl.x+xs && y >= map->list[m].npc[i]->bl.y-ys && y <= map->list[m].npc[i]->bl.y+ys ) {
+		if(x >= map->list[m].npc[i]->bl.x-xs && x <= map->list[m].npc[i]->bl.x+xs
+		&& y >= map->list[m].npc[i]->bl.y-ys && y <= map->list[m].npc[i]->bl.y+ys
+		) {
 			// In the npc touch area
-			switch( map->list[m].npc[i]->subtype ) {
+			switch(map->list[m].npc[i]->subtype) {
 				case WARP:
 					xs = map->mapindex2mapid(map->list[m].npc[i]->u.warp.mapindex);
-					if( m < 0 )
+					if(m < 0)
 						break; // Cannot Warp between map servers
-					if( unit->warp(&md->bl, xs, map->list[m].npc[i]->u.warp.x, map->list[m].npc[i]->u.warp.y, CLR_OUTSIGHT) == 0 )
+					if(unit->warp(&md->bl, xs, map->list[m].npc[i]->u.warp.x,
+						map->list[m].npc[i]->u.warp.y, CLR_OUTSIGHT) == 0
+					)
 						return 1; // Warped
 					break;
 				case SCRIPT:
-					if( map->list[m].npc[i]->bl.id == md->areanpc_id )
-						break; // Already touch this NPC
-					snprintf(eventname, ARRAYLENGTH(eventname), "%s::OnTouchNPC", map->list[m].npc[i]->exname);
-					if( (ev = (struct event_data*)strdb_get(npc->ev_db, eventname)) == NULL || ev->nd == NULL )
-						break; // No OnTouchNPC Event
-					md->areanpc_id = map->list[m].npc[i]->bl.id;
-					id = md->bl.id; // Stores Unique ID
-					script->run_npc(ev->nd->u.scr.script, ev->pos, md->bl.id, ev->nd->bl.id);
-					if( map->id2md(id) == NULL ) return 1; // Not Warped, but killed
+					if(map->list[m].npc[i]->bl.id == md->areanpc_id)
+						break; // Already touched this NPC
+					int ev_len = snprintf(eventname, ARRAYLENGTH(eventname), "%s::OnTouchNPC",
+						map->list[m].npc[i]->exname);
+					db_lock(npc->ev_db, READ_LOCK);
+					ev = strdb_get(npc->ev_db, eventname, ev_len);
+					if(ev && ev->nd) {
+						// OnTouchNPC event available
+						md->areanpc_id = map->list[m].npc[i]->bl.id;
+						id = md->bl.id; // Stores Unique ID
+						script->run_npc(ev->nd->u.scr.script, ev->pos, md->bl.id, ev->nd->bl.id);
+						if(map->id2md(id) == NULL) {
+							db_unlock(npc->ev_db);
+							return 1; // Not Warped, but killed
+						}
+					}
+					db_unlock(npc->ev_db);
 					break;
 				case CASHSHOP:
 				case SHOP:
@@ -2074,6 +2180,7 @@ static void npc_trader_update(int master)
  *
  * @param nd shop
  * @param sd player
+ * Acquires db_lock(npc->ev_db)
  **/
 static void npc_trader_count_funds(struct npc_data *nd, struct map_session_data *sd)
 {
@@ -2097,15 +2204,32 @@ static void npc_trader_count_funds(struct npc_data *nd, struct map_session_data 
 			return;
 	}
 
-	snprintf(evname, EVENT_NAME_LENGTH, "%s::OnCountFunds",nd->exname);
-
-	if ( (ev = strdb_get(npc->ev_db, evname)) )
-		script->run_npc(ev->nd->u.scr.script, ev->pos, sd->bl.id, ev->nd->bl.id);
-	else
-		ShowError("npc_trader_count_funds: '%s' event '%s' not found, operation failed\n",nd->exname,evname);
+	if(!npc->event_dolocal(nd->exname,"OnCountFunds", NULL, NULL))
+		ShowError("npc_trader_count_funds: '%s' event '%s' not found, operation failed\n",
+			nd->exname, evname);
 
 	/* the callee will rely on npc->trader_funds, upon success script->run updates them */
 }
+
+struct s_npc_trader_pay_OnPayFunds {
+	struct map_session_data *sd;
+	int price;
+	int points;
+};
+/**
+ * Function executed if <npc>::OnPayFunds is found
+ * @see npc_trader_pay
+ * @see npc_event_dolocal
+ * @lock db_lock(npc->ev_db)
+ **/
+static bool npc_trader_pay_OnPayFunds(const struct event_data *ev, void *param)
+{
+	struct s_npc_trader_pay_OnPayFunds *data = param;
+	pc->setreg(data->sd,script->add_variable("@price"), data->price);
+	pc->setreg(data->sd,script->add_variable("@points"),data->points);
+	return true;
+}
+
 /**
  * Tries to issue a payment to the NPC Event capable of handling it
  *
@@ -2115,23 +2239,22 @@ static void npc_trader_count_funds(struct npc_data *nd, struct map_session_data 
  * @param points the amount input in the shop by the user to use from the secondary currency (if any is being employed)
  *
  * @return bool whether it was successful (if the script does not respond it will fail)
+ * Acquires db_lock(npc->ev_db)
  **/
 static bool npc_trader_pay(struct npc_data *nd, struct map_session_data *sd, int price, int points)
 {
-	char evname[EVENT_NAME_LENGTH];
-	struct event_data *ev = NULL;
-
 	nullpo_retr(false, nd);
 	nullpo_retr(false, sd);
 	npc->trader_ok = false;/* clear */
 
-	snprintf(evname, EVENT_NAME_LENGTH, "%s::OnPayFunds",nd->exname);
-	if ( (ev = strdb_get(npc->ev_db, evname)) ) {
-		pc->setreg(sd,script->add_variable("@price"),price);
-		pc->setreg(sd,script->add_variable("@points"),points);
-		script->run_npc(ev->nd->u.scr.script, ev->pos, sd->bl.id, ev->nd->bl.id);
-	} else
-		ShowError("npc_trader_pay: '%s' event '%s' not found, operation failed\n",nd->exname,evname);
+	struct s_npc_trader_pay_OnPayFunds data = {
+		.sd = sd,
+		.price = price,
+		.points = points
+	};
+	if(!npc->event_dolocal(nd->exname, "OnPayFunds", npc_trader_pay_OnPayFunds, &data))
+		ShowError("npc_trader_pay: '%s::OnPayFunds' not found, operation failed\n",
+			nd->exname);
 
 	return npc->trader_ok;/* run script will deal with it */
 }
@@ -2978,15 +3101,19 @@ static int npc_remove_map(struct npc_data *nd)
 }
 
 /**
+ * Unloads an event if it belongs to provided npc.
+ *
+ * @param npcname Unique NPC name
  * @see DBApply
+ * @lock db_lock(npc->ev_db)
  */
-static int npc_unload_ev(union DBKey key, struct DBData *data, va_list ap)
+static int npc_unload_ev(const struct DBKey_s *key, struct DBData *data, va_list args)
 {
 	struct event_data* ev = DB->data2ptr(data);
-	char* npcname = va_arg(ap, char *);
+	char* npcname = va_arg(args, char *);
 
 	if(strcmp(ev->nd->exname,npcname)==0){
-		db_remove(npc->ev_db, key);
+		db_remove(npc->ev_db, *key);
 		return 1;
 	}
 	return 0;
@@ -2995,7 +3122,7 @@ static int npc_unload_ev(union DBKey key, struct DBData *data, va_list ap)
 /**
  * @see DBApply
  */
-static int npc_unload_ev_label(union DBKey key, struct DBData *data, va_list ap)
+static int npc_unload_ev_label(const struct DBKey_s *key, struct DBData *data, va_list args)
 {
 	struct linkdb_node **label_linkdb = DB->data2ptr(data);
 	struct npc_data* nd = va_arg(ap, struct npc_data *);
@@ -3073,12 +3200,12 @@ static int npc_unload_mob(struct mob_data *md, va_list args)
  * @param nd The NPC which should be removed.
  * @param single If true, names are freed. (For duplicates.)
  * @param unload_mobs If true, mobs spawned by the NPC will be removed.
- * @return Always 0.
  *
+ * Acquires db_lock(npc->ev_db)
  **/
-static int npc_unload(struct npc_data *nd, bool single, bool unload_mobs)
+static void npc_unload(struct npc_data *nd, bool single, bool unload_mobs)
 {
-	nullpo_ret(nd);
+	nullpo_retv(nd);
 
 	if (nd->ud != NULL && nd->ud != &npc->base_ud)
 		skill->clear_unitgroup(&nd->bl);
@@ -3107,17 +3234,13 @@ static int npc_unload(struct npc_data *nd, bool single, bool unload_mobs)
 	if (nd->src_id == 0 && (nd->subtype == SHOP || nd->subtype == CASHSHOP)) {
 		aFree(nd->u.shop.shop_item); /// src check for duplicate shops. [Orcao]
 	} else if (nd->subtype == SCRIPT) {
-		char evname[EVENT_NAME_LENGTH];
-
-		snprintf(evname, ARRAYLENGTH(evname), "%s::OnNPCUnload", nd->exname);
-
-		struct event_data *ev = strdb_get(npc->ev_db, evname);
-
-		if (ev != NULL)
-			script->run_npc(nd->u.scr.script, ev->pos, 0, nd->bl.id); /// Run OnNPCUnload.
-
+		npc->event_dolocal(nd->exname,"OnNPCUnload", NULL, NULL);
+			
 		if (single) {
+			// Most operations will be just strncmp
+			db_lock(npc->ev_db, READ_LOCK);
 			npc->ev_db->foreach(npc->ev_db, npc->unload_ev, nd->exname); /// Clean up all related events.
+			db_unlock(npc->ev_db);
 			npc->ev_label_db->foreach(npc->ev_label_db, npc->unload_ev_label, nd);
 		}
 
@@ -3192,7 +3315,6 @@ static int npc_unload(struct npc_data *nd, bool single, bool unload_mobs)
 
 	HPM->data_store_destroy(&nd->hdata);
 	aFree(nd);
-	return 0;
 }
 
 //
@@ -3832,6 +3954,8 @@ static const char *npc_skip_script(const char *start, const char *buffer, const 
  * @param[out] retval   Pointer to return the success (EXIT_SUCCESS) or failure
  *                      (EXIT_FAILURE) status. May be NULL.
  * @return A pointer to the advanced buffer position.
+ *
+ * Acquires db_lock(npc->ev_db)
  */
 static const char *npc_parse_script(const char *w1, const char *w2, const char *w3, const char *w4, const char *start, const char *buffer, const char *filepath, int options, int *retval)
 {
@@ -3931,19 +4055,9 @@ static const char *npc_parse_script(const char *w1, const char *w2, const char *
 
 	nd->u.scr.timerid = INVALID_TIMER;
 
-	if( options&NPO_ONINIT ) {
-		char evname[EVENT_NAME_LENGTH];
-		struct event_data *ev;
-
-		snprintf(evname, ARRAYLENGTH(evname), "%s::OnInit", nd->exname);
-
-		if( ( ev = (struct event_data*)strdb_get(npc->ev_db, evname) ) ) {
-
-			//Execute OnInit
-			script->run_npc(nd->u.scr.script,ev->pos,0,nd->bl.id);
-
-		}
-	}
+	// Execute OnInit
+	if( options&NPO_ONINIT )
+		npc->event_dolocal(nd->exname, "OnInit", NULL, NULL);
 
 	return end;
 }
@@ -3976,6 +4090,8 @@ static void npc_add_to_location(struct npc_data *nd)
 
 /**
  * Duplicates a script (@see npc_duplicate_sub)
+ *
+ * Acquires db_lock(npc->ev_db)
  */
 static bool npc_duplicate_script_sub(struct npc_data *nd, const struct npc_data *snd, int xs, int ys, int options)
 {
@@ -4009,18 +4125,10 @@ static bool npc_duplicate_script_sub(struct npc_data *nd, const struct npc_data 
 
 	nd->u.scr.timerid = INVALID_TIMER;
 
-	if (options&NPO_ONINIT) {
-		// From npc_parse_script
-		char evname[EVENT_NAME_LENGTH];
-		struct event_data *ev;
+	// Execute OnInit
+	if(options&NPO_ONINIT)
+		npc->event_dolocal(nd->exname, "OnInit", NULL, NULL);
 
-		snprintf(evname, ARRAYLENGTH(evname), "%s::OnInit", nd->exname);
-
-		if ((ev = (struct event_data*)strdb_get(npc->ev_db, evname)) != NULL) {
-			//Execute OnInit
-			script->run_npc(nd->u.scr.script,ev->pos,0,nd->bl.id);
-		}
-	}
 	return retval;
 }
 
@@ -4449,10 +4557,18 @@ static void npc_refresh(struct npc_data *nd)
 	}
 }
 
-// @commands (script based)
+/**
+ * @commands (script based)
+ *
+ * @retval 0 Event not found
+ * @retval 1 Player's event queue is full
+ * @retval 2 Disabled NPC
+ *
+ * Acquires db_lock(npc->ev_db)
+ **/
 static int npc_do_atcmd_event(struct map_session_data *sd, const char *command, const char *message, const char *eventname)
 {
-	struct event_data* ev = (struct event_data*)strdb_get(npc->ev_db, eventname);
+	struct event_data* ev;
 	struct npc_data *nd;
 	struct script_state *st;
 	int i = 0, nargs = 0;
@@ -4461,28 +4577,35 @@ static int npc_do_atcmd_event(struct map_session_data *sd, const char *command, 
 	nullpo_ret(sd);
 	nullpo_ret(message);
 
+	db_lock(npc->ev_db, READ_LOCK);
+	ev = strdb_get(npc->ev_db, eventname, 0);
 	if( ev == NULL || (nd = ev->nd) == NULL ) {
-		ShowError("npc_event: event not found [%s]\n", eventname);
+		ShowError("npc_do_atcmd_event: event not found [%s]\n", eventname);
+		db_unlock(npc->ev_db);
 		return 0;
 	}
 
 	if( sd->npc_id != 0 ) { // Enqueue the event trigger.
+		db_unlock(npc->ev_db);
 		ARR_FIND( 0, MAX_EVENTQUEUE, i, sd->eventqueue[i][0] == '\0' );
 		if( i < MAX_EVENTQUEUE ) {
 			safestrncpy(sd->eventqueue[i],eventname,50); //Event enqueued.
 			return 0;
 		}
 
-		ShowWarning("npc_event: player's event queue is full, can't add event '%s' !\n", eventname);
+		ShowWarning("npc_do_atcmd_event: player's event queue is full, can't add event '%s' !\n", eventname);
 		return 1;
 	}
 
 	if( ev->nd->option&OPTION_INVISIBLE ) { // Disabled npc, shouldn't trigger event.
+		db_unlock(npc->ev_db);
 		npc->event_dequeue(sd);
 		return 2;
 	}
 
 	st = script->alloc_state(ev->nd->u.scr.script, ev->pos, sd->bl.id, ev->nd->bl.id);
+	db_unlock(npc->ev_db);
+
 	script->setd_sub(st, NULL, ".@atcmd_command$", 0, command, NULL);
 
 	len = strlen(message);
@@ -5560,20 +5683,39 @@ static int npc_parsesrcfile(const char *filepath, bool runOnInit)
 	return success;
 }
 
+/**
+ * Executes a cached script_event
+ *
+ * @param sd   Player session data
+ * @param type Event type
+ * @see script_event
+ * @return Number of executed events
+ *
+ * Acquires db_lock(npc->ev_db)
+ **/
 static int npc_script_event(struct map_session_data *sd, enum npce_event type)
 {
 	int i;
-	if (type == NPCE_MAX)
-		return 0;
+	Assert_retr(0, type < NPCE_MAX && type > 0 && "Invalid event type!");
+
 	if (!sd) {
 		ShowError("npc_script_event: NULL sd. Event Type %u\n", type);
 		return 0;
 	}
-	for (i = 0; i<script_event[type].event_count; i++)
+
+	db_lock(npc->ev_db, READ_LOCK);
+	for (i = 0; i < script_event[type].event_count; i++)
 		npc->event_sub(sd,script_event[type].event[i],script_event[type].event_name[i]);
+	db_unlock(npc->ev_db, READ_LOCK);
 	return i;
 }
 
+/**
+ * Updates script_event with all commonly executed NPC events
+ *
+ * This is usually called every time an NPC is loaded / unloaded
+ * Acquires db_lock(npc->ev_db)
+ **/
 static void npc_read_event_script(void)
 {
 	int i;
@@ -5590,7 +5732,10 @@ static void npc_read_event_script(void)
 		{"Kill PC Event",script->config.kill_pc_event_name},
 		{"Kill NPC Event",script->config.kill_mob_event_name},
 	};
+	STATIC_ASSERT(ARRAYLENGTH(config) == NPCE_MAX,
+		"All added cache events must be added to config list in npc_read_event_script");
 
+	db_lock(npc->ev_db, READ_LOCK);
 	for (i = 0; i < NPCE_MAX; i++) {
 		struct DBIterator *iter;
 		union DBKey key;
@@ -5618,6 +5763,12 @@ static void npc_read_event_script(void)
 				script_event[i].event[count] = ed;
 				script_event[i].event_name[count] = key.str;
 				script_event[i].event_count++;
+				if(script_event[i].event_count >= UINT8_MAX) {
+					ShowFatalError("npc_read_event_script: too many occourences "
+						"of event '%s', maximum is %d\n", config[i].event_name, UINT8_MAX);
+					Assert_chk(script_event[i].event_count < UINT8_MAX);
+					exit(EXIT_FAILURE);
+				}
 #ifdef ENABLE_CASE_CHECK
 			} else if( p && strcasecmp(name, p) == 0 ) {
 				DeprecationCaseWarning("npc_read_event_script", p, name, config[i].event_name); // TODO
@@ -5626,6 +5777,7 @@ static void npc_read_event_script(void)
 		}
 		dbi_destroy(iter);
 	}
+	db_unlock(npc->ev_db, READ_LOCK);
 
 	if (battle_config.etc_log) {
 		//Print summary.
@@ -5683,10 +5835,9 @@ static void npc_process_files(int npc_min)
 /**
  * Clears and then reloads all NPC files.
  *
- * @return Always 0.
- *
+ * Acquires db_lock(npc->ev_db)
  **/
-static int npc_reload(void)
+static void npc_reload(void)
 {
 	if (map->retval == EXIT_FAILURE) /// Clear return status in case something failed before.
 		map->retval = EXIT_SUCCESS;
@@ -5694,7 +5845,11 @@ static int npc_reload(void)
 	guild->flags_clear(); /// Clear guild flag cache.
 	npc->path_db->clear(npc->path_db, npc->path_db_clear_sub);
 	db_clear(npc->name_db);
+
+	db_lock(npc->ev_db, WRITE_LOCK);
 	db_clear(npc->ev_db);
+	db_unlock(npc->ev_db);
+
 	npc->ev_label_db->clear(npc->ev_label_db, npc->ev_label_db_clear_sub);
 	npc->npc_last_npd = NULL;
 	npc->npc_last_path = NULL;
@@ -5797,8 +5952,6 @@ static int npc_reload(void)
 	 */
 	npc->event_doall("OnAgitInit");
 	npc->event_doall("OnAgitInit2");
-
-	return 0;
 }
 
 /**
@@ -5834,10 +5987,19 @@ static bool npc_unloadfile(const char *filepath, bool unload_mobs)
 	return found;
 }
 
+/**
+ * Prepares NPC data for a faster shutdown process
+ *
+ * Acquires db_lock(npc->ev_db)
+ **/
 static void do_clear_npc(void)
 {
 	db_clear(npc->name_db);
+
+	db_lock(npc->ev_db, WRITE_LOCK);
 	db_clear(npc->ev_db);
+	db_unlock(npc->ev_db);
+
 	npc->ev_label_db->clear(npc->ev_label_db, npc->ev_label_db_clear_sub);
 }
 
@@ -5846,7 +6008,9 @@ static void do_clear_npc(void)
  *------------------------------------------*/
 static int do_final_npc(void)
 {
+	db_lock(npc->ev_db, WRITE_LOCK);
 	db_destroy(npc->ev_db);
+
 	npc->ev_label_db->destroy(npc->ev_label_db, npc->ev_label_db_clear_sub);
 	db_destroy(npc->name_db);
 	npc->path_db->destroy(npc->path_db, npc->path_db_clear_sub);
@@ -5905,9 +6069,13 @@ static void npc_questinfo_clear(struct npc_data *nd)
 	VECTOR_CLEAR(nd->qi_data);
 }
 
-/*==========================================
- * npc initialization
- *------------------------------------------*/
+/**
+ * Initialises NPC subsystem
+ * This is called after all NPC sources were already loaded via npc->addsrcfile
+ *
+ * @see map->reloadnpc (NPC source loading)
+ * @see map->init      (NPC subsystem call)
+ **/
 static int do_init_npc(bool minimal)
 {
 	int i;
@@ -5924,6 +6092,7 @@ static int do_init_npc(bool minimal)
 	for( i = MAX_NPC_CLASS2_START; i < MAX_NPC_CLASS2_END; i++ )
 		npc_viewdb2[i - MAX_NPC_CLASS2_START].class = i;
 	npc->ev_db = strdb_alloc(DB_OPT_DUP_KEY|DB_OPT_RELEASE_DATA, EVENT_NAME_LENGTH);
+
 	npc->ev_label_db = strdb_alloc(DB_OPT_DUP_KEY|DB_OPT_RELEASE_DATA, NAME_LENGTH);
 	npc->name_db = strdb_alloc(DB_OPT_BASE, NAME_LENGTH);
 	npc->path_db = strdb_alloc(DB_OPT_DUP_KEY|DB_OPT_RELEASE_DATA, 0);
@@ -5996,6 +6165,7 @@ void npc_defaults(void)
 	npc->npc_last_npd = NULL;
 
 	npc->motd = NULL;
+
 	npc->ev_db = NULL;
 	npc->ev_label_db = NULL;
 	npc->name_db = NULL;
@@ -6026,6 +6196,7 @@ void npc_defaults(void)
 	npc->event_sub = npc_event_sub;
 	npc->event_doall_sub = npc_event_doall_sub;
 	npc->event_do = npc_event_do;
+	npc->event_dolocal = npc_event_dolocal;
 	npc->event_doall_id = npc_event_doall_id;
 	npc->event_doall = npc_event_doall;
 	npc->event_do_clock = npc_event_do_clock;

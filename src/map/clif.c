@@ -3231,15 +3231,9 @@ static void clif_parse_inventoryExpansion(int fd, struct map_session_data *sd)
 		return;
 	}
 
-	char evname[EVENT_NAME_LENGTH];
-	struct event_data *ev = NULL;
-
-	safestrncpy(evname, "inventory_expansion::OnInvExpandRequest", EVENT_NAME_LENGTH);
-	if ((ev = strdb_get(npc->ev_db, evname))) {
-		script->run_npc(ev->nd->u.scr.script, ev->pos, sd->bl.id, ev->nd->bl.id);
-	} else {
-		ShowError("clif_parse_inventoryExpansion: event '%s' not found, operation failed.\n", evname);
-	}
+	if(!npc->event_dolocal("inventory_expansion","OnInvExpandRequest", NULL, NULL))
+		ShowError("clif_parse_inventoryExpansion: event "
+			"'inventory_expansion::OnInvExpandRequest' not found, operation failed.\n");
 #endif
 }
 
@@ -3256,15 +3250,9 @@ static void clif_parse_inventoryExpansionConfirmed(int fd, struct map_session_da
 		return;
 	}
 
-	char evname[EVENT_NAME_LENGTH];
-	struct event_data *ev = NULL;
-
-	safestrncpy(evname, "inventory_expansion::OnInvExpandConfirmed", EVENT_NAME_LENGTH);
-	if ((ev = strdb_get(npc->ev_db, evname))) {
-		script->run_npc(ev->nd->u.scr.script, ev->pos, sd->bl.id, ev->nd->bl.id);
-	} else {
-		ShowError("clif_parse_inventoryExpansionConfirmed: event '%s' not found, operation failed.\n", evname);
-	}
+	if(!npc->event_dolocal("inventory_expansion","OnInvExpandConfirmed", NULL, NULL))
+		ShowError("clif_parse_inventoryExpansionConfirmed: event "
+			"'inventory_expansion::OnInvExpandConfirmed' not found, operation failed.\n");
 #endif
 }
 
@@ -3272,15 +3260,9 @@ static void clif_parse_inventoryExpansionRejected(int fd, struct map_session_dat
 static void clif_parse_inventoryExpansionRejected(int fd, struct map_session_data *sd)
 {
 #if PACKETVER_MAIN_NUM >= 20181031 || PACKETVER_RE_NUM >= 20181031 || PACKETVER_ZERO_NUM >= 20181114
-	char evname[EVENT_NAME_LENGTH];
-	struct event_data *ev = NULL;
-
-	safestrncpy(evname, "inventory_expansion::OnInvExpandRejected", EVENT_NAME_LENGTH);
-	if ((ev = strdb_get(npc->ev_db, evname))) {
-		script->run_npc(ev->nd->u.scr.script, ev->pos, sd->bl.id, ev->nd->bl.id);
-	} else {
-		ShowError("clif_parse_inventoryExpansionRejected: event '%s' not found, operation failed.\n", evname);
-	}
+	if(!npc->event_dolocal("inventory_expansion","OnInvExpandRejected", NULL, NULL))
+		ShowError("clif_parse_inventoryExpansionRejected: event "
+			"'inventory_expansion::OnInvExpandRejected' not found, operation failed.\n");
 #endif
 }
 
@@ -23565,6 +23547,24 @@ static void clif_ui_action(struct map_session_data *sd, int32 UIType, int32 data
 	clif->send(&p, sizeof(p), &sd->bl, SELF);
 }
 
+struct s_clif_parse_airship_param {
+	struct map_session_data *sd;
+	const struct PACKET_CZ_PRIVATE_AIRSHIP_REQUEST *p;
+};
+/**
+ * Function executed if private_airship::OnAirShipRequest is found
+ * @see clif_parse_private_airship_request
+ * @see npc_event_dolocal
+ * @lock db_lock(npc->ev_db)
+ **/
+static bool clif_parse_private_airship_request_setreg(const struct event_data *ev, void *param)
+{
+	struct s_clif_parse_airship_param *data = param;
+	pc->setregstr(data->sd, script->add_variable("@mapname$"), data->p->mapName);
+	pc->setreg(data->sd, script->add_variable("@itemid"), data->p->ItemID);
+	return true;
+}
+
 static void clif_parse_private_airship_request(int fd, struct map_session_data *sd) __attribute__((nonnull(2)));
 static void clif_parse_private_airship_request(int fd, struct map_session_data *sd)
 {
@@ -23576,14 +23576,15 @@ static void clif_parse_private_airship_request(int fd, struct map_session_data *
 	struct event_data *ev = NULL;
 	const struct PACKET_CZ_PRIVATE_AIRSHIP_REQUEST *p = RP2PTR(fd);
 
-	safestrncpy(evname, "private_airship::OnAirShipRequest", EVENT_NAME_LENGTH);
-	if ((ev = strdb_get(npc->ev_db, evname))) {
-		pc->setregstr(sd, script->add_variable("@mapname$"), p->mapName);
-		pc->setreg(sd, script->add_variable("@itemid"), p->ItemID);
-		script->run_npc(ev->nd->u.scr.script, ev->pos, sd->bl.id, ev->nd->bl.id);
-	} else {
-		ShowError("clif_parse_private_airship_request: event '%s' not found, operation failed.\n", evname);
-	}
+	struct s_clif_parse_airship_param param = {
+		.p = p,
+		.sd = sd,
+	};
+	if(!npc->event_dolocal("private_airship","OnAirShipRequest",
+		clif_parse_private_airship_request_setreg, &param)
+	)
+		ShowError("clif_parse_private_airship_request: event "
+			"'private_airship::OnAirShipRequest' not found, operation failed.\n");
 #else
 	ShowWarning("clif_parse_private_airship_request: private airship is not supported in this client version, possible packet manipulation.\n");
 #endif

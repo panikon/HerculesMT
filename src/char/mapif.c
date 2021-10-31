@@ -3669,7 +3669,7 @@ static void mapif_achievement_save(int char_id, const struct char_achievements *
 void mapif_final(void)
 {
 	db_lock(mapif->packet_db, WRITE_LOCK);
-	db_clear(mapif->packet_db);
+	db_destroy(mapif->packet_db);
 	aFree(mapif->packet_list);
 }
 
