@@ -1,0 +1,78 @@
+Name,Hash,Load factor,Initial capacity,Iteration,Result (ms)
+"[0] DB Performance (Athena 32)","Athena 32",0.000000,283,1,1498.000000
+"[0] DB Performance (Athena 32)","Athena 32",0.100000,283,1,749.000000
+"[0] DB Performance (Athena 32)","Athena 32",0.200000,283,1,764.000000
+"[0] DB Performance (Athena 32)","Athena 32",0.300000,283,1,718.000000
+"[0] DB Performance (Athena 32)","Athena 32",0.400000,283,1,718.000000
+"[0] DB Performance (Athena 32)","Athena 32",0.500000,283,1,733.000000
+"[0] DB Performance (Athena 32)","Athena 32",0.600000,283,1,718.000000
+"[0] DB Performance (Athena 32)","Athena 32",0.700000,283,1,717.000000
+"[0] DB Performance (Athena 32)","Athena 32",0.800000,283,1,718.000000
+"[0] DB Performance (Athena 32)","Athena 32",0.900000,283,1,733.000000
+"[0] DB Performance (Athena 32)","Athena 32",1.000000,283,1,749.000000
+"[1] DB Performance (Murmur2 32)","Murmur2 32",0.000000,283,1,1217.000000
+"[1] DB Performance (Murmur2 32)","Murmur2 32",0.100000,283,1,686.000000
+"[1] DB Performance (Murmur2 32)","Murmur2 32",0.200000,283,1,702.000000
+"[1] DB Performance (Murmur2 32)","Murmur2 32",0.300000,283,1,702.000000
+"[1] DB Performance (Murmur2 32)","Murmur2 32",0.400000,283,1,686.000000
+"[1] DB Performance (Murmur2 32)","Murmur2 32",0.500000,283,1,718.000000
+"[1] DB Performance (Murmur2 32)","Murmur2 32",0.600000,283,1,702.000000
+"[1] DB Performance (Murmur2 32)","Murmur2 32",0.700000,283,1,718.000000
+"[1] DB Performance (Murmur2 32)","Murmur2 32",0.800000,283,1,702.000000
+"[1] DB Performance (Murmur2 32)","Murmur2 32",0.900000,283,1,687.000000
+"[1] DB Performance (Murmur2 32)","Murmur2 32",1.000000,283,1,671.000000
+"[2] DB Performance (Murmur3 32)","Murmur3 32",0.000000,283,1,1326.000000
+"[2] DB Performance (Murmur3 32)","Murmur3 32",0.100000,283,1,702.000000
+"[2] DB Performance (Murmur3 32)","Murmur3 32",0.200000,283,1,718.000000
+"[2] DB Performance (Murmur3 32)","Murmur3 32",0.300000,283,1,702.000000
+"[2] DB Performance (Murmur3 32)","Murmur3 32",0.400000,283,1,702.000000
+"[2] DB Performance (Murmur3 32)","Murmur3 32",0.500000,283,1,702.000000
+"[2] DB Performance (Murmur3 32)","Murmur3 32",0.600000,283,1,733.000000
+"[2] DB Performance (Murmur3 32)","Murmur3 32",0.700000,283,1,749.000000
+"[2] DB Performance (Murmur3 32)","Murmur3 32",0.800000,283,1,748.000000
+"[2] DB Performance (Murmur3 32)","Murmur3 32",0.900000,283,1,796.000000
+"[2] DB Performance (Murmur3 32)","Murmur3 32",1.000000,283,1,718.000000
+"[3] DB Performance (Murmur3 x64 128)","Murmur3 x64 128",0.000000,283,1,1357.000000
+"[3] DB Performance (Murmur3 x64 128)","Murmur3 x64 128",0.100000,283,1,936.000000
+"[3] DB Performance (Murmur3 x64 128)","Murmur3 x64 128",0.200000,283,1,952.000000
+"[3] DB Performance (Murmur3 x64 128)","Murmur3 x64 128",0.300000,283,1,889.000000
+"[3] DB Performance (Murmur3 x64 128)","Murmur3 x64 128",0.400000,283,1,936.000000
+"[3] DB Performance (Murmur3 x64 128)","Murmur3 x64 128",0.500000,283,1,905.000000
+"[3] DB Performance (Murmur3 x64 128)","Murmur3 x64 128",0.600000,283,1,920.000000
+"[3] DB Performance (Murmur3 x64 128)","Murmur3 x64 128",0.700000,283,1,936.000000
+"[3] DB Performance (Murmur3 x64 128)","Murmur3 x64 128",0.800000,283,1,889.000000
+"[3] DB Performance (Murmur3 x64 128)","Murmur3 x64 128",0.900000,283,1,889.000000
+"[3] DB Performance (Murmur3 x64 128)","Murmur3 x64 128",1.000000,283,1,889.000000
+"[4] DB Performance (XXHASH 32)","XXHASH 32",0.000000,283,1,1279.000000
+"[4] DB Performance (XXHASH 32)","XXHASH 32",0.100000,283,1,765.000000
+"[4] DB Performance (XXHASH 32)","XXHASH 32",0.200000,283,1,733.000000
+"[4] DB Performance (XXHASH 32)","XXHASH 32",0.300000,283,1,718.000000
+"[4] DB Performance (XXHASH 32)","XXHASH 32",0.400000,283,1,702.000000
+"[4] DB Performance (XXHASH 32)","XXHASH 32",0.500000,283,1,733.000000
+"[4] DB Performance (XXHASH 32)","XXHASH 32",0.600000,283,1,733.000000
+"[4] DB Performance (XXHASH 32)","XXHASH 32",0.700000,283,1,733.000000
+"[4] DB Performance (XXHASH 32)","XXHASH 32",0.800000,283,1,702.000000
+"[4] DB Performance (XXHASH 32)","XXHASH 32",0.900000,283,1,717.000000
+"[4] DB Performance (XXHASH 32)","XXHASH 32",1.000000,283,1,733.000000
+"[5] DB Performance (XXHASH 64)","XXHASH 64",0.000000,283,1,1342.000000
+"[5] DB Performance (XXHASH 64)","XXHASH 64",0.100000,283,1,889.000000
+"[5] DB Performance (XXHASH 64)","XXHASH 64",0.200000,283,1,873.000000
+"[5] DB Performance (XXHASH 64)","XXHASH 64",0.300000,283,1,858.000000
+"[5] DB Performance (XXHASH 64)","XXHASH 64",0.400000,283,1,873.000000
+"[5] DB Performance (XXHASH 64)","XXHASH 64",0.500000,283,1,874.000000
+"[5] DB Performance (XXHASH 64)","XXHASH 64",0.600000,283,1,904.000000
+"[5] DB Performance (XXHASH 64)","XXHASH 64",0.700000,283,1,874.000000
+"[5] DB Performance (XXHASH 64)","XXHASH 64",0.800000,283,1,873.000000
+"[5] DB Performance (XXHASH 64)","XXHASH 64",0.900000,283,1,874.000000
+"[5] DB Performance (XXHASH 64)","XXHASH 64",1.000000,283,1,873.000000
+"[6] DB Performance (XXH3 64)","XXH3 64",0.000000,283,1,1342.000000
+"[6] DB Performance (XXH3 64)","XXH3 64",0.100000,283,1,764.000000
+"[6] DB Performance (XXH3 64)","XXH3 64",0.200000,283,1,764.000000
+"[6] DB Performance (XXH3 64)","XXH3 64",0.300000,283,1,764.000000
+"[6] DB Performance (XXH3 64)","XXH3 64",0.400000,283,1,780.000000
+"[6] DB Performance (XXH3 64)","XXH3 64",0.500000,283,1,780.000000
+"[6] DB Performance (XXH3 64)","XXH3 64",0.600000,283,1,780.000000
+"[6] DB Performance (XXH3 64)","XXH3 64",0.700000,283,1,764.000000
+"[6] DB Performance (XXH3 64)","XXH3 64",0.800000,283,1,764.000000
+"[6] DB Performance (XXH3 64)","XXH3 64",0.900000,283,1,780.000000
+"[6] DB Performance (XXH3 64)","XXH3 64",1.000000,283,1,764.000000

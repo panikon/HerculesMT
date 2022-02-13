@@ -1,0 +1,8 @@
+Name,Iteration count,Result (ms)
+"Athena 32",1,31.000000
+"Murmur2 32",1,31.000000
+"Murmur3 32",1,32.000000
+"Murmur3 x64 128",1,62.000000
+"XXHASH 32",1,31.000000
+"XXHASH 64",1,63.000000
+"XXH3 64",1,31.000000
