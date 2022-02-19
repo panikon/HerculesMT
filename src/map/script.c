@@ -6728,9 +6728,9 @@ static BUILDIN(callfunctionofnpc) {
 	struct npc_data *nd = NULL;
 
 	if (script_isstring(st, 2)) {
-		nd = npc->name2id(script_getstr(st, 2));
+		nd = npc->name2id(script_getstr(st, 2), 0);
 	} else {
-		nd = map->id2nd(script_getnum(st, 2));
+		nd = npc->id2nd(script_getnum(st, 2));
 	}
 
 	if (nd == NULL) {
@@ -6752,6 +6752,7 @@ static BUILDIN(callfunctionofnpc) {
 			} else if ((nd->u.scr.label_list[i].flags & LABEL_IS_USERFUNC) != 0) {
 				ShowError("script:callfunctionofnpc: function '%s' is not marked as public in NPC '%s'.\n", function_name, nd->name);
 				st->state = END;
+				npc->unlock_data(nd);
 				return false;
 			}
 			break;
@@ -6761,6 +6762,7 @@ static BUILDIN(callfunctionofnpc) {
 	if (pos < 0) {
 		ShowError("script:callfunctionofnpc: function '%s' not found in NPC '%s'!\n", function_name, nd->name);
 		st->state = END;
+		npc->unlock_data(nd);
 		return false;
 	}
 
@@ -6813,6 +6815,7 @@ static BUILDIN(callfunctionofnpc) {
 		st->script->local.vars = i64db_alloc(DB_OPT_RELEASE_DATA);
 	}
 
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -9397,8 +9400,9 @@ static BUILDIN(getnpcid)
 			ShowWarning("buildin_getnpcid: Use of type is deprecated. Format - getnpcid({<\"npc name\">})\n");
 			script_pushint(st, 0);
 		} else {
-			struct npc_data *nd = npc->name2id(script_getstr(st, 2));
+			struct npc_data *nd = npc->name2id(script_getstr(st, 2), 0);
 			script_pushint(st, (nd != NULL) ? nd->bl.id : 0);
+			npc->unlock_data(nd);
 		}
 	} else {
 		script_pushint(st, st->oid);
@@ -12344,49 +12348,89 @@ static BUILDIN(getunits)
 	return true;
 }
 
+/**
+ * Tries to acquire default parameters of several 'npctimer' functions, after this
+ * depending on the flag it also attaches the current player.
+ *   initnpctimer({"<NPC name>"{, <Attach Flag>}})
+ *   initnpctimer({<Attach Flag>})
+ *   stopnpctimer({"<NPC name>"{, <Detach Flag>}})
+ *   stopnpctimer({<Detach Flag>}})
+ *   startnpctimer({"<NPC name>"{, <Attach Flag>}})
+ *   startnpctimer({<Attach Flag>})
+ *
+ * @param st       Current script state
+ * @param out_nd   NPC data to be filled (when filled nd lock is acquired)
+ * @param detach   When set to true the player is detached instead of attached
+ * @return 0 Success
+ * @return 1 Stop script execution (no fatal errors)
+ * @return 2 Stop script execution (Fatal error)
+ * @remarks When this function succeeds nd must be unlocked via npc->unlock_data
+ **/
+static int npctimer_get_parameters(struct script_state *st, struct npc_data **out_nd, bool detach)
+{
+	struct npc_data *nd;
+	int flag = 0;
+	if(script_hasdata(st,3)) {
+		//Two arguments: NPC name and attach flag.
+		nd = npc->name2id(script_getstr(st, 2), 0);
+		flag = script_getnum(st,3);
+	} else if(script_hasdata(st,2)) {
+		//Check if argument is numeric (flag) or string (npc name)
+		struct script_data *data;
+		data = script_getdata(st,2);
+		script->get_val(st,data); // dereference if it's a variable
+		if(data_isstring(data)) {
+			//NPC name
+			nd = npc->name2id(script->conv_str(st, data), 0);
+		} else if(data_isint(data)) {
+			//Flag
+			nd = npc->id2nd(st->oid);
+			flag = script->conv_num(st,data);
+		} else {
+			ShowError("npctimer_get_parameters: invalid argument type #1 (needs be int or string)).\n");
+			return 0;
+		}
+	} else {
+		nd = npc->id2nd(st->oid);
+	}
+
+	if(!nd)
+		return false;
+
+	if(flag) { // Attach/Detach
+		if(detach) {
+			nd->u.scr.rid = 0;
+		} else {
+			struct map_session_data *sd = script->rid2sd(st);
+			if(sd == NULL) {
+				npc->unlock_data(nd);
+				return false; // No player to be attached
+			}
+			nd->u.scr.rid = sd->bl.id;
+		}
+	}
+
+	*out_nd = nd;
+	return 0;
+}
+
 /*==========================================
  *------------------------------------------*/
 static BUILDIN(initnpctimer)
 {
 	struct npc_data *nd;
-	int flag = 0;
+	int flag;
 
-	if( script_hasdata(st,3) ) {
-		//Two arguments: NPC name and attach flag.
-		nd = npc->name2id(script_getstr(st, 2));
-		flag = script_getnum(st,3);
-	} else if( script_hasdata(st,2) ) {
-		//Check if argument is numeric (flag) or string (npc name)
-		struct script_data *data;
-		data = script_getdata(st,2);
-		script->get_val(st,data); // dereference if it's a variable
-		if (data_isstring(data)) {
-			//NPC name
-			nd = npc->name2id(script->conv_str(st, data));
-		} else if (data_isint(data)) {
-			//Flag
-			nd = map->id2nd(st->oid);
-			flag = script->conv_num(st,data);
-		} else {
-			ShowError("initnpctimer: invalid argument type #1 (needs be int or string)).\n");
-			return false;
-		}
-	} else {
-		nd = map->id2nd(st->oid);
-	}
-
-	if( !nd )
-		return true;
-	if (flag) { //Attach
-		struct map_session_data *sd = script->rid2sd(st);
-		if (sd == NULL)
-			return true;
-		nd->u.scr.rid = sd->bl.id;
+	if((flag = npctimer_get_parameters(st, &nd, &flag))) {
+		// When flag is different than 0 there was a script error
+		return (flag == 1);
 	}
 
 	nd->u.scr.timertick = 0;
 	npc->settimerevent_tick(nd,0);
 	npc->timerevent_start(nd, st->rid);
+
+	npc->unlock_data(nd);
 	return true;
 }
 /*==========================================
@@ -12394,42 +12438,15 @@ static BUILDIN(initnpctimer)
 static BUILDIN(startnpctimer)
 {
 	struct npc_data *nd;
-	int flag = 0;
+	int flag;
 
-	if( script_hasdata(st,3) ) {
-		//Two arguments: NPC name and attach flag.
-		nd = npc->name2id(script_getstr(st, 2));
-		flag = script_getnum(st,3);
-	} else if( script_hasdata(st,2) ) {
-		//Check if argument is numeric (flag) or string (npc name)
-		struct script_data *data;
-		data = script_getdata(st,2);
-		script->get_val(st,data); // dereference if it's a variable
-		if (data_isstring(data)) {
-			//NPC name
-			nd = npc->name2id(script->conv_str(st, data));
-		} else if (data_isint(data)) {
-			//Flag
-			nd = map->id2nd(st->oid);
-			flag = script->conv_num(st,data);
-		} else {
-			ShowError("initnpctimer: invalid argument type #1 (needs be int or string)).\n");
-			return false;
-		}
-	} else {
-		nd = map->id2nd(st->oid);
-	}
-
-	if( !nd )
-		return true;
-	if (flag) { //Attach
-		struct map_session_data *sd = script->rid2sd(st);
-		if (sd == NULL)
-			return true;
-		nd->u.scr.rid = sd->bl.id;
+	if((flag = npctimer_get_parameters(st, &nd, &flag))) {
+		// When flag is different than 0 there was a script error
+		return (flag == 1);
 	}
 
 	npc->timerevent_start(nd, st->rid);
+	npc->unlock_data(nd);
 	return true;
 }
 /*==========================================
@@ -12437,38 +12454,15 @@ static BUILDIN(startnpctimer)
 static BUILDIN(stopnpctimer)
 {
 	struct npc_data *nd;
-	int flag = 0;
+	int flag;
 
-	if( script_hasdata(st,3) ) {
-		//Two arguments: NPC name and attach flag.
-		nd = npc->name2id(script_getstr(st, 2));
-		flag = script_getnum(st,3);
-	} else if( script_hasdata(st,2) ) {
-		//Check if argument is numeric (flag) or string (npc name)
-		struct script_data *data;
-		data = script_getdata(st,2);
-		script->get_val(st,data); // Dereference if it's a variable
-		if (data_isstring(data)) {
-			//NPC name
-			nd = npc->name2id(script->conv_str(st, data));
-		} else if (data_isint(data)) {
-			//Flag
-			nd = map->id2nd(st->oid);
-			flag = script->conv_num(st,data);
-		} else {
-			ShowError("initnpctimer: invalid argument type #1 (needs be int or string)).\n");
-			return false;
-		}
-	} else {
-		nd = map->id2nd(st->oid);
+	if((flag = npctimer_get_parameters(st, &nd, &flag))) {
+		// When flag is different than 0 there was a script error
+		return (flag == 1);
 	}
 
-	if( !nd )
-		return true;
-	if( flag ) //Detach
-		nd->u.scr.rid = 0;
-
 	npc->timerevent_stop(nd);
+	npc->unlock_data(nd);
 	return true;
 }
 /*==========================================
@@ -12481,9 +12475,9 @@ static BUILDIN(getnpctimer)
 	int val = 0;
 
 	if( script_hasdata(st,3) )
-		nd = npc->name2id(script_getstr(st,3));
+		nd = npc->name2id(script_getstr(st,3), 0);
 	else
-		nd = map->id2nd(st->oid);
+		nd = npc->id2nd(st->oid);
 
 	if (nd == NULL) {
 		script_pushint(st,0);
@@ -12506,6 +12500,7 @@ static BUILDIN(getnpctimer)
 		case 2: val = nd->u.scr.timeramount; break;
 	}
 
+	npc->unlock_data(nd);
 	script_pushint(st,val);
 	return true;
 }
@@ -12518,9 +12513,9 @@ static BUILDIN(setnpctimer)
 
 	tick = script_getnum(st,2);
 	if( script_hasdata(st,3) )
-		nd = npc->name2id(script_getstr(st,3));
+		nd = npc->name2id(script_getstr(st,3), 0);
 	else
-		nd = map->id2nd(st->oid);
+		nd = npc->id2nd(st->oid);
 
 	if (nd == NULL) {
 		script_pushint(st,1);
@@ -12529,6 +12524,7 @@ static BUILDIN(setnpctimer)
 	}
 
 	npc->settimerevent_tick(nd,tick);
+	npc->unlock_data(nd);
 	script_pushint(st,0);
 	return true;
 }
@@ -12539,7 +12535,7 @@ static BUILDIN(setnpctimer)
 static BUILDIN(attachnpctimer)
 {
 	struct map_session_data *sd;
-	struct npc_data *nd = map->id2nd(st->oid);
+	struct npc_data *nd = map->id2nd(st->oid, 0);
 
 	if (nd == NULL) {
 		script_pushint(st,1);
@@ -12553,11 +12549,13 @@ static BUILDIN(attachnpctimer)
 		sd = script->rid2sd(st);
 
 	if (sd == NULL) {
+		npc->unlock_data(nd);
 		script_pushint(st,1);
 		return true;
 	}
 
 	nd->u.scr.rid = sd->bl.id;
+	npc->unlock_data(nd);
 	script_pushint(st,0);
 	return true;
 }
@@ -12570,9 +12568,9 @@ static BUILDIN(detachnpctimer)
 	struct npc_data *nd;
 
 	if( script_hasdata(st,2) )
-		nd = npc->name2id(script_getstr(st,2));
+		nd = npc->name2id(script_getstr(st,2), 0);
 	else
-		nd = map->id2nd(st->oid);
+		nd = npc->id2nd(st->oid);
 
 	if (nd == NULL) {
 		script_pushint(st,1);
@@ -12581,6 +12579,7 @@ static BUILDIN(detachnpctimer)
 	}
 
 	nd->u.scr.rid = 0;
+	npc->unlock_data(nd);
 	script_pushint(st,0);
 	return true;
 }
@@ -13070,7 +13069,7 @@ static BUILDIN(hideonnpc)
  *------------------------------------------*/
 static BUILDIN(cloakonnpc)
 {
-	struct npc_data *nd = npc->name2id(script_getstr(st, 2));
+	struct npc_data *nd = npc->name2id(script_getstr(st, 2), 0);
 	if (nd == NULL) {
 		ShowError("buildin_cloakonnpc: invalid npc name '%s'.\n", script_getstr(st, 2));
 		return false;
@@ -13078,8 +13077,10 @@ static BUILDIN(cloakonnpc)
 
 	if (script_hasdata(st, 3)) {
 		struct map_session_data *sd = map->id2sd(script_getnum(st, 3));
-		if (sd == NULL)
+		if (sd == NULL) {
+			npc->unlock_data(nd);
 			return false;
+		}
 
 		uint32 val = nd->option;
 		nd->option |= OPTION_CLOAK;
@@ -13089,13 +13090,14 @@ static BUILDIN(cloakonnpc)
 		nd->option |= OPTION_CLOAK;
 		clif->changeoption(&nd->bl);
 	}
+	npc->unlock_data(nd);
 	return true;
 }
 /*==========================================
  *------------------------------------------*/
 static BUILDIN(cloakoffnpc)
 {
-	struct npc_data *nd = npc->name2id(script_getstr(st, 2));
+	struct npc_data *nd = npc->name2id(script_getstr(st, 2), 0);
 	if (nd == NULL) {
 		ShowError("buildin_cloakoffnpc: invalid npc name '%s'.\n", script_getstr(st, 2));
 		return false;
@@ -13103,8 +13105,10 @@ static BUILDIN(cloakoffnpc)
 
 	if (script_hasdata(st, 3)) {
 		struct map_session_data *sd = map->id2sd(script_getnum(st, 3));
-		if (sd == NULL)
+		if (sd == NULL) {
+			npc->unlock_data(nd);
 			return false;
+		}
 
 		uint32 val = nd->option;
 		nd->option &= ~OPTION_CLOAK;
@@ -13114,6 +13118,7 @@ static BUILDIN(cloakoffnpc)
 		nd->option &= ~OPTION_CLOAK;
 		clif->changeoption(&nd->bl);
 	}
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -13679,8 +13684,58 @@ static BUILDIN(globalmes)
 }
 
 /////////////////////////////////////////////////////////////////////
+/// Waiting Room
+
+/**
+ * Acquires NPC data using string or integer in 'id_pos'
+ * Pushes -1 to stack upon failing to identify a waiting room and -2 when failing
+ * to find the NPC.
+ *
+ * @param st     Current script state
+ * @param id_pos Position of npc identifier in command
+ * @param out_cd When different than NULL checks if there's already a waiting room,
+ *               if not aborts acquiral. When successful this is set to the NPC's
+ *               active waiting room data.
+ * @param cmd    Command name (for debug purposes)
+ * @remarks When successful nd must be unlocked via npc->unlock_data
+ **/
+static struct npc_data *waitingroom_get_nd(struct script_state *st, int id_pos,
+	struct chat_data **out_cd, const char *cmd
+)
+{
+	struct npc_data *nd;
+
+	if(script_hasdata(st, id_pos))
+		nd = npc->name2id(script_getstr(st, id_pos), 0);
+	else
+		nd = npc->id2nd(st->oid);
+
+	if(nd == NULL) {
+		if(script_hasdata(st, id_pos))
+			ShowWarning("buildin_%s(%d): NPC '%s' not found.\n",
+				cmd, id_pos,
+				script_getstr(st, id_pos));
+		else
+			ShowWarning("buildin_%s(%d): NPC not found.\n",
+				cmd, id_pos);
+		script_pushint(st, -2);
+		return NULL;
+	}
+
+	if(out_cd) {
+		if((*out_cd = map->id2cd(nd->chat_id)) == NULL) {
+			ShowWarning("buildin_%s(%d): NPC '%s' does not have a chatroom.\n",
+				cmd, id_pos,
+				nd->name);
+			npc->unlock_data(nd);
+			script_pushint(st, -1);
+			return NULL;
+		}
+	}
+	return nd;
+}
+
 /// Creates a waiting room (chat room) for this npc.
-///
 /// waitingroom "<title>",<limit>{,"<event>"{,<trigger>{,<zeny>{,<minlvl>{,<maxlvl>{,<npcname>}}}}}};
 static BUILDIN(waitingroom)
 {
@@ -13693,21 +13748,12 @@ static BUILDIN(waitingroom)
 	int minLvl = script_hasdata(st, 7) ? script_getnum(st, 7) : 1;
 	int maxLvl = script_hasdata(st, 8) ? script_getnum(st, 8) : MAX_LEVEL;
 
-	if (script_hasdata(st, 9))
-		nd = npc->name2id(script_getstr(st, 9));
-	else
-		nd = map->id2nd(st->oid);
-
-	if (nd == NULL) {
-		if (script_hasdata(st, 9))
-			ShowWarning("buildin_waitingroom: NPC '%s' not found.\n", script_getstr(st, 9));
-		else
-			ShowWarning("buildin_waitingroom: NPC not found.\n");
+	if(!(nd = waitingroom_get_nd(st, 9, NULL, "waitingroom")))
 		return false;
-	}
 
 	int pub = 1;
 	chat->create_npc_chat(nd, title, limit, pub, trigger, ev, zeny, minLvl, maxLvl);
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -13718,20 +13764,10 @@ static BUILDIN(waitingroom)
 static BUILDIN(delwaitingroom)
 {
 	struct npc_data *nd;
-	if (script_hasdata(st, 2))
-		nd = npc->name2id(script_getstr(st, 2));
-	else
-		nd = map->id2nd(st->oid);
-
-	if (nd == NULL) {
-		if (script_hasdata(st, 2))
-			ShowWarning("buildin_delwaitingroom: NPC '%s' not found.\n", script_getstr(st, 2));
-		else
-			ShowWarning("buildin_delwaitingroom: NPC not found.\n");
+	if(!(nd = waitingroom_get_nd(st, 2, NULL, "delwaitingroom")))
 		return false;
-	}
-
 	chat->delete_npc_chat(nd);
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -13744,25 +13780,11 @@ static BUILDIN(waitingroomkickall)
 	struct npc_data *nd;
 	struct chat_data *cd;
 
-	if (script_hasdata(st, 2))
-		nd = npc->name2id(script_getstr(st, 2));
-	else
-		nd = map->id2nd(st->oid);
-
-	if (nd == NULL) {
-		if (script_hasdata(st, 2))
-			ShowWarning("buildin_waitingroomkickall: NPC '%s' not found.\n", script_getstr(st, 2));
-		else
-			ShowWarning("buildin_waitingroomkickall: NPC not found.\n");
+	if(!(nd = waitingroom_get_nd(st, 2, &cd, "waitingroomkickall")))
 		return false;
-	}
-
-	if ((cd = map->id2cd(nd->chat_id)) == NULL) {
-		ShowWarning("buildin_waitingroomkickall: NPC '%s' does not have a chatroom.\n", nd->name);
-		return false;
-	}
 
 	chat->npc_kick_all(cd);
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -13776,23 +13798,8 @@ static BUILDIN(waitingroomkick)
 	struct chat_data *cd;
 	struct map_session_data *sd = NULL;
 
-	if (script_hasdata(st, 2))
-		nd = npc->name2id(script_getstr(st, 2));
-	else
-		nd = map->id2nd(st->oid);
-
-	if (nd == NULL) {
-		if (script_hasdata(st, 2))
-			ShowWarning("buildin_waitingroomkick: NPC '%s' not found.\n", script_getstr(st, 2));
-		else
-			ShowWarning("buildin_waitingroomkick: NPC not found.\n");
+	if(!(nd = waitingroom_get_nd(st, 2, &cd, "waitingroomkick")))
 		return false;
-	}
-
-	if ((cd = map->id2cd(nd->chat_id)) == NULL) {
-		ShowWarning("buildin_waitingroomkick: NPC '%s' does not have a chatroom.\n", nd->name);
-		return false;
-	}
 
 	if (script_hasdata(st, 3)) {
 		if (script_isstringtype(st, 3))
@@ -13806,6 +13813,7 @@ static BUILDIN(waitingroomkick)
 		chat->npc_kick_all(cd);
 	}
 
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -13818,25 +13826,11 @@ static BUILDIN(enablewaitingroomevent)
 	struct npc_data *nd;
 	struct chat_data *cd;
 
-	if (script_hasdata(st, 2))
-		nd = npc->name2id(script_getstr(st, 2));
-	else
-		nd = map->id2nd(st->oid);
-
-	if (nd == NULL) {
-		if (script_hasdata(st, 2))
-			ShowWarning("buildin_enablewaitingroomevent: NPC '%s' not found.\n", script_getstr(st, 2));
-		else
-			ShowWarning("buildin_enablewaitingroomevent: NPC not found.\n");
+	if(!(nd = waitingroom_get_nd(st, 2, &cd, "enablewaitingroomevent")))
 		return false;
-	}
-
-	if ((cd = map->id2cd(nd->chat_id)) == NULL) {
-		ShowWarning("buildin_enablewaitingroomevent: NPC '%s' does not have a chatroom.\n", nd->name);
-		return false;
-	}
 
 	chat->enable_event(cd);
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -13849,25 +13843,11 @@ static BUILDIN(disablewaitingroomevent)
 	struct npc_data *nd;
 	struct chat_data *cd;
 
-	if (script_hasdata(st, 2))
-		nd = npc->name2id(script_getstr(st, 2));
-	else
-		nd = map->id2nd(st->oid);
-
-	if (nd == NULL) {
-		if (script_hasdata(st, 2))
-			ShowWarning("buildin_disablewaitingroomevent: NPC '%s' not found.\n", script_getstr(st, 2));
-		else
-			ShowWarning("buildin_disablewaitingroomevent: NPC not found.\n");
+	if(!(nd = waitingroom_get_nd(st, 2, &cd, "disablewaitingroomevent")))
 		return false;
-	}
-
-	if ((cd = map->id2cd(nd->chat_id)) == NULL) {
-		ShowWarning("buildin_disablewaitingroomevent: NPC '%s' does not have a chatroom.\n", nd->name);
-		return false;
-	}
 
 	chat->disable_event(cd);
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -13895,24 +13875,8 @@ static BUILDIN(getwaitingroomstate)
 	int type = script_getnum(st, 2);
 	int i;
 
-	if (script_hasdata(st, 3))
-		nd = npc->name2id(script_getstr(st, 3));
-	else
-		nd = map->id2nd(st->oid);
-
-	if (nd == NULL) {
-		if (script_hasdata(st, 3))
-			ShowWarning("buildin_getwaitingroomstate: NPC '%s' not found.\n", script_getstr(st, 3));
-		else
-			ShowWarning("buildin_getwaitingroomstate: NPC not found.\n");
+	if(!(nd = waitingroom_get_nd(st, 3, &cd, "getwaitingroomstate")))
 		return false;
-	}
-
-	if ((cd = map->id2cd(nd->chat_id)) == NULL) {
-		script_pushint(st, -1);
-		ShowWarning("buildin_getwaitingroomstate: NPC '%s' does not have a chatroom.\n", nd->name);
-		return false;
-	}
 
 	switch (type) {
 	case 0:
@@ -13937,8 +13901,10 @@ static BUILDIN(getwaitingroomstate)
 	default:
 		script_pushint(st, -1);
 		ShowWarning("buildin_getwaitingroomstate: invalid type '%d'.\n", type);
+		npc->unlock_data(nd);
 		return false;
 	}
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -13964,23 +13930,8 @@ static BUILDIN(warpwaitingpc)
 	struct chat_data *cd;
 	struct map_session_data *sd;
 
-	if (script_hasdata(st, 6))
-		nd = npc->name2id(script_getstr(st, 6));
-	else
-		nd = map->id2nd(st->oid);
-
-	if (nd == NULL) {
-		if (script_hasdata(st, 6))
-			ShowWarning("buildin_warpwaitingpc: NPC '%s' not found.\n", script_getstr(st, 6));
-		else
-			ShowWarning("buildin_warpwaitingpc: NPC not found.\n");
+	if(!(nd = waitingroom_get_nd(st, 6, &cd, "getwaitingroomstate")))
 		return false;
-	}
-
-	if ((cd = map->id2cd(nd->chat_id)) == NULL) {
-		ShowWarning("buildin_warpwaitingpc: NPC '%s' does not have a chatroom.\n", nd->name);
-		return false;
-	}
 
 	n = cd->trigger & 0x7f;
 
@@ -14015,6 +13966,7 @@ static BUILDIN(warpwaitingpc)
 			pc->setpos(sd, script->mapindexname2id(st, map_name), x, y, CLR_OUTSIGHT);
 	}
 	mapreg->setreg(script->add_variable("$@warpwaitingpcnum"), i);
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -14640,9 +14592,11 @@ static BUILDIN(emotion)
 		if (sd != NULL)
 			clif->emotion(&sd->bl,type);
 	} else if( script_hasdata(st,4) ) {
-		struct npc_data *nd = npc->name2id(script_getstr(st,4));
-		if (nd != NULL)
+		struct npc_data *nd = npc->name2id(script_getstr(st,4), 0);
+		if (nd != NULL) {
 			clif->emotion(&nd->bl,type);
+			npc->unlock_data(nd);
+		}
 	} else {
 		clif->emotion(map->id2bl(st->oid),type);
 	}
@@ -16614,6 +16568,38 @@ static BUILDIN(npcskilleffect)
 	return true;
 }
 
+/**
+ * Obtains target block_list of specialeffect / specialeffectnum
+ *  {, <unit id>{, <account id>}}
+ *
+ * @param st       Current script state
+ * @param start_id Starting position of target information
+ * @param out_nd   NPC data to be filled if NPC type
+ * @return Target bl
+ * @remarks if out_nd is set the npc data must be unlocked after bl usage. When bl is NULL
+ *          out_nd is never set.
+ **/
+static struct block_list *specialeffect_get_target(struct script_state *st, int start_id,
+	struct npc_data **out_nd
+)
+{
+	if(!script_hasdata(st, start_id))
+		return map->id2bl(st->oid); // Defaults to current NPC
+
+	if(script_isstringtype(st, start_id)) {
+		// NPC Name
+		struct npc_data *nd;
+		nd = npc->name2id(script_getstr(st, start_id), 0);
+		if(nd) {
+			*out_nd = nd;
+			return &nd->bl;
+		}
+		return NULL;
+	}
+	// Unit id
+	return map->id2bl(script_getnum(st, start_id));
+}
+
 /*==========================================
  * Special effects [Valaris]
  *------------------------------------------*/
@@ -16627,22 +16613,9 @@ static BUILDIN(specialeffect)
 		target = script_getnum(st, 3);
 	}
 
-	if (script_hasdata(st, 4)) {
-		if (script_isstringtype(st, 4)) {
-			struct npc_data *nd = npc->name2id(script_getstr(st, 4));
-			if (nd != NULL) {
-				bl = &nd->bl;
-			}
-		} else {
-			bl = map->id2bl(script_getnum(st, 4));
-		}
-	} else {
-		bl = map->id2bl(st->oid);
-	}
-
-	if (bl == NULL) {
+	struct npc_data *nd = NULL;
+	if(!(bl = specialeffect_get_target(st, 4, &nd)))
 		return true;
-	}
 
 	if (target == SELF) {
 		struct map_session_data *sd;
@@ -16658,6 +16631,8 @@ static BUILDIN(specialeffect)
 		clif->specialeffect(bl, type, target);
 	}
 
+	if(nd)
+		npc->unlock_data(nd);
 	return true;
 }
 
@@ -16676,22 +16651,9 @@ static BUILDIN(specialeffectnum)
 		target = script_getnum(st, 5);
 	}
 
-	if (script_hasdata(st, 6)) {
-		if (script_isstringtype(st, 6)) {
-			struct npc_data *nd = npc->name2id(script_getstr(st, 6));
-			if (nd != NULL) {
-				bl = &nd->bl;
-			}
-		} else {
-			bl = map->id2bl(script_getnum(st, 6));
-		}
-	} else {
-		bl = map->id2bl(st->oid);
-	}
-
-	if (bl == NULL) {
+	struct npc_data *nd = NULL;
+	if(!(bl = specialeffect_get_target(st, 6, &nd)))
 		return true;
-	}
 
 	uint64 bigNum = ((uint64)num2) * 0xffffffff + num;
 	if (target == SELF) {
@@ -16708,6 +16670,8 @@ static BUILDIN(specialeffectnum)
 		clif->specialeffect_value(bl, type, bigNum, target);
 	}
 
+	if(nd)
+		npc->unlock_data(nd);
 	return true;
 }
 
@@ -16738,22 +16702,9 @@ static BUILDIN(removespecialeffect)
 		target = script_getnum(st, 3);
 	}
 
-	if (script_hasdata(st, 4)) {
-		if (script_isstringtype(st, 4)) {
-			struct npc_data *nd = npc->name2id(script_getstr(st, 4));
-			if (nd != NULL) {
-				bl = &nd->bl;
-			}
-		} else {
-			bl = map->id2bl(script_getnum(st, 4));
-		}
-	} else {
-		bl = map->id2bl(st->oid);
-	}
-
-	if (bl == NULL) {
+	struct npc_data *nd = NULL;
+	if(!(bl = specialeffect_get_target(st, 4, &nd)))
 		return true;
-	}
 
 	if (target == SELF) {
 		struct map_session_data *sd;
@@ -16769,6 +16720,7 @@ static BUILDIN(removespecialeffect)
 		clif->removeSpecialEffect(bl, type, target);
 	}
 
+	if(nd) npc->unlock_data(nd);
 	return true;
 }
 
@@ -17151,12 +17103,13 @@ static BUILDIN(movenpc)
 	x = script_getnum(st,3);
 	y = script_getnum(st,4);
 
-	if ((nd = npc->name2id(npc_name)) == NULL)
+	if ((nd = npc->name2id(npc_name, 0)) == NULL)
 		return false;
 
 	if (script_hasdata(st,5))
 		nd->dir = script_getnum(st,5) % 8;
 	npc->movenpc(nd, x, y);
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -17216,9 +17169,9 @@ static BUILDIN(npctalk)
 	bool show_name = true;
 
 	if (script_hasdata(st, 3)) {
-		nd = npc->name2id(script_getstr(st, 3));
+		nd = npc->name2id(script_getstr(st, 3), 0);
 	} else {
-		nd = map->id2nd(st->oid);
+		nd = npc->id2nd(st->oid);
 	}
 
 	if (script_hasdata(st, 4)) {
@@ -17235,6 +17188,7 @@ static BUILDIN(npctalk)
 			safesnprintf(message, sizeof(message), "%s", str);
 		}
 		clif->disp_overhead(&nd->bl, message, AREA_CHAT_WOC, NULL);
+		npc->unlock_data(nd);
 	}
 
 	return true;
@@ -17317,7 +17271,7 @@ static BUILDIN(getnpcdir)
 	const struct npc_data *nd = NULL;
 
 	if (script_hasdata(st, 2)) {
-		nd = npc->name2id(script_getstr(st, 2));
+		nd = npc->name2id(script_getstr(st, 2), 0);
 	}
 	if (nd == NULL && !st->oid) {
 		script_pushint(st, -1);
@@ -17325,7 +17279,7 @@ static BUILDIN(getnpcdir)
 	}
 
 	if (nd == NULL)
-		nd = map->id2nd(st->oid);
+		nd = npc->id2nd(st->oid);
 
 	if (nd == NULL) {
 		script_pushint(st, -1);
@@ -17333,7 +17287,7 @@ static BUILDIN(getnpcdir)
 	}
 
 	script_pushint(st, (int)nd->dir);
-
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -17344,13 +17298,13 @@ static BUILDIN(setnpcdir)
 	struct npc_data *nd = NULL;
 
 	if (script_hasdata(st, 3)) {
-		nd = npc->name2id(script_getstr(st, 2));
+		nd = npc->name2id(script_getstr(st, 2), 0);
 		newdir = script_getnum(st, 3);
 	} else if (script_hasdata(st, 2)) {
 		if (!st->oid)
 			return false;
 
-		nd = map->id2nd(st->oid);
+		nd = npc->id2nd(st->oid);
 		newdir = script_getnum(st, 2);
 	}
 	if (nd == NULL)
@@ -17367,7 +17321,7 @@ static BUILDIN(setnpcdir)
 
 	clif->clearunit_area(&nd->bl, CLR_OUTSIGHT);
 	clif->spawn(&nd->bl);
-
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -17377,7 +17331,7 @@ static BUILDIN(getnpcclass)
 	const struct npc_data *nd = NULL;
 
 	if (script_hasdata(st, 2)) {
-		nd = npc->name2id(script_getstr(st, 2));
+		nd = npc->name2id(script_getstr(st, 2), 0);
 	}
 	if (nd == NULL && !st->oid) {
 		script_pushint(st, -1);
@@ -17385,7 +17339,7 @@ static BUILDIN(getnpcclass)
 	}
 
 	if (nd == NULL)
-		nd = map->id2nd(st->oid);
+		nd = npc->id2nd(st->oid);
 
 	if (nd == NULL) {
 		script_pushint(st, -1);
@@ -17393,7 +17347,7 @@ static BUILDIN(getnpcclass)
 	}
 
 	script_pushint(st, (int)nd->class_);
-
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -17521,6 +17475,7 @@ static BUILDIN(getmapxy)
 	// Possible needly check function parameters on C_STR,C_INT,C_INT
 	type=script_getnum(st,5);
 
+	struct npc_data *nd = NULL;
 	switch (type) {
 		case 0: //Get Character Position
 			if (script_hasdata(st,6)) {
@@ -17537,11 +17492,10 @@ static BUILDIN(getmapxy)
 			break;
 		case 1: //Get NPC Position
 			if (script_hasdata(st,6)) {
-				struct npc_data *nd;
 				if (script_isstringtype(st,6))
-					nd = npc->name2id(script_getstr(st,6));
+					nd = npc->name2id(script_getstr(st,6), 0);
 				else
-					nd = map->id2nd(script_getnum(st,6));
+					nd = npc->id2nd(script_getnum(st,6));
 				if (nd)
 					bl = &nd->bl;
 			} else {
@@ -17623,6 +17577,7 @@ static BUILDIN(getmapxy)
 	}
 	if (!bl || bl->m == -1) { //No object found.
 		script_pushint(st,-1);
+		if(nd) npc->unlock_data(nd);
 		return true;
 	}
 
@@ -17665,6 +17620,8 @@ static BUILDIN(getmapxy)
 
 	//Return Success value
 	script_pushint(st,0);
+
+	if(nd) npc->unlock_data(nd);
 	return true;
 }
 
@@ -18974,7 +18931,7 @@ static BUILDIN(setnpcdisplay)
 	else
 		class_ = script_getnum(st, 3);
 
-	nd = npc->name2id(name);
+	nd = npc->name2id(name, 0);
 	if( nd == NULL )
 	{// not found
 		script_pushint(st,1);
@@ -18984,6 +18941,7 @@ static BUILDIN(setnpcdisplay)
 	if (nd->bl.m == -1) {
 		ShowWarning("buildin_setnpcdisplay: cannot display on an npc with no valid map.\n");
 		script_pushint(st, 1);
+		npc->unlock_data(nd);
 		return false;
 	}
 
@@ -19005,6 +18963,7 @@ static BUILDIN(setnpcdisplay)
 	}
 
 	script_pushint(st,0);
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -19433,25 +19392,45 @@ static BUILDIN(petstat)
 	return true;
 }
 
-static BUILDIN(callshop)
+/**
+ * Gets target NPC data of a given shop, the shop name is specified in idx 2
+ * Pushes 0 to stack when failed to get (invalid NPC or not found)
+ *
+ * @param st  Current script state
+ * @param cmd Function name (for debug purposes)
+ * @return NPC data, must be unlocked after use
+ **/
+static struct npc_data *shop_get_nd(struct script_state *st, const char *cmd)
 {
 	struct npc_data *nd;
 	const char *shopname;
+
+	shopname = script_getstr(st, 2);
+	nd = npc->name2id(shopname, 0);
+	if( !nd || nd->bl.type != BL_NPC || (nd->subtype != SHOP && nd->subtype != CASHSHOP) )
+	{
+		ShowError("buildin_%s: Shop [%s] not found (or NPC is not shop type)\n",
+			cmd, shopname);
+		script_pushint(st,0);
+		if(nd) npc->unlock_data(nd);
+		return NULL;
+	}
+	return nd;
+}
+
+static BUILDIN(callshop)
+{
+	struct npc_data *nd;
 	int flag = 0;
 	struct map_session_data *sd = script->rid2sd(st);
 
 	if (sd == NULL)
 		return true;
-	shopname = script_getstr(st, 2);
+
 	if( script_hasdata(st,3) )
 		flag = script_getnum(st,3);
-	nd = npc->name2id(shopname);
-	if( !nd || nd->bl.type != BL_NPC || (nd->subtype != SHOP && nd->subtype != CASHSHOP) )
-	{
-		ShowError("buildin_callshop: Shop [%s] not found (or NPC is not shop type)\n", shopname);
-		script_pushint(st,0);
+	if(!(nd = shop_get_nd(st, "callshop")))
 		return false;
-	}
 
 	if( nd->subtype == SHOP )
 	{
@@ -19470,21 +19449,18 @@ static BUILDIN(callshop)
 
 	sd->npc_shopid = nd->bl.id;
 	script_pushint(st,1);
+	npc->unlock_data(nd);
 	return true;
 }
 
 static BUILDIN(npcshopitem)
 {
-	const char* npcname = script_getstr(st, 2);
-	struct npc_data* nd = npc->name2id(npcname);
+	struct npc_data* nd;
 	int n, i;
 	int amount;
 
-	if( !nd || ( nd->subtype != SHOP && nd->subtype != CASHSHOP ) ) {
-		//Not found.
-		script_pushint(st,0);
+	if(!(nd = shop_get_nd(st, "npcshopitem")))
 		return true;
-	}
 
 	// get the count of new entries
 	amount = (script_lastdata(st)-2)/2;
@@ -19499,21 +19475,19 @@ static BUILDIN(npcshopitem)
 	nd->u.shop.count = n;
 
 	script_pushint(st,1);
+
+	npc->unlock_data(nd);
 	return true;
 }
 
 static BUILDIN(npcshopadditem)
 {
-	const char* npcname = script_getstr(st,2);
-	struct npc_data* nd = npc->name2id(npcname);
+	struct npc_data* nd;
 	int n, i;
 	int amount;
 
-	if( !nd || ( nd->subtype != SHOP && nd->subtype != CASHSHOP ) ) {
-		//Not found.
-		script_pushint(st,0);
+	if(!(nd = shop_get_nd(st, "npcshopadditem")))
 		return true;
-	}
 
 	// get the count of new entries
 	amount = (script_lastdata(st)-2)/2;
@@ -19528,22 +19502,19 @@ static BUILDIN(npcshopadditem)
 	nd->u.shop.count = n;
 
 	script_pushint(st,1);
+	npc->unlock_data(nd);
 	return true;
 }
 
 static BUILDIN(npcshopdelitem)
 {
-	const char* npcname = script_getstr(st,2);
-	struct npc_data* nd = npc->name2id(npcname);
+	struct npc_data* nd;
 	int n, i;
 	int amount;
 	int size;
 
-	if (!nd || (nd->subtype != SHOP && nd->subtype != CASHSHOP)) {
-		//Not found.
-		script_pushint(st,0);
+	if(!(nd = shop_get_nd(st, "npcshopdelitem")))
 		return true;
-	}
 
 	amount = script_lastdata(st)-2;
 	size = nd->u.shop.count;
@@ -19572,31 +19543,30 @@ static BUILDIN(npcshopdelitem)
 	nd->u.shop.count = size;
 
 	script_pushint(st,1);
+	npc->unlock_data(nd);
 	return true;
 }
 
 //Sets a script to attach to a shop npc.
 static BUILDIN(npcshopattach)
 {
-	const char* npcname = script_getstr(st,2);
-	struct npc_data* nd = npc->name2id(npcname);
+	struct npc_data* nd;
 	int flag = 1;
 
 	if( script_hasdata(st,3) )
 		flag = script_getnum(st,3);
 
-	if( !nd || nd->subtype != SHOP ) {
-		//Not found.
-		script_pushint(st,0);
+	if(!(nd = shop_get_nd(st, "npcshopattach")))
 		return true;
-	}
 
-	if (flag)
-		nd->master_nd = map->id2nd(st->oid);
-	else
+	if(flag) {
+		nd->master_nd = npc->id2nd(st->oid);
+		npc->unlock_data(nd->master_nd);
+	} else
 		nd->master_nd = NULL;
 
 	script_pushint(st,1);
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -22380,7 +22350,7 @@ static BUILDIN(awake)
 	struct script_state *tst;
 	struct npc_data* nd;
 
-	if( ( nd = npc->name2id(script_getstr(st, 2)) ) == NULL ) {
+	if( ( nd = npc->name2id(script_getstr(st, 2), 0) ) == NULL ) {
 		ShowError("awake: NPC \"%s\" not found\n", script_getstr(st, 2));
 		return false;
 	}
@@ -22408,7 +22378,7 @@ static BUILDIN(awake)
 	}
 
 	dbi_destroy(iter);
-
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -22442,7 +22412,7 @@ static BUILDIN(getvariableofnpc)
 		return false;
 	}
 
-	nd = npc->name2id(script_getstr(st,3));
+	nd = npc->name2id(script_getstr(st,3), 0);
 	if( nd == NULL || nd->subtype != SCRIPT || nd->u.scr.script == NULL )
 	{// NPC not found or has no script
 		ShowError("script:getvariableofnpc: can't find npc %s\n", script_getstr(st,3));
@@ -22455,6 +22425,7 @@ static BUILDIN(getvariableofnpc)
 		nd->u.scr.script->local.vars = i64db_alloc(DB_OPT_RELEASE_DATA);
 
 	script->push_val(st->stack, C_NAME, reference_getuid(data), &nd->u.scr.script->local);
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -23290,12 +23261,13 @@ static BUILDIN(waitingroom2bg)
 	int x, y, i, map_index = 0, bg_id, n;
 
 	if( script_hasdata(st,7) )
-		nd = npc->name2id(script_getstr(st,7));
+		nd = npc->name2id(script_getstr(st,7), 0);
 	else
-		nd = map->id2nd(st->oid);
+		nd = npc->id2nd(st->oid);
 
 	if (nd == NULL || (cd = map->id2cd(nd->chat_id)) == NULL) {
 		script_pushint(st,0);
+		if(nd) npc->unlock_data(nd);
 		return true;
 	}
 
@@ -23306,6 +23278,7 @@ static BUILDIN(waitingroom2bg)
 		if( map_index == 0 )
 		{ // Invalid Map
 			script_pushint(st,0);
+			npc->unlock_data(nd);
 			return true;
 		}
 	}
@@ -23318,6 +23291,7 @@ static BUILDIN(waitingroom2bg)
 	if ((bg_id = bg->create(map_index, x, y, ev, dev)) == 0) {
 		// Creation failed
 		script_pushint(st,0);
+		npc->unlock_data(nd);
 		return true;
 	}
 
@@ -23334,6 +23308,7 @@ static BUILDIN(waitingroom2bg)
 
 	mapreg->setreg(script->add_variable("$@arenamembersnum"), i);
 	script_pushint(st,bg_id);
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -23352,13 +23327,20 @@ static BUILDIN(waitingroom2bg_single)
 
 	x = script_getnum(st,4);
 	y = script_getnum(st,5);
-	nd = npc->name2id(script_getstr(st,6));
+	nd = npc->name2id(script_getstr(st,6), 0);
 
-	if (nd == NULL || (cd = map->id2cd(nd->chat_id)) == NULL || cd->users <= 0)
+	if(nd == NULL)
 		return true;
 
-	if( (sd = cd->usersd[0]) == NULL )
+	if((cd = map->id2cd(nd->chat_id)) == NULL || cd->users <= 0) {
+		npc->unlock_data(nd);
 		return true;
+	}
+
+	if( (sd = cd->usersd[0]) == NULL ) {
+		npc->unlock_data(nd);
+		return true;
+	}
 
 	if( bg->team_join(bg_id, sd) )
 	{
@@ -23368,6 +23350,7 @@ static BUILDIN(waitingroom2bg_single)
 	else
 		script_pushint(st,0);
 
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -23763,16 +23746,18 @@ static BUILDIN(instance_npcname)
 	else if( st->instance_id >= 0 )
 		instance_id = st->instance_id;
 
-	if( instance_id >= 0 && (nd = npc->name2id(str)) != NULL ) {
+	if( instance_id >= 0 && (nd = npc->name2id(str, 0)) != NULL ) {
 		static char npcname[NAME_LENGTH];
 		snprintf(npcname, sizeof(npcname), "dup_%d_%d", instance_id, nd->bl.id);
 		script_pushconststr(st,npcname);
 	} else {
 		ShowError("script:instance_npcname: invalid instance NPC (instance_id: %d, NPC name: \"%s\".)\n", instance_id, str);
 		st->state = END;
+		if(nd) npc->unlock_data(nd);
 		return false;
 	}
 
+	if(nd) npc->unlock_data(nd);
 	return true;
 }
 
@@ -25717,18 +25702,20 @@ static BUILDIN(openshop)
 
 	if (script_hasdata(st, 2)) {
 		const char *name = script_getstr(st, 2);
-		if (!(nd = npc->name2id(name)) || nd->subtype != SCRIPT) {
+		if (!(nd = npc->name2id(name, 0)) || nd->subtype != SCRIPT) {
 			ShowWarning("buildin_openshop(\"%s\"): trying to run without a proper NPC!\n",name);
 			return false;
 		}
-	} else if (!(nd = map->id2nd(st->oid))) {
+	} else if (!(nd = npc->id2nd(st->oid))) {
 		ShowWarning("buildin_openshop: trying to run without a proper NPC!\n");
 		return false;
 	}
 	if (!( sd = script->rid2sd(st))) {
+		npc->unlock_data(nd);
 		ShowWarning("buildin_openshop: trying to run without a player attached!\n");
 		return false;
 	} else if (!nd->u.scr.shop || !nd->u.scr.shop->items) {
+		npc->unlock_data(nd);
 		ShowWarning("buildin_openshop: trying to open without any items!\n");
 		return false;
 	}
@@ -25738,6 +25725,7 @@ static BUILDIN(openshop)
 	else
 		script_pushint(st, 1);
 
+	npc->unlock_data(nd);
 	return true;
 }
 
