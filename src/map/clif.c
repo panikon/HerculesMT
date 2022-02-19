@@ -393,9 +393,14 @@ static int clif_send_sub(struct block_list *bl, va_list ap)
 				if (ssd != NULL && sd->chat_id != 0 && (sd->chat_id == ssd->chat_id))
 					return 0;
 			} else if (src_bl->type == BL_NPC) {
-				const struct npc_data *nd = BL_UCCAST(BL_NPC, src_bl);
-				if (nd != NULL && sd->chat_id != 0 && (sd->chat_id == nd->chat_id))
-					return 0;
+				const struct npc_data *nd = npc->bl2nd(src_bl);
+				if(nd) {
+					if(sd->chat_id != 0 && (sd->chat_id == nd->chat_id)) {
+						npc->unlock_data(nd);
+						return 0;
+					}
+					npc->unlock_data(nd);
+				}
 			}
 		}
 		break;
@@ -11865,11 +11870,12 @@ static void clif_parse_ActionRequest_sub(struct map_session_data *sd, enum actio
 		case ACT_ATTACK: // once attack
 		case ACT_ATTACK_REPEAT: // continuous attack
 		{
-			struct npc_data *nd = map->id2nd(target_id);
+			struct npc_data *nd = npc->id2nd(target_id);
 			if (nd != NULL) {
 				if (sd->block_action.npc == 0) { // *pcblock script command
 					npc->click(sd, nd);
 				}
+				npc->unlock_data(nd);
 				return;
 			}
 
@@ -12040,7 +12046,7 @@ static void clif_parse_WisMessage(int fd, struct map_session_data *sd)
 	if (target[0] && (strncasecmp(target,"NPC:",4) == 0) && (strlen(target) > 4)) {
 		char *str = target + 4; // Skip the NPC: string part.
 		struct npc_data *nd;
-		if ((nd = npc->name2id(str))) {
+		if ((nd = npc->name2id(str, 0))) {
 			char split_data[NUM_WHISPER_VAR][SCRIPT_STRING_VAR_LENGTH + 1];
 			char *split;
 			char output[256];
@@ -12068,8 +12074,8 @@ static void clif_parse_WisMessage(int fd, struct map_session_data *sd)
 			}
 
 			safesnprintf(output, 255, "%s::OnWhisperGlobal", nd->exname);
+			npc->unlock_data(nd);
 			npc->event(sd,output, 0); // Calls the NPC label
-
 			return;
 		}
 	} else if( target[0] == '#' ) {
@@ -12382,8 +12388,13 @@ static void clif_parse_NpcClicked(int fd, struct map_session_data *sd)
 #endif
 				break;
 			}
-			if( bl->m != -1 )// the user can't click floating npcs directly (hack attempt)
-				npc->click(sd, BL_UCAST(BL_NPC, bl));
+			if( bl->m != -1 ) { // the user can't click floating npcs directly (hack attempt)
+				struct npc_data *nd = npc->bl2nd(bl);
+				if(!nd)
+					break;
+				npc->click(sd, nd);
+				npc->unlock_data(nd);
+			}
 			break;
 		case BL_NUL:
 		case BL_ITEM:
@@ -13515,9 +13526,13 @@ static void clif_parse_NpcSelectMenu(int fd, struct map_session_data *sd)
 #ifdef SECURE_NPCTIMEOUT
 		if( sd->npc_idle_timer != INVALID_TIMER ) {
 #endif
-			struct npc_data *nd = map->id2nd(npc_id);
-			ShowWarning("Invalid menu selection on npc %d:'%s' - got %d, valid range is [%d..%d] (player AID:%d, CID:%d, name:'%s')!\n", npc_id, (nd)?nd->name:"invalid npc id", select, 1, sd->npc_menu, sd->bl.id, sd->status.char_id, sd->status.name);
+			struct npc_data *nd = npc->id2nd(npc_id);
+			ShowWarning("Invalid menu selection on npc %d:'%s' - got %d, valid range is "
+				"[%d..%d] (player AID:%d, CID:%d, name:'%s')!\n", npc_id,
+				(nd)?nd->name:"invalid npc id", select, 1, sd->npc_menu,
+				sd->bl.id, sd->status.char_id, sd->status.name);
 			clif->GM_kick(NULL,sd);
+			npc->unlock_data(nd);
 #ifdef SECURE_NPCTIMEOUT
 		}
 #endif
@@ -18065,7 +18080,7 @@ static void clif_cashshop_ack(struct map_session_data *sd, int error)
 
 	nullpo_retv(sd);
 	fd = sd->fd;
-	if( (nd = map->id2nd(sd->npc_shopid)) && nd->subtype == SCRIPT ) {
+	if( (nd = npc->id2nd(sd->npc_shopid)) && nd->subtype == SCRIPT ) {
 		npc->trader_count_funds(nd,sd);
 		currency[0] = npc->trader_funds[0];
 		currency[1] = npc->trader_funds[1];
@@ -18084,6 +18099,7 @@ static void clif_cashshop_ack(struct map_session_data *sd, int error)
 	WFIFOW(fd,10) = TOW(error);
 #endif
 	WFIFOSET(fd, packet_len(0x289));
+	if(nd) npc->unlock_data(nd);
 }
 
 static void clif_parse_cashshop_buy(int fd, struct map_session_data *sd) __attribute__((nonnull (2)));
@@ -21527,7 +21543,8 @@ static void clif_npc_market_purchase_ack(struct map_session_data *sd, const stru
 		int maxCount = (sizeof(packet_buf) - sizeof(struct PACKET_ZC_NPC_MARKET_PURCHASE_RESULT)) / sizeof(struct PACKET_ZC_NPC_MARKET_PURCHASE_RESULT_sub);
 		if (maxCount > vectorLen)
 			maxCount = vectorLen;
-		struct npc_data *nd = map->id2nd(sd->npc_shopid);
+		struct npc_data *nd = npc->id2nd(sd->npc_shopid);
+		nullpo_retv(nd);
 		struct npc_item_list *shop = nd->u.scr.shop->item;
 		unsigned short shop_size = nd->u.scr.shop->items;
 
@@ -21544,6 +21561,7 @@ static void clif_npc_market_purchase_ack(struct map_session_data *sd, const stru
 
 			c++;
 		}
+		npc->unlock_data(nd);
 	}
 
 	p->PacketLength = sizeof(struct PACKET_ZC_NPC_MARKET_PURCHASE_RESULT) + (sizeof(struct PACKET_ZC_NPC_MARKET_PURCHASE_RESULT_sub) * c);

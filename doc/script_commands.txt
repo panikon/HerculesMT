@@ -1,4 +1,4 @@
-//===== Hercules Documentation ===============================
+﻿//===== Hercules Documentation ===============================
 //= Hercules Script Commands
 //===== By: ==================================================
 //= Hercules Dev Team
@@ -7761,6 +7761,7 @@ amount.
 
 Creating a waiting room does not stop the execution of the script and it
 will continue to the next line.
+Returns -2 after failure to create a new waiting room.
 
 For more examples see the 2-1 and 2-2 job quest scripts which make
 extensive use of waiting rooms.
@@ -7778,6 +7779,9 @@ disappear.
 It's not clear what happens to a waiting room if the NPC is disabled with
 disablenpc(), by the way.
 
+Returns -1 after failure to alter waiting room, or -2 when failing to find
+the NPC.
+
 ---------------------------------------
 
 *enablewaitingroomevent({"<NPC object name>"})
@@ -7794,6 +7798,8 @@ amount and trigger the event accordingly.
 Normally, whenever a waiting room was created to make sure that only one
 character is, for example, trying to pass a job quest trial, and no other
 characters are present in the room to mess up the script.
+Returns -1 after failure to alter waiting room, or -2 when failing to find
+the NPC.
 
 ---------------------------------------
 
@@ -7802,6 +7808,8 @@ characters are present in the room to mess up the script.
 This function will return information about the waiting room state for the
 attached waiting room or for a waiting room attached to the specified NPC
 if any.
+Returns -1 after failure to find the waiting room, or -2 when failing to find
+the NPC.
 
 The valid information types are:
 
@@ -7852,6 +7860,9 @@ The obvious way of using this effectively would be to set up a waiting
 room for two characters to be warped onto a random PVP map for a
 one-on-one duel, for example.
 
+Returns -1 after failure to alter waiting room, or -2 when failing to find
+the NPC.
+
 ---------------------------------------
 
 *kickwaitingroomall({"<NPC object name>"})
@@ -7861,6 +7872,8 @@ one-on-one duel, for example.
 	@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
 This command kicks everybody out of a specified waiting room chat.
+Returns -1 after failure to alter waiting room, or -2 when failing to find
+the NPC.
 
 ---------------------------------------
 
@@ -7876,6 +7889,9 @@ Example 2:
 	// Kick the last player enter the waitingroom
 	.@num = getwaitingroomstate(0);
 	waitingroomkick(strnpcinfo(NPC_NAME), $@chatmembers[.@num - 1]);
+
+Returns -1 after failure to alter waiting room, or -2 when failing to find
+the NPC.
 	
 ---------------------------------------
 

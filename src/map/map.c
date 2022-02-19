@@ -2155,21 +2155,6 @@ static struct map_session_data *map_id2sd(int id)
 }
 
 /**
- * Looks up a NPC data by ID.
- *
- * @param id The bl ID to search.
- * @return The searched npc_data, if it exists.
- * @retval NULL if the ID is invalid or doesn't belong to a NPC.
- */
-static struct npc_data *map_id2nd(int id)
-{
-	// just a id2bl lookup because there's no npc_db
-	struct block_list* bl = map->id2bl(id);
-
-	return BL_CAST(BL_NPC, bl);
-}
-
-/**
  * Looks up a mob data by ID.
  *
  * The search is performed using the mobid_db.
@@ -6894,29 +6879,6 @@ int do_init(int argc, char *argv[])
 	if (!minimal) {
 		map->config_read(map->MAP_CONF_NAME, false);
 
-		{
-			// TODO: Remove this when no longer needed.
-#define CHECK_OLD_LOCAL_CONF(oldname, newname) do { \
-	if (stat((oldname), &fileinfo) == 0 && fileinfo.st_size > 0) { \
-		ShowWarning("An old configuration file \"%s\" was found.\n", (oldname)); \
-		ShowWarning("If it contains settings you wish to keep, please merge them into \"%s\".\n", (newname)); \
-		ShowWarning("Otherwise, just delete it.\n"); \
-		ShowInfo("Resuming in 10 seconds...\n"); \
-		HSleep(10); \
-	} \
-} while (0)
-		struct stat fileinfo;
-
-		CHECK_OLD_LOCAL_CONF("conf/import/map_conf.txt", "conf/import/map-server.conf");
-		CHECK_OLD_LOCAL_CONF("conf/import/inter_conf.txt", "conf/import/inter-server.conf");
-		CHECK_OLD_LOCAL_CONF("conf/import/log_conf.txt", "conf/import/logs.conf");
-		CHECK_OLD_LOCAL_CONF("conf/import/script_conf.txt", "conf/import/script.conf");
-		CHECK_OLD_LOCAL_CONF("conf/import/packet_conf.txt", "conf/import/socket.conf");
-		CHECK_OLD_LOCAL_CONF("conf/import/battle_conf.txt", "conf/import/battle.conf");
-
-#undef CHECK_OLD_LOCAL_CONF
-		}
-
 		// loads npcs
 		map->reloadnpc(false);
 
@@ -6924,15 +6886,15 @@ int do_init(int argc, char *argv[])
 
 		if (!map->ip_set || !map->char_ip_set) {
 			char ip_str[16];
-			sockt->ip2str(sockt->addr_[0], ip_str);
+			socket_io->ip2str(socket_io->addr_[0], ip_str);
 
 #ifndef BUILDBOT
 			ShowWarning("Not all IP addresses in /conf/map/map-server.conf configured, auto-detecting...\n");
 #endif
 
-			if (sockt->naddr_ == 0)
+			if (socket_io->naddr_ == 0)
 				ShowError("Unable to determine your IP address...\n");
-			else if (sockt->naddr_ > 1)
+			else if (socket_io->naddr_ > 1)
 				ShowNotice("Multiple interfaces detected...\n");
 
 			ShowInfo("Defaulting to %s as our IP address\n", ip_str);
@@ -6981,7 +6943,7 @@ int do_init(int argc, char *argv[])
 		// Pretend all maps from the mapindex are on this mapserver
 		CREATE(map->list,struct map_data,i);
 
-		for( i = 0; i < MAX_MAPINDEX; i++ ) {
+		for( i = 0; i < VECTOR_LENGTH(mapindex->list); i++ ) {
 			if (mapindex_exists(i)) {
 				map->addmap(mapindex_id2name(i));
 			}
@@ -7265,7 +7227,6 @@ PRAGMA_GCC9(GCC diagnostic pop)
 	map->foreachininstance = map_foreachininstance;
 
 	map->id2sd = map_id2sd;
-	map->id2nd = map_id2nd;
 	map->id2md = map_id2md;
 	map->id2fi = map_id2fi;
 	map->id2cd = map_id2cd;

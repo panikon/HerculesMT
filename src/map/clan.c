@@ -470,8 +470,12 @@ static int clan_get_id(const struct block_list *bl)
 		return sd->status.clan_id;
 	}
 	case BL_NPC: {
-		const struct npc_data *nd = BL_UCCAST(BL_NPC, bl);
-		return nd->clan_id;
+		const struct npc_data *nd = npc->bl2nd(bl);
+		if(!nd)
+			break;
+		int clan_id = nd->clan_id;
+		npc->unlock_data(nd);
+		return clan_id;
 	}
 	case BL_PET: {
 		const struct pet_data *pd = BL_UCCAST(BL_PET, bl);

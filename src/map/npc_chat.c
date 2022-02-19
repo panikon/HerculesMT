@@ -424,44 +424,44 @@ BUILDIN(defpattern)
 	int setid = script_getnum(st,2);
 	const char* pattern = script_getstr(st,3);
 	const char* label = script_getstr(st,4);
-	struct npc_data *nd = map->id2nd(st->oid);
+	struct npc_data *nd = npc->id2nd(st->oid);
 	nullpo_retr(false, nd);
 
 	npc_chat->def_pattern(nd, setid, pattern, label);
-
+	npc->unlock_data(nd);
 	return true;
 }
 
 BUILDIN(activatepset)
 {
 	int setid = script_getnum(st,2);
-	struct npc_data *nd = map->id2nd(st->oid);
+	struct npc_data *nd = npc->id2nd(st->oid);
 	nullpo_retr(false, nd);
 
 	npc_chat->activate_pcreset(nd, setid);
-
+	npc->unlock_data(nd);
 	return true;
 }
 
 BUILDIN(deactivatepset)
 {
 	int setid = script_getnum(st,2);
-	struct npc_data *nd = map->id2nd(st->oid);
+	struct npc_data *nd = npc->id2nd(st->oid);
 	nullpo_retr(false, nd);
 
 	npc_chat->deactivate_pcreset(nd, setid);
-
+	npc->unlock_data(nd);
 	return true;
 }
 
 BUILDIN(deletepset)
 {
 	int setid = script_getnum(st,2);
-	struct npc_data *nd = map->id2nd(st->oid);
+	struct npc_data *nd = npc->id2nd(st->oid);
 	nullpo_retr(false, nd);
 
 	npc_chat->delete_pcreset(nd, setid);
-
+	npc->unlock_data(nd);
 	return true;
 }
 

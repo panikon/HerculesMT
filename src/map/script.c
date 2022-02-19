@@ -4172,8 +4172,9 @@ static struct script_state *script_alloc_state(struct script_code *rootscript, i
 	if( st->script->instances != USHRT_MAX )
 		st->script->instances++;
 	else {
-		struct npc_data *nd = map->id2nd(oid);
+		struct npc_data *nd = npc->id2nd(oid);
 		ShowError("over 65k instances of '%s' script are being run\n",nd ? nd->name : "unknown");
+		npc->unlock_data(nd);
 	}
 
 	if( !st->script->local.vars )
@@ -4935,7 +4936,7 @@ static void run_script_main(struct script_state *st)
 		st->state = END;
 	}
 
-	nd = map->id2nd(st->oid);
+	nd = npc->id2nd(st->oid);
 	if( nd && nd->bl.m >= 0 )
 		st->instance_id = map->list[nd->bl.m].instance_id;
 	else
@@ -5108,6 +5109,8 @@ static void run_script_main(struct script_state *st)
 		script->free_state(st);
 		st = NULL;
 	}
+	if(nd)
+		npc->unlock_data(nd);
 }
 
 /**
@@ -6486,12 +6489,13 @@ static BUILDIN(menu)
 
 		/* menus beyond this length crash the client (see bugreport:6402) */
 		if( StrBuf->Length(&buf) >= MAX_MENU_LENGTH - 1 ) {
-			struct npc_data * nd = map->id2nd(st->oid);
+			struct npc_data * nd = npc->id2nd(st->oid);
 			char* menu;
 			CREATE(menu, char, MAX_MENU_LENGTH);
 			safestrncpy(menu, StrBuf->Value(&buf), MAX_MENU_LENGTH - 1);
 			ShowWarning("NPC Menu too long! (source:%s / length:%d)\n",nd?nd->name:"Unknown",StrBuf->Length(&buf));
 			clif->scriptmenu(sd, st->oid, menu);
+			npc->unlock_data(nd);
 			aFree(menu);
 		} else
 			clif->scriptmenu(sd, st->oid, StrBuf->Value(&buf));
@@ -6587,12 +6591,13 @@ static BUILDIN(select)
 
 		/* menus beyond this length crash the client (see bugreport:6402) */
 		if( StrBuf->Length(&buf) >= MAX_MENU_LENGTH - 1 ) {
-			struct npc_data * nd = map->id2nd(st->oid);
+			struct npc_data * nd = npc->id2nd(st->oid);
 			char* menu;
 			CREATE(menu, char, MAX_MENU_LENGTH);
 			safestrncpy(menu, StrBuf->Value(&buf), MAX_MENU_LENGTH - 1);
 			ShowWarning("NPC Menu too long! (source:%s / length:%d)\n",nd?nd->name:"Unknown",StrBuf->Length(&buf));
 			clif->scriptmenu(sd, st->oid, menu);
+			npc->unlock_data(nd);
 			aFree(menu);
 		} else
 			clif->scriptmenu(sd, st->oid, StrBuf->Value(&buf));
@@ -9851,9 +9856,9 @@ static BUILDIN(strnpcinfo)
 	struct npc_data *nd;
 
 	if (script_hasdata(st, 4))
-		nd = map->id2nd(script_getnum(st, 4));
+		nd = npc->id2nd(script_getnum(st, 4));
 	else
-		nd = map->id2nd(st->oid);
+		nd = npc->id2nd(st->oid);
 
 	if (nd == NULL) {
 		if (script_hasdata(st, 3)) {
@@ -9895,7 +9900,7 @@ static BUILDIN(strnpcinfo)
 		script_pushstr(st, name);
 	else
 		script_pushconststr(st, "");
-
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -12027,8 +12032,9 @@ static BUILDIN(donpcevent)
 	const char* event = script_getstr(st,2);
 	script->check_event(st, event);
 	if( !npc->event_do(event) ) {
-		struct npc_data * nd = map->id2nd(st->oid);
+		struct npc_data * nd = npc->id2nd(st->oid);
 		ShowDebug("NPCEvent '%s' not found! (source: %s)\n",event,nd?nd->name:"Unknown");
+		npc->unlock_data(nd);
 		script_pushint(st, 0);
 	} else
 		script_pushint(st, 1);
@@ -12535,7 +12541,7 @@ static BUILDIN(setnpctimer)
 static BUILDIN(attachnpctimer)
 {
 	struct map_session_data *sd;
-	struct npc_data *nd = map->id2nd(st->oid, 0);
+	struct npc_data *nd = npc->id2nd(st->oid);
 
 	if (nd == NULL) {
 		script_pushint(st,1);
@@ -12729,7 +12735,7 @@ static BUILDIN(itemeffect)
 	if (sd == NULL)
 		return true;
 
-	nd = map->id2nd(sd->npc_id);
+	nd = npc->id2nd(sd->npc_id);
 	if (nd == NULL)
 		return false;
 
@@ -12738,6 +12744,7 @@ static BUILDIN(itemeffect)
 
 		if( ( item_data = itemdb->search_name( name ) ) == NULL ) {
 			ShowError( "buildin_itemeffect: Nonexistant item %s requested.\n", name );
+			npc->unlock_data(nd);
 			return false;
 		}
 	} else {
@@ -12745,12 +12752,13 @@ static BUILDIN(itemeffect)
 
 		if( ( item_data = itemdb->exists( nameid ) ) == NULL ) {
 			ShowError("buildin_itemeffect: Nonexistant item %d requested.\n", nameid );
+			npc->unlock_data(nd);
 			return false;
 		}
 	}
 
 	script->run_use_script(sd, item_data, nd->bl.id);
-
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -12949,7 +12957,7 @@ static BUILDIN(getareausers)
 		x1 = script_getnum(st, idx + 2);
 		y1 = script_getnum(st, idx + 3);
 	} else if (st->oid) {
-		struct npc_data *nd = map->id2nd(st->oid);
+		struct npc_data *nd = npc->id2nd(st->oid);
 		if (!nd) {
 			script_pushint(st, -1);
 			return true;
@@ -12966,6 +12974,7 @@ static BUILDIN(getareausers)
 			x1 = nd->bl.x + nd->u.scr.xs;
 			y1 = nd->bl.y + nd->u.scr.ys;
 		} else {
+			npc->unlock_data(nd);
 			script_pushint(st, -1);
 			return true;
 		}
@@ -13131,7 +13140,7 @@ static BUILDIN(cloakoffnpc)
  */
 static BUILDIN(sc_start)
 {
-	struct npc_data *nd = map->id2nd(st->oid);
+	struct npc_data *nd = npc->id2nd(st->oid);
 	struct block_list* bl;
 	enum sc_type type;
 	int tick, val1, val2, val3, val4=0, rate, flag;
@@ -13154,6 +13163,9 @@ static BUILDIN(sc_start)
 		flag = script_hasdata(st,5+start_type) ? script_getnum(st,5+start_type) : SCFLAG_FIXEDTICK;
 	else
 		flag = script_hasdata(st,5+start_type) ? script_getnum(st,5+start_type) : SCFLAG_NOAVOID;
+
+	if(nd)
+		npc->unlock_data(nd);
 
 	rate = script_hasdata(st,4+start_type)?min(script_getnum(st,4+start_type),10000):10000;
 
@@ -13673,13 +13685,15 @@ static BUILDIN(globalmes)
 		//  npc name to display
 		name=script_getstr(st,3);
 	} else {
-		const struct npc_data *nd = map->id2nd(st->oid);
+		const struct npc_data *nd = npc->id2nd(st->oid);
 		nullpo_retr(false, nd);
-		name = nd->name; //use current npc name
+		//use current npc name
+		npc->globalmessage(nd->name,mes);
+		npc->unlock_data(nd);
+		return true;
 	}
 
 	npc->globalmessage(name,mes); // broadcast to all players connected
-
 	return true;
 }
 
@@ -14712,7 +14726,7 @@ static BUILDIN(flagemblem)
 
 	if(g_id < 0) return true;
 
-	nd = map->id2nd(st->oid);
+	nd = npc->id2nd(st->oid);
 	if( nd == NULL ) {
 		ShowError("script:flagemblem: npc %d not found\n", st->oid);
 	} else if( nd->subtype != SCRIPT ) {
@@ -14727,6 +14741,7 @@ static BUILDIN(flagemblem)
 		else if( changed ) /* removing a flag */
 			guild->flag_remove(nd);
 	}
+	npc->unlock_data(nd)
 	return true;
 }
 
@@ -17197,17 +17212,19 @@ static BUILDIN(npctalk)
 // change npc walkspeed [Valaris]
 static BUILDIN(npcspeed)
 {
-	struct npc_data *nd = map->id2nd(st->oid);
+	struct npc_data *nd = npc->id2nd(st->oid);
 	int speed = script_getnum(st, 2);
 
 	if (nd != NULL) {
 		unit->bl2ud2(&nd->bl); // ensure nd->ud is safe to edit
 		if (nd->ud == NULL) {
 			ShowWarning("buildin_npcspeed: floating NPC don't have unit data.\n");
+			npc->unlock_data(nd);
 			return false;
 		}
 		nd->speed = speed;
 		nd->ud->state.speed_changed = 1;
+		npc->unlock_data(nd);
 	}
 
 	return true;
@@ -17216,7 +17233,7 @@ static BUILDIN(npcspeed)
 // make an npc walk to a position [Valaris]
 static BUILDIN(npcwalkto)
 {
-	struct npc_data *nd = map->id2nd(st->oid);
+	struct npc_data *nd = npc->id2nd(st->oid);
 	int x = script_getnum(st, 2);
 	int y = script_getnum(st, 3);
 
@@ -17224,6 +17241,7 @@ static BUILDIN(npcwalkto)
 		unit->bl2ud2(&nd->bl); // ensure nd->ud is safe to edit
 		if (nd->ud == NULL) {
 			ShowWarning("buildin_npcwalkto: floating NPC don't have unit data.\n");
+			npc->unlock_data(nd);
 			return false;
 		}
 		if (!nd->status.hp) {
@@ -17232,6 +17250,7 @@ static BUILDIN(npcwalkto)
 			status_calc_npc(nd, SCO_NONE);
 		}
 		unit->walk_toxy(&nd->bl, x, y, 0);
+		npc->unlock_data(nd);
 	}
 
 	return true;
@@ -17239,15 +17258,17 @@ static BUILDIN(npcwalkto)
 // stop an npc's movement [Valaris]
 static BUILDIN(npcstop)
 {
-	struct npc_data *nd = map->id2nd(st->oid);
+	struct npc_data *nd = npc->id2nd(st->oid);
 
 	if (nd != NULL) {
 		unit->bl2ud2(&nd->bl); // ensure nd->ud is safe to edit
 		if (nd->ud == NULL) {
 			ShowWarning("buildin_npcstop: floating NPC don't have unit data.\n");
+			npc->unlock_data(nd);
 			return false;
 		}
 		unit->stop_walking(&nd->bl, STOPWALKING_FLAG_FIXPOS|STOPWALKING_FLAG_NEXTCELL);
+		npc->unlock_data(nd);
 	}
 
 	return true;
@@ -17256,12 +17277,12 @@ static BUILDIN(npcstop)
 // set click npc distance [4144]
 static BUILDIN(setnpcdistance)
 {
-	struct npc_data *nd = map->id2nd(st->oid);
+	struct npc_data *nd = npc->id2nd(st->oid);
 	if (nd == NULL)
 		return false;
 
 	nd->area_size = script_getnum(st, 2);
-
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -18245,7 +18266,7 @@ static BUILDIN(data_to_string)
 			//      directly access the string with script->get_str().
 
 			if (st->oid) {
-				struct npc_data *nd = map->id2nd(st->oid);
+				struct npc_data *nd = npc->id2nd(st->oid);
 
 				for (int i = 0; i < nd->u.scr.label_list_num; ++i) {
 					if (nd->u.scr.label_list[i].pos == data->u.num) {
@@ -18253,6 +18274,7 @@ static BUILDIN(data_to_string)
 						break;
 					}
 				}
+				npc->unlock_data(nd);
 			} else {
 				for (int i = LABEL_START; script->str_data[i].next != 0; i = script->str_data[i].next) {
 					if (script->str_data[i].label == data->u.num) {
@@ -22824,7 +22846,7 @@ static BUILDIN(readbook)
 
 static BUILDIN(questinfo)
 {
-	struct npc_data *nd = map->id2nd(st->oid);
+	struct npc_data *nd = npc->id2nd(st->oid);
 	struct questinfo qi = { 0 };
 	int icon = script_getnum(st, 2);
 
@@ -22833,6 +22855,7 @@ static BUILDIN(questinfo)
 
 	if (nd->bl.m == -1) {
 		ShowWarning("buildin_questinfo: questinfo cannot be set for an npc with no valid map.\n");
+		npc->unlock_data(nd);
 		return false;
 	}
 
@@ -22850,30 +22873,15 @@ static BUILDIN(questinfo)
 	VECTOR_ENSURE(nd->qi_data, 1, 1);
 	VECTOR_PUSH(nd->qi_data, qi);
 	map->add_questinfo(nd->bl.m, nd);
+	npc->unlock_data(nd);
 	return true;
 }
 
-static BUILDIN(setquestinfo)
+/**
+ * Validates setquestinfo parameters
+ **/
+static bool setquestinfo_validade(struct script_state *st, struct questinfo *qi, uint32 type)
 {
-	struct npc_data *nd = map->id2nd(st->oid);
-	struct questinfo *qi = NULL;
-	uint32 type = script_getnum(st, 2);
-
-	if (nd == NULL)
-		return true;
-
-	if (nd->bl.m == -1) {
-		ShowWarning("buildin_setquestinfo: questinfo cannot be set for an npc with no valid map.\n");
-		return false;
-	}
-
-	if (VECTOR_LENGTH(nd->qi_data) == 0) {
-		ShowWarning("buildin_setquestinfo: no valide questinfo data has been found for this npc.\n");
-		return false;
-	}
-
-	qi = &VECTOR_LAST(nd->qi_data);
-
 	switch (type) {
 	case QINFO_JOB:
 	{
@@ -22902,7 +22910,8 @@ static BUILDIN(setquestinfo)
 		int min = script_getnum(st, 3);
 		int max = script_getnum(st, 4);
 		if (min > max) {
-			ShowWarning("buildin_setquestinfo: minimal level (%d) is bigger than the maximal level (%d).\n", min, max);
+			ShowWarning("buildin_setquestinfo: minimal level (%d) is bigger than "
+				"the maximal level (%d).\n", min, max);
 			return false;
 		}
 		qi->base_level.min = min;
@@ -22914,7 +22923,8 @@ static BUILDIN(setquestinfo)
 		int min = script_getnum(st, 3);
 		int max = script_getnum(st, 4);
 		if (min > max) {
-			ShowWarning("buildin_setquestinfo: minimal level (%d) is bigger than the maximal level (%d).\n", min, max);
+			ShowWarning("buildin_setquestinfo: minimal level (%d) is bigger than "
+				"the maximal level (%d).\n", min, max);
 			return false;
 		}
 		qi->job_level.min = min;
@@ -22934,15 +22944,18 @@ static BUILDIN(setquestinfo)
 			return false;
 		}
 		if (item.min > item.max) {
-			ShowWarning("buildin_setquestinfo: minimal amount (%d) is bigger than the maximal amount (%d).\n", item.min, item.max);
+			ShowWarning("buildin_setquestinfo: minimal amount (%d) is bigger than the "
+				"maximal amount (%d).\n", item.min, item.max);
 			return false;
 		}
 		if (item.min < 0 || item.min > MAX_AMOUNT) {
-			ShowWarning("buildin_setquestinfo: given amount (%d) must be bigger than or equal to 0 and smaller than %d.\n", item.min, MAX_AMOUNT + 1);
+			ShowWarning("buildin_setquestinfo: given amount (%d) must be bigger than or "
+				"equal to 0 and smaller than %d.\n", item.min, MAX_AMOUNT + 1);
 			return false;
 		}
 		if (item.max < 0 || item.max > MAX_AMOUNT) {
-			ShowWarning("buildin_setquestinfo: given amount (%d) must be bigger than or equal to 0 and smaller than %d.\n", item.max, MAX_AMOUNT + 1);
+			ShowWarning("buildin_setquestinfo: given amount (%d) must be bigger than or "
+				"equal to 0 and smaller than %d.\n", item.max, MAX_AMOUNT + 1);
 			return false;
 		}
 		if (VECTOR_LENGTH(qi->items) == 0)
@@ -23007,6 +23020,33 @@ static BUILDIN(setquestinfo)
 		return false;
 	}
 	return true;
+}
+
+static BUILDIN(setquestinfo)
+{
+	struct npc_data *nd = npc->id2nd(st->oid);
+	struct questinfo *qi = NULL;
+	uint32 type = script_getnum(st, 2);
+
+	if (nd == NULL)
+		return true;
+
+	if (nd->bl.m == -1) {
+		ShowWarning("buildin_setquestinfo: questinfo cannot be set for an npc with no valid map.\n");
+		npc->unlock_data(nd);
+		return false;
+	}
+
+	if (VECTOR_LENGTH(nd->qi_data) == 0) {
+		ShowWarning("buildin_setquestinfo: no valid questinfo data has been found for this npc.\n");
+		npc->unlock_data(nd);
+		return false;
+	}
+
+	qi = &VECTOR_LAST(nd->qi_data);
+	bool retval = setquestinfo_validade(st, qi, type);
+	npc->unlock_data(nd);
+	return retval;
 }
 
 static BUILDIN(setquest)
@@ -23139,11 +23179,12 @@ static BUILDIN(questprogress)
 static BUILDIN(showevent)
 {
 	struct map_session_data *sd = script->rid2sd(st);
-	struct npc_data *nd = map->id2nd(st->oid);
-	int icon, color = 0;
-
-	if( sd == NULL || nd == NULL )
+	if(sd == NULL)
 		return true;
+	struct npc_data *nd = npc->id2nd(st->oid);
+	if(nd == NULL)
+		return true;
+	int icon, color = 0;
 
 	icon = script_getnum(st, 2);
 	if( script_hasdata(st, 3) ) {
@@ -23158,6 +23199,7 @@ static BUILDIN(showevent)
 	icon = quest->questinfo_validate_icon(icon);
 
 	clif->quest_show_event(sd, &nd->bl, icon, color);
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -24865,8 +24907,6 @@ static BUILDIN(npcskill)
 	if (sd == NULL)
 		return true;
 
-	nd = map->id2nd(sd->npc_id);
-
 	if (stat_point > battle_config.max_third_parameter) {
 		ShowError("npcskill: stat point exceeded maximum of %d.\n",battle_config.max_third_parameter );
 		return false;
@@ -24875,9 +24915,10 @@ static BUILDIN(npcskill)
 		ShowError("npcskill: level exceeded maximum of %d.\n", MAX_LEVEL);
 		return false;
 	}
-	if (nd == NULL) {
+
+	nd = npc->id2nd(sd->npc_id);
+	if(nd == NULL)
 		return false;
-	}
 
 	nd->level = npc_level;
 	nd->stat_point = stat_point;
@@ -24893,7 +24934,7 @@ static BUILDIN(npcskill)
 	} else {
 		unit->skilluse_id(&nd->bl, sd->bl.id, skill_id, skill_level);
 	}
-
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -25785,16 +25826,18 @@ static bool script_sellitemcurrency_add(struct npc_data *nd, struct script_state
 static BUILDIN(sellitemcurrency)
 {
 	struct npc_data *nd;
-	if ((nd = map->id2nd(st->oid)) == NULL) {
+	if ((nd = npc->id2nd(st->oid)) == NULL) {
 		ShowWarning("buildin_sellitemcurrency: trying to run without a proper NPC!\n");
 		return false;
 	}
 	if (nd->u.scr.shop == NULL || nd->u.scr.shop->type != NST_EXPANDED_BARTER) {
 		ShowWarning("buildin_sellitemcurrency: this command can be used only with expanded barter shops!\n");
+		npc->unlock_data(nd);
 		return false;
 	}
 
 	script->sellitemcurrency_add(nd, st, 2);
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -25806,12 +25849,13 @@ static BUILDIN(sellitemcurrency)
 static BUILDIN(endsellitem)
 {
 	struct npc_data *nd;
-	if ((nd = map->id2nd(st->oid)) == NULL) {
+	if ((nd = npc->id2nd(st->oid)) == NULL) {
 		ShowWarning("buildin_endsellitem: trying to run without a proper NPC!\n");
 		return false;
 	}
 	if (nd->u.scr.shop == NULL || nd->u.scr.shop->type != NST_EXPANDED_BARTER) {
 		ShowWarning("buildin_endsellitem: this command can be used only with expanded barter shops!\n");
+		npc->unlock_data(nd);
 		return false;
 	}
 
@@ -25852,7 +25896,7 @@ static BUILDIN(endsellitem)
 			nd->u.scr.shop->item[newIndex].currency = NULL;
 		}
 	}
-
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -25871,11 +25915,12 @@ static BUILDIN(sellitem)
 	int value2 = 0;
 	int qty = 0;
 
-	if( !(nd = map->id2nd(st->oid)) ) {
+	if( !(nd = npc->id2nd(st->oid)) ) {
 		ShowWarning("buildin_sellitem: trying to run without a proper NPC!\n");
 		return false;
 	} else if ( !(it = itemdb->exists(id)) ) {
 		ShowWarning("buildin_sellitem: unknown item id '%d'!\n",id);
+		npc->unlock_data(nd);
 		return false;
 	}
 
@@ -25893,6 +25938,7 @@ static BUILDIN(sellitem)
 	if (nd->u.scr.shop->type == NST_BARTER) {
 		if (!script_hasdata(st, 5)) {
 			ShowError("buildin_sellitem: invalid number of parameters for barter-type shop!\n");
+			npc->unlock_data(nd);
 			return false;
 		}
 		value = script_getnum(st, 4);
@@ -25900,10 +25946,12 @@ static BUILDIN(sellitem)
 	} else if (nd->u.scr.shop->type == NST_EXPANDED_BARTER) {
 		if (!script_hasdata(st, 4)) {
 			ShowError("buildin_sellitem: invalid number of parameters for expanded barter type shop!\n");
+			npc->unlock_data(nd);
 			return false;
 		}
 		if ((qty = script_getnum(st, 4)) <= 0 && qty != -1) {
 			ShowError("buildin_sellitem: invalid 'qty' for expanded barter type shop!\n");
+			npc->unlock_data(nd);
 			return false;
 		}
 	}
@@ -25950,19 +25998,25 @@ static BUILDIN(sellitem)
 	if( nd->u.scr.shop->type == NST_MARKET ) {
 		if( !script_hasdata(st,4) || ( qty = script_getnum(st, 4) ) <= 0 ) {
 			ShowError("buildin_sellitem: invalid 'qty' for market-type shop!\n");
+			npc->unlock_data(nd);
 			return false;
 		}
 	}
 
-	if( ( nd->u.scr.shop->type == NST_ZENY || nd->u.scr.shop->type == NST_MARKET )  && value*0.75 < it->value_sell*1.24 ) {
-		ShowWarning("buildin_sellitem: Item %s [%d] discounted buying price (%d->%d) is less than overcharged selling price (%d->%d) in NPC %s (%s)\n",
-					it->name, id, value, (int)(value*0.75), it->value_sell, (int)(it->value_sell*1.24), nd->exname, nd->path);
+	if(( nd->u.scr.shop->type == NST_ZENY || nd->u.scr.shop->type == NST_MARKET )
+	&& value*0.75 < it->value_sell*1.24
+	) {
+		ShowWarning("buildin_sellitem: Item %s [%d] discounted buying price (%d->%d) "
+			"is less than overcharged selling price (%d->%d) in NPC %s (%s)\n",
+			it->name, id, value, (int)(value*0.75), it->value_sell,
+			(int)(it->value_sell*1.24), nd->exname, nd->path);
 	}
 
 	if (nd->u.scr.shop->type == NST_BARTER) {
 		qty = script_getnum(st, 3);
 		if (qty < -1 || value <= 0 || value2 <= 0) {
 			ShowError("buildin_sellitem: invalid parameters for barter-type shop!\n");
+			npc->unlock_data(nd);
 			return false;
 		}
 	}
@@ -25983,7 +26037,9 @@ static BUILDIN(sellitem)
 
 		if (i == nd->u.scr.shop->items) {
 			if (nd->u.scr.shop->items == USHRT_MAX) {
-				ShowWarning("buildin_sellitem: Can't add %s (%s/%s), shop list is full!\n", it->name, nd->exname, nd->path);
+				ShowWarning("buildin_sellitem: Can't add %s (%s/%s), shop list is full!\n",
+					it->name, nd->exname, nd->path);
+				npc->unlock_data(nd);
 				return false;
 			}
 			i = nd->u.scr.shop->items;
@@ -26009,6 +26065,7 @@ static BUILDIN(sellitem)
 			npc->expanded_barter_tosql(nd, i);
 		}
 	}
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -26025,11 +26082,12 @@ static BUILDIN(startsellitem)
 	int value2 = 0;
 	int qty = 0;
 
-	if (!(nd = map->id2nd(st->oid))) {
+	if (!(nd = npc->id2nd(st->oid))) {
 		ShowWarning("buildin_startsellitem: trying to run without a proper NPC!\n");
 		return false;
 	} else if (!(it = itemdb->exists(id))) {
 		ShowWarning("buildin_startsellitem: unknown item id '%d'!\n", id);
+		npc->unlock_data(nd);
 		return false;
 	}
 
@@ -26039,7 +26097,8 @@ static BUILDIN(startsellitem)
 	}
 
 	if (nd->u.scr.shop->type != NST_EXPANDED_BARTER) {
-		ShowWarning("script_startsellitem: can works only for NST_EXPANDED_BARTER shops");
+		ShowWarning("script_startsellitem: can work only for NST_EXPANDED_BARTER shops");
+		npc->unlock_data(nd);
 		return false;
 	}
 
@@ -26049,6 +26108,7 @@ static BUILDIN(startsellitem)
 
 	if ((qty = script_getnum(st, 4)) <= 0 && qty != -1) {
 		ShowError("buildin_startsellitem: invalid 'qty' for expanded barter type shop!\n");
+		npc->unlock_data(nd);
 		return false;
 	}
 
@@ -26059,7 +26119,9 @@ static BUILDIN(startsellitem)
 
 	if (i == nd->u.scr.shop->items) {
 		if (nd->u.scr.shop->items == USHRT_MAX) {
-			ShowWarning("buildin_startsellitem: Can't add %s (%s/%s), shop list is full!\n", it->name, nd->exname, nd->path);
+			ShowWarning("buildin_startsellitem: Can't add %s (%s/%s), shop list is full!\n",
+				it->name, nd->exname, nd->path);
+			npc->unlock_data(nd);
 			return false;
 		}
 		i = nd->u.scr.shop->items;
@@ -26072,6 +26134,7 @@ static BUILDIN(startsellitem)
 	nd->u.scr.shop->item[i].qty    = qty;
 	nd->u.scr.shop->item[i].currency = NULL;
 	nd->u.scr.shop->shop_last_index = i;
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -26087,7 +26150,8 @@ static BUILDIN(stopselling)
 	struct npc_data *nd;
 	int i, id = script_getnum(st, 2);
 
-	if (!(nd = map->id2nd(st->oid)) || !nd->u.scr.shop) {
+	if (!(nd = npc->id2nd(st->oid)) || !nd->u.scr.shop) {
+		if(nd) npc->unlock_data(nd);
 		ShowWarning("buildin_stopselling: trying to run without a proper NPC!\n");
 		return false;
 	}
@@ -26095,6 +26159,7 @@ static BUILDIN(stopselling)
 	if (nd->u.scr.shop->type == NST_BARTER) {
 		if (!script_hasdata(st, 4)) {
 			ShowError("buildin_stopselling: called with wrong number of arguments\n");
+			npc->unlock_data(nd);
 			return false;
 		}
 		const int id2 = script_getnum(st, 3);
@@ -26108,6 +26173,7 @@ static BUILDIN(stopselling)
 	} else if (nd->u.scr.shop->type == NST_EXPANDED_BARTER) {
 		if (!script_hasdata(st, 3)) {
 			ShowError("buildin_stopselling: called with wrong number of arguments\n");
+			npc->unlock_data(nd);
 			return false;
 		}
 		const int price = script_getnum(st, 3);
@@ -26165,7 +26231,7 @@ static BUILDIN(stopselling)
 	} else {
 		script_pushint(st, 0);
 	}
-
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -26179,7 +26245,7 @@ static BUILDIN(setcurrency)
 {
 	int val1 = script_getnum(st,2),
 	val2 = script_hasdata(st, 3) ? script_getnum(st,3) : 0;
-	struct npc_data *nd = map->id2nd(st->oid);
+	struct npc_data *nd = npc->id2nd(st->oid);
 
 	if (!nd) {
 		ShowWarning("buildin_setcurrency: trying to run without a proper NPC!\n");
@@ -26188,7 +26254,7 @@ static BUILDIN(setcurrency)
 
 	npc->trader_funds[0] = val1;
 	npc->trader_funds[1] = val2;
-
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -26204,11 +26270,12 @@ static BUILDIN(tradertype)
 	int type = script_getnum(st, 2);
 	struct npc_data *nd;
 
-	if( !(nd = map->id2nd(st->oid)) ) {
+	if( !(nd = npc->id2nd(st->oid)) ) {
 		ShowWarning("buildin_tradertype: trying to run without a proper NPC!\n");
 		return false;
 	} else if ( type < 0 || type > NST_MAX ) {
 		ShowWarning("buildin_tradertype: invalid type param %d!\n",type);
+		npc->unlock_data(nd);
 		return false;
 	}
 
@@ -26247,7 +26314,7 @@ static BUILDIN(tradertype)
 
 	if( nd->u.scr.shop )
 		nd->u.scr.shop->type = type;
-
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -26260,13 +26327,14 @@ static BUILDIN(purchaseok)
 {
 	struct npc_data *nd;
 
-	if( !(nd = map->id2nd(st->oid)) || !nd->u.scr.shop ) {
+	if( !(nd = npc->id2nd(st->oid)) || !nd->u.scr.shop ) {
+		if(nd) npc->unlock_data(nd);
 		ShowWarning("buildin_purchaseok: trying to run without a proper NPC!\n");
 		return false;
 	}
 
 	npc->trader_ok = true;
-
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -26281,14 +26349,21 @@ static BUILDIN(shopcount)
 	int id = script_getnum(st, 2);
 	unsigned short i;
 
-	if( !(nd = map->id2nd(st->oid)) ) {
+	if( !(nd = npc->id2nd(st->oid)) ) {
 		ShowWarning("buildin_shopcount(%d): trying to run without a proper NPC!\n",id);
 		return false;
 	} else if ( !nd->u.scr.shop || !nd->u.scr.shop->items ) {
 		ShowWarning("buildin_shopcount(%d): trying to use without any items!\n",id);
+		npc->unlock_data(nd);
 		return false;
-	} else if (nd->u.scr.shop->type != NST_MARKET && nd->u.scr.shop->type != NST_BARTER && nd->u.scr.shop->type != NST_EXPANDED_BARTER) {
-		ShowWarning("buildin_shopcount(%d): trying to use on a non-NST_MARKET and non-NST_BARTER and non-NST_EXPANDED_BARTER shop!\n",id);
+	} else if (nd->u.scr.shop->type != NST_MARKET
+		    && nd->u.scr.shop->type != NST_BARTER
+		    && nd->u.scr.shop->type != NST_EXPANDED_BARTER
+	) {
+		ShowWarning("buildin_shopcount(%d): trying to use on a non-NST_MARKET and "
+			"non-NST_BARTER and non-NST_EXPANDED_BARTER shop!\n",
+			id);
+		npc->unlock_data(nd);
 		return false;
 	}
 
@@ -26304,6 +26379,7 @@ static BUILDIN(shopcount)
 	if( i == nd->u.scr.shop->items )
 		script_pushint(st, 0);
 
+	npc->unlock_data(nd);
 	return true;
 }
 
@@ -26987,7 +27063,7 @@ static BUILDIN(clan_leave)
  */
 static BUILDIN(clan_master)
 {
-	struct npc_data *nd = map->id2nd(st->oid);
+	struct npc_data *nd = npc->id2nd(st->oid);
 	int clan_id = script_getnum(st, 2);
 
 	if (nd == NULL) {
@@ -26996,10 +27072,12 @@ static BUILDIN(clan_master)
 	} else if (clan_id <= 0) {
 		script_pushint(st, false);
 		ShowError("buildin_clan_master: Received Invalid Clan ID %d\n", clan_id);
+		npc->unlock_data(nd);
 		return false;
 	} else if (clan->search(clan_id) == NULL) {
 		script_pushint(st, false);
 		ShowError("buildin_clan_master: Received Id of a nonexistent Clan. Id: %d\n", clan_id);
+		npc->unlock_data(nd);
 		return false;
 	}
 
@@ -27007,6 +27085,7 @@ static BUILDIN(clan_master)
 	clif->sc_load(&nd->bl, nd->bl.id, AREA, status->get_sc_icon(SC_CLAN_INFO), 0, clan_id, 0);
 
 	script_pushint(st, true);
+	npc->unlock_data(nd);
 	return true;
 }
 

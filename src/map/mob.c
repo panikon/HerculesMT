@@ -177,13 +177,14 @@ static void mvptomb_spawn_delayed(struct npc_data *nd)
 /// @param data : 0
 static int mvptomb_delayspawn(int tid, int64 tick, int id, intptr_t data)
 {
-	struct npc_data *nd = map->id2nd(id);
+	struct npc_data *nd = npc->id2nd(id);
 
 	if (nd == NULL)
 		return 0;
 
 	if (nd->u.tomb.spawn_timer != tid) {
 		ShowError("mvptomb_delay_spawn: Timer mismatch: %d != %d\n", tid, nd->u.tomb.spawn_timer);
+		npc->unlock_data(nd);
 		return 0;
 	}
 
@@ -192,6 +193,7 @@ static int mvptomb_delayspawn(int tid, int64 tick, int id, intptr_t data)
 	// Sets view data to make the tomb visible and notifies client
 	status->set_viewdata(&nd->bl, nd->class_);
 	clif->spawn(&(nd->bl));
+	npc->unlock_data(nd);
 
 	return 0;
 }
@@ -230,7 +232,7 @@ static void mvptomb_destroy(struct mob_data *md)
 	struct npc_data *nd;
 
 	nullpo_retv(md);
-	if ( (nd = map->id2nd(md->tomb_nid)) ) {
+	if ( (nd = npc->id2nd(md->tomb_nid)) ) {
 		int16 m, i;
 
 		m = nd->bl.m;
@@ -259,7 +261,8 @@ static void mvptomb_destroy(struct mob_data *md)
 
 		map->deliddb(&nd->bl);
 
-		aFree(nd);
+		npc->unlock_data(nd);
+		npc->destroy_npc(nd);
 	}
 
 	md->tomb_nid = 0;

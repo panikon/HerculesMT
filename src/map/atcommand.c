@@ -4454,8 +4454,11 @@ ACMD(tonpc)
 		return false;
 	}
 
-	if ((nd = npc->name2id(npcname)) != NULL) {
-		if (nd->bl.m != -1 && pc->setpos(sd, map_id2index(nd->bl.m), nd->bl.x, nd->bl.y, CLR_TELEPORT) == 0)
+	if((nd = npc->name2id(npcname, 0)) != NULL) {
+		bool warp = (nd->bl.m != -1
+			      && pc->setpos(sd, map_id2index(nd->bl.m), nd->bl.x, nd->bl.y, CLR_TELEPORT) == 0);
+		npc->unlock_data(nd);
+		if(warp)
 			clif->message(fd, msg_fd(fd,0)); // Warped.
 		else
 			return false;
@@ -4476,13 +4479,12 @@ ACMD(shownpc)
 
 	memset(NPCname, '\0', sizeof(NPCname));
 
-	if (!*message || sscanf(message, "%23[^\n]", NPCname) < 1) {
+	if(!*message || sscanf(message, "%23[^\n]", NPCname) < 1) {
 		clif->message(fd, msg_fd(fd,1130)); // Please enter a NPC name (usage: @enablenpc <NPC_name>).
 		return false;
 	}
 
-	if (npc->name2id(NPCname) != NULL) {
-		npc->enable(NPCname, 1);
+	if(npc->enable(NPCname, 0, OPTION_SIGHT)) {
 		clif->message(fd, msg_fd(fd,110)); // Npc Enabled.
 	} else {
 		clif->message(fd, msg_fd(fd,111)); // This NPC doesn't exist.
@@ -4506,12 +4508,11 @@ ACMD(hidenpc)
 		return false;
 	}
 
-	if (npc->name2id(NPCname) == NULL) {
+	if(!npc->enable(NPCname, 0, OPTION_NOTHING)) {
 		clif->message(fd, msg_fd(fd,111)); // This NPC doesn't exist.
 		return false;
 	}
 
-	npc->enable(NPCname, 0);
 	clif->message(fd, msg_fd(fd,112)); // Npc Disabled.
 	return true;
 }
@@ -4561,7 +4562,7 @@ ACMD(unloadnpc)
 		return false;
 	}
 
-	struct npc_data *nd = npc->name2id(npc_name);
+	struct npc_data *nd = npc->name2id(npc_name, 0);
 
 	if (nd == NULL) {
 		clif->message(fd, msg_fd(fd, 111)); /// This NPC doesn't exist.
@@ -4569,7 +4570,8 @@ ACMD(unloadnpc)
 	}
 
 	npc->unload_duplicates(nd, (flag != 0));
-	npc->unload(nd, true, (flag != 0));
+	npc->unload(nd, true, (flag != 0)); // Unlocks name2id
+
 	npc->motd = npc->name2id("HerculesMOTD");
 	npc->read_event_script();
 	clif->message(fd, msg_fd(fd, 112)); /// Npc Disabled.
@@ -5011,9 +5013,10 @@ ACMD(disguise)
 		//Acquired a Name
 		if ((id = mob->db_searchname(message)) == 0)
 		{
-			struct npc_data* nd = npc->name2id(message);
+			struct npc_data* nd = npc->name2id(message, 0);
 			if (nd != NULL)
 				id = nd->class_;
+			npc->unlock_data(nd);
 		}
 	}
 
@@ -5093,9 +5096,10 @@ ACMD(disguiseguild)
 			id = 0;
 	} else {
 		if( (id = mob->db_searchname(monster)) == 0 ) {
-			struct npc_data* nd = npc->name2id(monster);
+			struct npc_data* nd = npc->name2id(monster, 0);
 			if( nd != NULL )
 				id = nd->class_;
+			npc->unlock_data(nd);
 		}
 	}
 
@@ -5368,12 +5372,13 @@ ACMD(npcmove)
 		return false;
 	}
 
-	if ((nd = npc->name2id(atcmd_player_name)) == NULL) {
+	if ((nd = npc->name2id(atcmd_player_name, 0)) == NULL) {
 		clif->message(fd, msg_fd(fd,111)); // This NPC doesn't exist.
 		return false;
 	}
 
 	if ((m=nd->bl.m) < 0 || nd->bl.prev == NULL) {
+		npc->unlock_data(nd);
 		clif->message(fd, msg_fd(fd,1154)); // NPC is not in this map.
 		return false; //Not on a map.
 	}
@@ -5384,6 +5389,8 @@ ACMD(npcmove)
 	map->moveblock(&nd->bl, x, y, timer->gettick());
 	map->foreachinrange(clif->insight, &nd->bl, AREA_SIZE, BL_PC, &nd->bl);
 	clif->message(fd, msg_fd(fd,1155)); // NPC moved.
+
+	npc->unlock_data(nd);
 
 	return true;
 }
@@ -5420,6 +5427,7 @@ ACMD(addwarp)
 
 	safesnprintf(atcmd_output, sizeof(atcmd_output), msg_fd(fd,1158), nd->exname); // New warp NPC '%s' created.
 	clif->message(fd, atcmd_output);
+	npc->unlock_data(nd->lock);
 	return true;
 }
 
@@ -6548,6 +6556,7 @@ ACMD(npctalk)
 	if(ifcolor) clif->messagecolor(&nd->bl,color,temp);
 	else clif->disp_overhead(&nd->bl, temp, AREA_CHAT_WOC, NULL);
 
+	npc->unlock_data(nd);
 	return true;
 }
 

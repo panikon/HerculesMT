@@ -1422,7 +1422,7 @@ END_ZEROED_BLOCK;
 	int (*foreachininstance)(int (*func)(struct block_list*,va_list), int16 instance_id, int type,...);
 
 	struct map_session_data *(*id2sd) (int id);
-	struct npc_data *(*id2nd) (int id);
+	//struct npc_data *(*id2nd) (int id); - Use npc->id2nd instead.
 	struct mob_data *(*id2md) (int id);
 	struct flooritem_data *(*id2fi) (int id);
 	struct chat_data *(*id2cd) (int id);

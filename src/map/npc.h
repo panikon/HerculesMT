@@ -88,6 +88,25 @@ struct npc_shop_data {
 	int shop_last_index;  // only for NST_EXPANDED_BARTER
 };
 struct npc_parse;
+
+/**
+ * Enables deadlock verification when trying to acquire npc data
+ *
+ * When this is enabled there's another full memory barrier when a npc data is
+ * locked or unlocked.
+ **/
+#define NPC_DEBUG_MULTI_THREAD
+
+/**
+ * NPC data
+ *
+ * These objects represent all NPCs in-game and can be obtained after loading via
+ * npc_name2id that also locks the structure internally. After handling the data
+ * it must always be released via npc_unlock_data. All NPCs are represented in npc->name_db.
+ * New NPC objects are created ultimately using npc->create_npc.
+ *
+ * Privately the lock must be relased using mutex->unlock.
+ **/
 struct npc_data {
 	struct block_list bl;
 	struct unit_data *ud;
@@ -147,6 +166,10 @@ struct npc_data {
 		} tomb;
 	} u;
 	VECTOR_DECL(struct questinfo) qi_data;
+
+	void *lock; //< Opaque lock type (mutex)
+	int thread_owner; //< Thread that currently owns this NPC (ATOMIC)
+
 	struct hplugin_data_store *hdata; ///< HPM Plugin Data Store
 };
 
@@ -234,7 +257,15 @@ struct npc_interface {
 	 **/
 	struct DBMap *ev_label_db;
 
-	struct DBMap *name_db; // const char* npc_name -> struct npc_data*
+	/**
+	 * NPC database
+	 * Database containing all npc_data objects, sorted by the unique npc name.
+	 *
+	 * const char* npc_name[NAME_LENGTH] -> struct npc_data*
+	 * @see name2id
+	 **/
+	struct DBMap *name_db;
+
 	struct DBMap *path_db;
 	struct eri *timer_event_ers; //For the npc timer data. [Skotlex]
 	struct npc_data *fake_nd;
@@ -265,8 +296,18 @@ struct npc_interface {
 	int (*ontouch2_event) (struct map_session_data *sd, struct npc_data *nd);
 	int (*onuntouch_event) (struct map_session_data *sd, struct npc_data *nd);
 	int (*enable_sub) (struct block_list *bl, va_list ap);
-	int (*enable) (const char *name, int flag);
-	struct npc_data* (*name2id) (const char *name);
+	bool (*enable) (const char *name, int namelen, int flag);
+
+	struct npc_data* (*name2id) (const char *name, int name_len);
+	struct npc_data* (*bl2nd) (struct block_list *bl);
+	struct npc_data* (*id2nd) (int id);
+	struct npc_data* (*checknear) (struct map_session_data *sd, struct block_list *bl);
+	struct npc_data* (*create_npc) (enum npc_subtype subtype, int m, int x, int y, enum unit_dir dir, int class_);
+	struct npc_data* (*add_warp) (char *name, short from_mapid, short from_x, short from_y, short xs, short ys, unsigned short to_mapindex, short to_x, short to_y);
+	void (*unlock_data) (const struct npc_data *nd);
+	bool (*name_is_valid) (const char *name, int name_len);
+	void (*destroy_npc) (struct npc_data *nd);
+
 	int (*event_dequeue) (struct map_session_data *sd);
 	struct DBData (*event_export_create) (union DBKey key, va_list args);
 	int (*event_export) (struct npc_data *nd, int i);
@@ -292,7 +333,7 @@ struct npc_interface {
 	int (*untouch_areanpc) (struct map_session_data *sd, int16 m, int16 x, int16 y);
 	int (*touch_areanpc2) (struct mob_data *md);
 	int (*check_areanpc) (int flag, int16 m, int16 x, int16 y, int16 range);
-	struct npc_data* (*checknear) (struct map_session_data *sd, struct block_list *bl);
+
 	int (*globalmessage) (const char *name, const char *mes);
 	void (*run_tomb) (struct map_session_data *sd, struct npc_data *nd);
 	int (*click) (struct map_session_data *sd, struct npc_data *nd);
@@ -314,20 +355,22 @@ struct npc_interface {
 	void (*clearsrcfile) (void);
 	void (*addsrcfile) (const char *name);
 	void (*delsrcfile) (const char *name);
+
+	void (*add_to_location) (struct npc_data *nd, const char *name, const char *filepath, const char *buffer, const char *start);
+
 	const char *(*retainpathreference) (const char *filepath);
 	void (*releasepathreference) (const char *filepath);
-	void (*parsename) (struct npc_data *nd, const char *name, const char *start, const char *buffer, const char *filepath);
+	void (*parsename) (struct npc_data *nd, const char *name, const char *filepath, const char *buffer, const char *start);
 	int (*parseview) (const char *w4, const char *start, const char *buffer, const char *filepath);
 	bool (*viewisid) (const char *viewid);
-	struct npc_data *(*create_npc) (enum npc_subtype subtype, int m, int x, int y, enum unit_dir dir, int class_);
-	struct npc_data* (*add_warp) (char *name, short from_mapid, short from_x, short from_y, short xs, short ys, unsigned short to_mapindex, short to_x, short to_y);
+
 	const char *(*parse_warp) (const char *w1, const char *w2, const char *w3, const char *w4, const char *start, const char *buffer, const char *filepath, int *retval);
 	const char *(*parse_shop) (const char *w1, const char *w2, const char *w3, const char *w4, const char *start, const char *buffer, const char *filepath, int *retval);
 	const char *(*parse_unknown_object) (const char *w1, const char *w2, const char *w3, const char *w4, const char *start, const char *buffer, const char *filepath, int *retval);
 	void (*convertlabel_db) (struct npc_label_list *label_list, const char *filepath);
 	const char* (*skip_script) (const char *start, const char *buffer, const char *filepath, int *retval);
 	const char *(*parse_script) (const char *w1, const char *w2, const char *w3, const char *w4, const char *start, const char *buffer, const char *filepath, int options, int *retval);
-	void (*add_to_location) (struct npc_data *nd);
+
 	bool (*duplicate_script_sub) (struct npc_data *nd, const struct npc_data *snd, int xs, int ys, int options);
 	bool (*duplicate_shop_sub) (struct npc_data *nd, const struct npc_data *snd, int xs, int ys, int options);
 	bool (*duplicate_warp_sub) (struct npc_data *nd, const struct npc_data *snd, int xs, int ys, int options);
