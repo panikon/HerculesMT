@@ -226,6 +226,9 @@
     <ClCompile Include="..\src\common\rwlock.c">
       <Filter>common</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\common\action.c">
+      <Filter>common</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\map\achievement.h">
@@ -304,24 +307,6 @@
       <Filter>map</Filter>
     </ClInclude>
     <ClInclude Include="..\src\map\npc.h">
-      <Filter>map</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\map\packets.h">
-      <Filter>map</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\map\packets_keys_main.h">
-      <Filter>map</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\map\packets_keys_zero.h">
-      <Filter>map</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\map\packets_shuffle_main.h">
-      <Filter>map</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\map\packets_shuffle_zero.h">
-      <Filter>map</Filter>
-    </ClInclude>
-    <ClInclude Include="..\src\map\packets_struct.h">
       <Filter>map</Filter>
     </ClInclude>
     <ClInclude Include="..\src\map\party.h">
@@ -516,6 +501,27 @@
     <ClInclude Include="..\src\common\rwlock.h">
       <Filter>common</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\common\action.h">
+      <Filter>common</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\map\packets.h">
+      <Filter>map\done</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\map\packets_keys_main.h">
+      <Filter>map\done</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\map\packets_keys_zero.h">
+      <Filter>map\done</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\map\packets_shuffle_main.h">
+      <Filter>map\done</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\map\packets_shuffle_zero.h">
+      <Filter>map\done</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\map\packets_struct.h">
+      <Filter>map\done</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="common">
@@ -535,6 +541,9 @@
     </Filter>
     <Filter Include="config">
       <UniqueIdentifier>{d7d16c66-c973-45d7-b47f-a1f80a898b9b}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="map\done">
+      <UniqueIdentifier>{aa56e303-e5a0-41f2-876b-20864933e726}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>
