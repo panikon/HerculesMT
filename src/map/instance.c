@@ -372,6 +372,7 @@ static int instance_mapid2imapid(int16 m, int instance_id)
 
 /*--------------------------------------
  * Used on Init instance. Duplicates each script on source map
+ * @lock If bl is an NPC nd data lock must be acquired before use.
  *--------------------------------------*/
 static int instance_map_npcsub(struct block_list *bl, va_list args)
 {
@@ -388,6 +389,7 @@ static int instance_map_npcsub(struct block_list *bl, va_list args)
 	return 1;
 }
 
+// @lock If bl is an NPC nd data lock must be acquired before use.
 static int instance_init_npc(struct block_list *bl, va_list args)
 {
 	struct npc_data *nd = NULL;
@@ -435,7 +437,10 @@ static int instance_del_load(struct map_session_data *sd, va_list args)
 	return 1;
 }
 
-/* for npcs behave differently when being unloaded within a instance */
+/**
+ * for npcs behave differently when being unloaded within a instance
+ * @lock If bl is an NPC nd data lock must be acquired before use.
+ **/
 static int instance_cleanup_sub(struct block_list *bl, va_list ap)
 {
 	nullpo_ret(bl);

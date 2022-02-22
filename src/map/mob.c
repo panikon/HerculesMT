@@ -1424,6 +1424,7 @@ static int mob_ai_sub_hard_lootsearch(struct block_list *bl, va_list ap)
 	return 0;
 }
 
+// @lock If bl is an NPC nd data lock must be acquired before use.
 static int mob_warpchase_sub(struct block_list *bl, va_list ap)
 {
 	int cur_distance;

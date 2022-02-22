@@ -292,6 +292,7 @@ struct map_session_data {
 	unsigned short mapindex;
 	unsigned char head_dir; //0: Look forward. 1: Look right, 2: Look left.
 	unsigned int client_tick;
+	// npc_id is the same as the bl id of the given npc
 	int npc_id,areanpc_id,npc_shopid,touching_id; //for script follow scriptoid;   ,npcid
 	int npc_item_flag; //Marks the npc_id with which you can change equipments during interactions with said npc (see script command enable_itemuse)
 	int npc_menu; // internal variable, used in npc menu handling

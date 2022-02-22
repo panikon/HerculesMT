@@ -741,6 +741,7 @@ enum market_buy_result {
 	MARKET_BUY_RESULT_AMOUNT_TOO_BIG = 9
 };
 #else
+// TODO: Find official return codes
 enum market_buy_result {
 	MARKET_BUY_RESULT_ERROR = 0,
 	MARKET_BUY_RESULT_SUCCESS = 1,

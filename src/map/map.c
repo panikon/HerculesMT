@@ -342,6 +342,7 @@ static int map_delblock(struct block_list *bl)
  * Moves a block a x/y target position. [Skotlex]
  * Pass flag as 1 to prevent doing skill->unit_move checks
  * (which are executed by default on BL_CHAR types)
+ * @lock If bl is an NPC nd data lock must be acquired before use.
  *------------------------------------------*/
 static int map_moveblock(struct block_list *bl, int x1, int y1, int64 tick)
 {
@@ -481,6 +482,8 @@ static int map_count_oncell(int16 m, int16 x, int16 y, int type, int flag)
 	by = y/BLOCK_SIZE;
 
 	if (type&~BL_MOB) {
+		if (flag&0x2) // Lock npc->name_db so we don't need to relock several times
+			npc->lock_name_db(READ_LOCK);
 		for (bl = map->list[m].block[bx+by*map->list[m].bxs]; bl != NULL; bl = bl->next) {
 			if (bl->x == x && bl->y == y && bl->type&type) {
 				if (flag&0x2) {
@@ -488,9 +491,12 @@ static int map_count_oncell(int16 m, int16 x, int16 y, int type, int flag)
 					if (sc && (sc->option&OPTION_INVISIBLE))
 						continue;
 					if (bl->type == BL_NPC) {
-						const struct npc_data *nd = BL_UCCAST(BL_NPC, bl);
-						if (nd->class_ == FAKE_NPC || nd->class_ == HIDDEN_WARP_CLASS)
+						const struct npc_data *nd = npc->bl2nd_nodblock(bl);
+						if (nd->class_ == FAKE_NPC || nd->class_ == HIDDEN_WARP_CLASS) {
+							npc->unlock_data(nd);
 							continue;
+						}
+						npc->unlock_data(nd);
 					}
 				}
 				if (flag&0x1) {
@@ -501,6 +507,8 @@ static int map_count_oncell(int16 m, int16 x, int16 y, int type, int flag)
 				count++;
 			}
 		}
+		if (flag&0x2)
+			npc->unlock_name_db();
 	}
 
 	if (type&BL_MOB) {
@@ -2512,9 +2520,10 @@ static void map_vforeachnpc(int (*func)(struct npc_data *nd, va_list args), va_l
 	struct DBIterator *iter = db_iterator(map->id_db);
 	struct block_list *bl = NULL;
 
+	npc->lock_name_db(READ_LOCK);
 	for (bl = dbi_first(iter); dbi_exists(iter); bl = dbi_next(iter)) {
 		if (bl->type == BL_NPC) {
-			struct npc_data *nd = BL_UCAST(BL_NPC, bl);
+			struct npc_data *nd = npc->bl2nd_nodblock(bl);
 			va_list argscopy;
 			int ret;
 
@@ -2525,6 +2534,7 @@ static void map_vforeachnpc(int (*func)(struct npc_data *nd, va_list args), va_l
 				break;// stop iterating
 		}
 	}
+	npc->unlock_name_db();
 	dbi_destroy(iter);
 }
 

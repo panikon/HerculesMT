@@ -53,6 +53,29 @@ enum npc_shop_types {
 	NST_MAX,
 };
 
+enum npc_buy_result {
+	NPCBL_SUCCESS = 0,
+	NPCBL_ITEM_NOT_FOUND_SHOP,
+	NPCBL_ITEM_NOT_FOUND_DB,
+	NPCBL_AMOUNT_TOO_BIG,
+
+	NPCBL_NO_COIN,
+	NPCBL_OVER_WEIGHT,
+	NPCBL_OUT_OF_SPACE,
+};
+
+/**
+ * Buy flags used in buy item / list processing
+ **/
+enum npc_buy_flags {
+	BUY_DEFAULT = 0x0,
+	BUY_ENFORCE_MAXIMUM_AMOUNT = 0x1, // Enforce maximum item amount (market shops)
+	BUY_ALLOW_DISCOUNT = 0x2,         // Allow skill discount to be used
+	BUY_ALLOW_SCRIPT_MASTER = 0x4,    // Are script-controlled allowed for this shop?
+	// TODO: Add script-controlled shop for all shop types
+	BUY_IGNORE_COIN_AMOUNT = 0x8      // Used when more than one type of coin can be used (cashshop)
+};
+
 struct npc_timerevent_list {
 	int timer,pos;
 };
@@ -169,6 +192,7 @@ struct npc_data {
 
 	void *lock; //< Opaque lock type (mutex)
 	int thread_owner; //< Thread that currently owns this NPC (ATOMIC)
+	bool name_db_locked; //< Is npc->name_db locked?
 
 	struct hplugin_data_store *hdata; ///< HPM Plugin Data Store
 };
@@ -290,22 +314,21 @@ struct npc_interface {
 	/* */
 	int (*get_new_npc_id) (void);
 	struct view_data* (*get_viewdata) (int class_);
-	int (*isnear_sub) (struct block_list *bl, va_list args);
 	bool (*isnear) (struct block_list *bl);
-	int (*ontouch_event) (struct map_session_data *sd, struct npc_data *nd);
 	int (*ontouch2_event) (struct map_session_data *sd, struct npc_data *nd);
 	int (*onuntouch_event) (struct map_session_data *sd, struct npc_data *nd);
-	int (*enable_sub) (struct block_list *bl, va_list ap);
 	bool (*enable) (const char *name, int namelen, int flag);
 
+	void (*lock_name_db) (enum lock_type lt);
+	void (*unlock_name_db) (void);
 	struct npc_data* (*name2id) (const char *name, int name_len);
 	struct npc_data* (*bl2nd) (struct block_list *bl);
+	struct npc_data *(*bl2nd_nodblock) (struct block_list *bl);
 	struct npc_data* (*id2nd) (int id);
-	struct npc_data* (*checknear) (struct map_session_data *sd, struct block_list *bl);
+	bool (*checknear) (struct map_session_data *sd, struct npc_data *nd);
 	struct npc_data* (*create_npc) (enum npc_subtype subtype, int m, int x, int y, enum unit_dir dir, int class_);
 	struct npc_data* (*add_warp) (char *name, short from_mapid, short from_x, short from_y, short xs, short ys, unsigned short to_mapindex, short to_x, short to_y);
 	void (*unlock_data) (const struct npc_data *nd);
-	bool (*name_is_valid) (const char *name, int name_len);
 	void (*destroy_npc) (struct npc_data *nd);
 
 	int (*event_dequeue) (struct map_session_data *sd);
@@ -338,6 +361,13 @@ struct npc_interface {
 	void (*run_tomb) (struct map_session_data *sd, struct npc_data *nd);
 	int (*click) (struct map_session_data *sd, struct npc_data *nd);
 	int (*scriptcont) (struct map_session_data *sd, int id, bool closing);
+
+	enum npc_buy_result (*generic_buylist_process_validate)(struct map_session_data *sd,
+		struct itemlist *item_list, struct npc_data *nd,
+		struct npc_item_list *shop, unsigned short shop_size, int64 *out_price,
+		int64 coin, int flag
+	);
+
 	int (*buysellsel) (struct map_session_data *sd, int id, int type);
 	int (*cashshop_buylist) (struct map_session_data *sd, int points, struct itemlist *item_list);
 	int (*buylist_sub) (struct map_session_data *sd, struct itemlist *item_list, struct npc_data *nd);

@@ -366,18 +366,25 @@ static int npc_chat_sub(struct block_list *bl, va_list ap)
 
 	nullpo_ret(bl);
 	Assert_ret(bl->type == BL_NPC);
-	nd = BL_UCAST(BL_NPC, bl);
+	nd = npc->bl2nd(bl);
+	if(!nd)
+		return 0;
 	npcParse = nd->chatdb;
 
 	// Not interested in anything you might have to say...
-	if (npcParse == NULL || npcParse->active == NULL)
+	if (npcParse == NULL || npcParse->active == NULL) {
+		npc->unlock_data(nd);
 		return 0;
+	}
 
 	msg = va_arg(ap,char*);
 	len = va_arg(ap,int);
 	sd = va_arg(ap,struct map_session_data *);
 
-	nullpo_ret(sd);
+	if(!sd) {
+		npc->unlock_data(nd);
+		return 0;
+	}
 
 	// iterate across all active sets
 	for (pcreset = npcParse->active; pcreset != NULL; pcreset = pcreset->next)
@@ -406,15 +413,18 @@ static int npc_chat_sub(struct block_list *bl, va_list ap)
 				ARR_FIND(0, nd->u.scr.label_list_num, i, strncmp(lst[i].name, e->label, sizeof(lst[i].name)) == 0);
 				if (i == nd->u.scr.label_list_num) {
 					ShowWarning("npc_chat_sub: Unable to find label: %s\n", e->label);
+					npc->unlock_data(nd);
 					return 0;
 				}
 
 				// run the npc script
 				script->run_npc(nd->u.scr.script,lst[i].pos,sd->bl.id,nd->bl.id);
+				npc->unlock_data(nd);
 				return 0;
 			}
 		}
 	}
+	npc->unlock_data(nd);
 	return 0;
 }
 

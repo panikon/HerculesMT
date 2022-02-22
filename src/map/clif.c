@@ -1054,7 +1054,10 @@ static int clif_setlevel(struct block_list *bl)
 	return lv;
 }
 
-/* for 'packetver < 20091103' 0x78 non-pc-looking unit handling */
+/**
+ * For 'packetver < 20091103' 0x78 non-pc-looking unit handling
+ * @lock If bl is an NPC nd data lock must be acquired before use.
+ **/
 static void clif_set_unit_idle2(struct block_list *bl, struct map_session_data *tsd, enum send_target target)
 {
 #if PACKETVER < 20091103
@@ -1112,6 +1115,7 @@ static void clif_set_unit_idle2(struct block_list *bl, struct map_session_data *
 
 /*==========================================
  * Prepares 'unit standing' packet
+ * @lock If bl is an NPC nd data lock must be acquired before use.
  *------------------------------------------*/
 static void clif_set_unit_idle(struct block_list *bl, struct map_session_data *tsd, enum send_target target)
 {
@@ -1222,7 +1226,10 @@ static void clif_set_unit_idle(struct block_list *bl, struct map_session_data *t
 
 }
 
-/* for 'packetver < 20091103' 0x7c non-pc-looking unit handling */
+/**
+ * for 'packetver < 20091103' 0x7c non-pc-looking unit handling
+ * @lock If bl is an NPC nd data lock must be acquired before use.
+ */
 static void clif_spawn_unit2(struct block_list *bl, enum send_target target)
 {
 #if PACKETVER < 20091103
@@ -1272,6 +1279,9 @@ static void clif_spawn_unit2(struct block_list *bl, enum send_target target)
 #endif
 }
 
+/**
+ * @lock If bl is an NPC nd data lock must be acquired before use.
+ **/
 static void clif_spawn_unit(struct block_list *bl, enum send_target target)
 {
 	struct map_session_data* sd;
@@ -1384,6 +1394,7 @@ static void clif_spawn_unit(struct block_list *bl, enum send_target target)
 
 /*==========================================
  * Prepares 'unit walking' packet
+ * @lock If bl is an NPC nd data lock must be acquired before use.
  *------------------------------------------*/
 static void clif_set_unit_walking(struct block_list *bl, struct map_session_data *tsd, struct unit_data *ud, enum send_target target)
 {
@@ -1585,6 +1596,7 @@ static void clif_weather(int16 m)
 
 /**
  * Main function to spawn a unit on the client (player/mob/pet/etc)
+ * @lock If bl is an NPC nd data lock must be acquired before use.
  **/
 static bool clif_spawn(struct block_list *bl)
 {
@@ -1969,6 +1981,7 @@ static void clif_move2(struct block_list *bl, struct view_data *vd, struct unit_
 /// Notifies clients in an area, that an other visible object is walking (ZC_NOTIFY_PLAYERMOVE).
 /// 0086 <id>.L <walk data>.6B <walk start time>.L
 /// Note: unit must not be self
+/// @lock If ud is an NPC nd data lock must be acquired before use.
 static void clif_move(struct unit_data *ud)
 {
 	unsigned char buf[16];
@@ -3692,6 +3705,7 @@ static void clif_changestatus(struct map_session_data *sd, enum status_point_typ
 }
 
 /// Updates sprite/style properties of an object.
+/// @lock If bl is an NPC nd data lock must be acquired before use.
 static void clif_changelook(struct block_list *bl, enum look type, int val)
 {
 	struct map_session_data* sd;
@@ -4102,6 +4116,7 @@ static void clif_misceffect(struct block_list *bl, int type)
 /// Notifies clients in the area of a state change.
 /// 0119 <id>.L <body state>.W <health state>.W <effect state>.W <pk mode>.B (ZC_STATE_CHANGE)
 /// 0229 <id>.L <body state>.W <health state>.W <effect state>.L <pk mode>.B (ZC_STATE_CHANGE3)
+/// @lock If bl is an NPC nd data lock must be acquired before use.
 static void clif_changeoption(struct block_list *bl)
 {
 	nullpo_retv(bl);
@@ -4131,6 +4146,7 @@ static void clif_changeoption(struct block_list *bl)
 	}
 }
 
+// @lock If either bl is an NPC nd data lock must be acquired before use.
 static void clif_changeoption_target(struct block_list *bl, struct block_list *target_bl, enum send_target target)
 {
 	nullpo_retv(bl);
@@ -4160,6 +4176,7 @@ static void clif_changeoption_target(struct block_list *bl, struct block_list *t
 
 /// Displays status change effects on NPCs/monsters (ZC_NPC_SHOWEFST_UPDATE).
 /// 028a <id>.L <effect state>.L <level>.L <showEFST>.L
+/// @lock If bl is an NPC nd data lock must be acquired before use.
 static void clif_changeoption2(struct block_list *bl)
 {
 	unsigned char buf[20];
@@ -4381,7 +4398,7 @@ static void clif_joinchatok(struct map_session_data *sd, struct chat_data *cd)
 	WFIFOL(fd, 4) = cd->bl.id;
 
 	if(cd->owner->type == BL_NPC) {
-		const struct npc_data *nd = BL_UCCAST(BL_NPC, cd->owner);
+		const struct npc_data *nd = npc->bl2nd(cd->owner);
 		WFIFOL(fd, 30) = 1;
 		WFIFOL(fd, 8) = 0;
 		memcpy(WFIFOP(fd, 12), nd->name, NAME_LENGTH);
@@ -4389,6 +4406,7 @@ static void clif_joinchatok(struct map_session_data *sd, struct chat_data *cd)
 			WFIFOL(fd, 8+(i+1)*28) = 1;
 			memcpy(WFIFOP(fd, 8+(i+t)*28+4), cd->usersd[i]->status.name, NAME_LENGTH);
 		}
+		npc->unlock_data(nd);
 	} else
 	for (i = 0; i < cd->users; i++) {
 		WFIFOL(fd, 8+i*28) = (i != 0 || cd->owner->type == BL_NPC);
@@ -4775,6 +4793,7 @@ static void clif_getareachar_pc(struct map_session_data *sd, struct map_session_
 		clif->devotion(d_bl, sd);
 }
 
+// @lock If bl is an NPC nd data lock must be acquired before use.
 static void clif_getareachar_unit(struct map_session_data *sd, struct block_list *bl)
 {
 	struct unit_data *ud;
@@ -5260,6 +5279,7 @@ static int clif_getareachar(struct block_list *bl, va_list ap)
 
 /*==========================================
  * tbl has gone out of view-size of bl
+ * @lock If bl is an NPC nd data lock must be acquired before use.
  *------------------------------------------*/
 static int clif_outsight(struct block_list *bl, va_list ap)
 {
@@ -9692,6 +9712,7 @@ static void clif_petname_ack(int fd, struct block_list *bl)
 /// 0095 <id>.L <char name>.24B (ZC_ACK_REQNAME)
 /// 0195 <id>.L <char name>.24B <party name>.24B <guild name>.24B <position name>.24B (ZC_ACK_REQNAMEALL)
 /// 0A30 <id>.L <char name>.24B <party name>.24B <guild name>.24B <position name>.24B <title id>.L (ZC_ACK_REQNAMEALL2)
+/// @lock If bl is an NPC nd data lock must be acquired before use.
 static void clif_npcname_ack(int fd, struct block_list *bl)
 {
 	nullpo_retv(bl);
@@ -15758,13 +15779,15 @@ static void clif_parse_GMKick(int fd, struct map_session_data *sd)
 
 		case BL_NPC:
 		{
-			struct npc_data *nd = BL_UCAST(BL_NPC, target);
+			struct npc_data *nd = npc->bl2nd(target);
 			if( !pc->can_use_command(sd, "@unloadnpc")) {
 				clif->GM_kickack(sd, 0);
+				npc->unlock_data(nd);
 				return;
 			}
 			npc->unload_duplicates(nd, true);
 			npc->unload(nd, true, true);
+			npc->unlock_data(nd);
 			npc->motd = npc->name2id("HerculesMOTD");
 			npc->read_event_script();
 		}
